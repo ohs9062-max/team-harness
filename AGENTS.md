@@ -1,69 +1,39 @@
-# AGENTS.md — working agreement for this repo
+# AGENTS.md — 이 저장소의 작업 협약 (Working Agreement)
 
-`team-harness` is a coordination layer for other coding harnesses: a **coordinator LLM**
-receives a task, breaks it into work units, and delegates execution to **worker CLIs**
-(Codex, Gemini, Claude Code, opencode, pi, OpenHands, …) spawned as subprocesses. It is a
-library and CLI; **other projects depend on it** (notably `loopy-loop`).
+`team-harness`는 다른 코딩 하네스를 위한 조율(coordination) 계층입니다. **조율자(Coordinator) LLM**이 작업을 수신하여 하위 단위 작업으로 분할하고, 서브프로세스로 실행되는 **작업자(Worker) CLI**(Codex, Gemini, Claude Code, opencode, pi, OpenHands 등)에 실행을 위임합니다. 이는 라이브러리이자 CLI이며, **다른 프로젝트들이 이에 의존합니다**(특히 `loopy-loop`).
 
-`CLAUDE.md` is the developer reference (commands, architecture, release process). **This
-file is the working agreement** — how to make changes here. `design/decisions.md` is the
-canonical record of *why the system is the way it is*. Three things are non-negotiable.
+`CLAUDE.md`는 개발자 참고서(명령어, 아키텍처, 릴리스 프로세스)입니다. **본 문서는 작업 협약서**로서 여기서 변경 작업을 수행하는 방식을 다룹니다. `design/decisions.md`는 *시스템이 왜 현재와 같이 설계되었는지*에 대한 정본(canonical) 기록입니다. 아래 세 가지 원칙은 반드시 준수해야 합니다.
 
-## Rule 1 — Record decisions, and respect the deliberate ones
+## 규칙 1 — 결정을 기록하고, 의도된 결정을 존중하라
 
-`design/decisions.md` is the Architecture Decision Log (TH-D1, TH-D2, …). When you make a
-non-obvious architectural choice — or reverse or refine an existing one — **add or update an
-entry** (Decision / Context / Consequences). A future agent with no memory of this session,
-or a human who wasn't here, must be able to understand why.
+`design/decisions.md`는 아키텍처 결정 로그(Architecture Decision Log: TH-D1, TH-D2 등)입니다. 직관적이지 않은 아키텍처적 선택을 하거나, 기존 결정을 뒤집거나 수정할 때에는 **반드시 항목을 추가하거나 갱신하십시오**(결정 / 맥락 / 결과). 이전 세션의 기억이 없는 미래의 에이전트나, 회의에 참여하지 않은 사람도 그 이유를 이해할 수 있어야 합니다.
 
-Some entries record choices that **look like defects if you only skim the code, and exist so
-they don't get "fixed" by accident.** Before changing behavior in these areas, read the
-entry:
+일부 항목은 **코드를 대충 훑어보면 버그처럼 보이지만, 실수로 "수정"되지 않도록 일부러 의도된 선택**을 기록하고 있습니다. 해당 영역의 동작을 변경하기 전에 반드시 다음 항목을 읽어보십시오:
 
-- **TH-D2 — workers are one-shot batch subprocesses, not reattachable sessions.** Don't add
-  logic that assumes you can reconnect to a running worker's stdio.
-- **TH-D3 — a normal `run()` return means the coordinator loop ended without a terminal
-  error, not that every worker succeeded.** Don't make callers infer task success from a
-  normal return; failed workers survive as summaries in `TeamHarnessResult.agents`.
+- **TH-D2 — 작업자(Worker)는 재연결 가능한 세션이 아니라, 1회성(one-shot) 배치 서브프로세스입니다.** 실행 중인 작업자의 표준 입출력(stdio)에 다시 연결할 수 있다고 가정하는 로직을 추가하지 마십시오.
+- **TH-D3 — `run()`의 정상 반환은 조율자 루프가 치명적 오류 없이 끝났음을 의미할 뿐, 모든 작업자가 성공했음을 의미하지 않습니다.** 호출자가 정상 반환만으로 작업 성공 여부를 단정 짓게 만들지 마십시오. 실패한 작업자는 `TeamHarnessResult.agents`에 요약으로 기록되어 남습니다.
 
-If you believe a decision is wrong, propose amending `design/decisions.md` (state what
-changes and why) — don't silently contradict it in code.
+어떤 결정이 잘못되었다고 생각되면, `design/decisions.md`에 수정안을 제안(무엇을 왜 바꾸는지 명시)하십시오. 코드에서 은근슬쩍 위배되게 작성하지 마십시오.
 
-## Rule 2 — Design and decision docs must be understandable cold, by future agents AND humans
+## 규칙 2 — 설계 및 결정 문서는 미래의 에이전트와 인간 모두가 배경지식 없이도 이해할 수 있어야 한다
 
-A design or decision doc is read by someone who was **not** in the conversation that produced
-it. Write for them.
+설계나 결정 문서는 그 문서를 작성한 대화에 **참여하지 않은** 사람이 읽게 됩니다. 그들을 위해 작성하십시오.
 
-- **Explain, don't just name.** Naming a mechanism ("session capture", "compaction", "the
-  tool registry") is not explaining it. State, in plain language, *what it is, what problem
-  it solves, and why we chose it*, with a concrete example where it helps.
-- **The reasoning lives in the doc, not in your head.** A decision-log entry may state the
-  conclusion tersely; the companion design section must be self-contained.
-- **Anchor claims in the code.** Reference the file/function (`agents/spawner.py`,
-  `harness.py`, `tracking/worker_sessions.py`) so a reader can verify — but lead with the
-  plain-English meaning.
-- **Keep `design/` honest about status.** `design/designs/` is binding; `design/analysis/`
-  is working notes (may be superseded); a decision-log entry is authoritative. Don't cite a
-  note as if it were a decision.
+- **이름만 붙이지 말고 설명하십시오.** 메커니즘의 이름("세션 캡처", "압축(compaction)", "도구 레지스트리")만 적는 것은 설명이 아닙니다. *그것이 무엇인지, 어떤 문제를 해결하는지, 왜 그것을 선택했는지*를 쉬운 언어로 명시하고, 도움이 되는 구체적인 예를 곁들이십시오.
+- **논리적 근거는 머릿속이 아니라 문서 안에 있어야 합니다.** 결정 로그 항목은 결론을 간결하게 서술할 수 있지만, 함께 제공되는 설계 섹션은 그 자체로 완결성을 갖추어야 합니다.
+- **주장을 코드에 기반하십시오.** 독자가 검증할 수 있도록 파일/함수(`agents/spawner.py`, `harness.py`, `tracking/worker_sessions.py`)를 참조하되, 쉬운 설명부터 시작하십시오.
+- **`design/` 문서의 상태 구분을 정직하게 유지하십시오.** `design/designs/`는 구속력 있는 공식 설계 문서이며, `design/analysis/`는 작업용 메모(추후 대체될 수 있음)이고, 결정 로그 항목이 최종 권위를 갖습니다. 작업 메모를 마치 확정된 결정인 것처럼 인용하지 마십시오.
 
-## Rule 3 — Mind the consumer contract
+## 규칙 3 — 소비자 계약(Consumer Contract)에 주의하라
 
-team-harness is a **library other projects build on**. Several surfaces are effectively
-public API even though they aren't marked so:
+team-harness는 **다른 프로젝트들이 기반으로 삼는 라이브러리**입니다. 공식적으로 공개 API로 표시되지 않았더라도 실질적으로 공개 API 역할을 하는 영역들이 있습니다:
 
-- `TeamHarnessResult` shape and the meaning of a normal return vs. a raised `TeamHarnessError`
-  (TH-D3).
-- Worker **spawn and lifecycle** behavior — how workers are launched, tracked, and cleaned up
-  (TH-D2, TH-D4, TH-D5). `loopy-loop` in particular relies on the persisted worker-session
-  manifest and on process cleanup.
-- The `config.toml` schema and the agent-template contract.
+- `TeamHarnessResult`의 형태 및 정상 반환 vs `TeamHarnessError` 발생의 의미 (TH-D3).
+- 작업자 **실행 및 라이프사이클** 동작 — 작업자가 시작되고, 추적되고, 정리되는 방식 (TH-D2, TH-D4, TH-D5). 특히 `loopy-loop`는 영속화된 작업자 세션 매니페스트와 프로세스 정리에 크게 의존합니다.
+- `config.toml` 스키마 및 에이전트 템플릿 계약.
 
-When you change one of these, treat it as a breaking change unless you can show it isn't:
-update `CHANGELOG.md`, and note the consumer impact. Prefer additive changes; when you must
-break, say so loudly.
+이들 중 하나를 변경할 때는 호환성이 유지됨을 증명할 수 없는 한 중대한 변경(breaking change)으로 취급하십시오. `CHANGELOG.md`를 업데이트하고 소비자에게 미치는 영향을 명시하십시오. 가급적 기존 기능에 덧붙이는(additive) 방식을 선호하되, 하위 호환성을 깨뜨려야 할 때는 명확하게 밝히십시오.
 
 ---
 
-`design/` layout: `design/decisions.md` (the log) · `design/designs/` (binding design docs) ·
-`design/analysis/` (working notes). `CLAUDE.md` points here for the working agreement and
-keeps the dev/architecture/release reference.
+`design/` 디렉터리 구조: `design/decisions.md` (결정 로그) · `design/designs/` (구속력 있는 공식 설계 문서) · `design/analysis/` (작업 메모). `CLAUDE.md`는 작업 협약에 대해 본 문서를 안내하며, 개발/아키텍처/릴리스 참고서를 관리합니다.

@@ -1,232 +1,194 @@
 ---
 name: team-harness
-description: Operate effectively as a team-harness coordinator that delegates work to multiple AI coding agent CLIs through tools such as spawn_agent, wait_for_any, wait_for_agents, read_agent_output, read_new_agent_output, list_agents, and kill_agent. Use this skill whenever you are running inside team-harness, coordinating several agents, deciding what to delegate, writing worker prompts, monitoring long-running workers, handling failures, or synthesizing worker outputs. This is for agents using team-harness to complete user tasks, not for developing, installing, or configuring the team-harness project itself.
+description: spawn_agent, wait_for_any, wait_for_agents, read_agent_output, read_new_agent_output, list_agents, kill_agent 등의 도구를 통해 여러 AI 코딩 에이전트 CLI에 작업을 위임하는 team-harness 조율자(coordinator)로서 효과적으로 작동합니다. team-harness 내부에서 실행 중이거나, 여러 에이전트를 조율하거나, 무엇을 위임할지 결정하거나, 작업자 프롬프트를 작성하거나, 장기 실행 작업자를 모니터링하거나, 실패를 처리하거나, 작업자 출력을 종합할 때 이 스킬을 사용하십시오. 이 문서는 사용자 작업을 완수하기 위해 team-harness를 활용하는 에이전트를 위한 것이며, team-harness 프로젝트 자체를 개발, 설치 또는 구성하기 위한 문서가 아닙니다.
 ---
 
-# team-harness Coordinator Playbook
+# team-harness 조율자 플레이북 (Coordinator Playbook)
 
-This skill is for a coordinator agent operating inside team-harness. Your job is
-to use other agents well: decompose the task, delegate bounded work, monitor
-patiently, read the evidence, and synthesize a final answer that reflects what
-actually happened.
+이 스킬은 team-harness 내부에서 동작하는 조율자(Coordinator) 에이전트를 위한 지침서입니다. 여러분의 역할은 다른 에이전트들을 적재적소에 활용하는 것입니다: 작업을 분해하고, 범위를 한정한 작업을 위임하며, 인내심을 갖고 모니터링하고, 증거를 확인한 뒤, 실제로 일어난 사실을 반영하여 최종 답변을 종합하십시오.
 
-Do not treat this as product documentation for team-harness. If the user asks
-how to install, configure, debug, or develop team-harness itself, consult the
-project README or local repository files instead.
+이 문서를 team-harness의 제품 설명서로 취급하지 마십시오. 사용자가 team-harness 자체를 설치, 설정, 디버깅 또는 개발하는 방법을 묻는다면 프로젝트의 README나 로컬 저장소 파일을 참조하십시오.
 
-## Operating model
+## 운영 모델 (Operating model)
 
-team-harness gives you a team of worker CLIs. You remain responsible for:
+team-harness는 여러분에게 작업자(Worker) CLI 팀을 제공합니다. 다음 사항에 대한 책임은 여전히 조율자 본인에게 있습니다:
 
-- understanding the user's deliverable
-- choosing what should be delegated
-- writing self-contained worker prompts
-- keeping worker assignments distinct
-- monitoring workers without premature interruption
-- reading worker outputs and artifacts
-- resolving contradictions
-- giving the user a concise, evidence-backed result
+- 사용자의 최종 산출물 요구사항 이해
+- 어떤 작업을 위임할지 결정
+- 스스로 완결성을 갖춘(self-contained) 작업자 프롬프트 작성
+- 작업자 간의 담당 범위를 명확히 분리
+- 너무 성급하게 중단하지 않고 인내심 있게 작업자 모니터링
+- 작업자의 출력 결과 및 아티팩트(생성 파일) 검토
+- 작업자 간의 상충되는 내용 해결
+- 사용자에게 간결하고 증거에 기반한 최종 결과 전달
 
-Workers are execution resources, not replacements for your judgment. Keep
-planning, prioritization, risk management, and synthesis with yourself.
+작업자는 실행을 위한 자원일 뿐, 여러분의 판단력을 대신하지 않습니다. 계획 수립, 우선순위 지정, 위험 관리, 결과 종합은 반드시 조율자가 직접 수행하십시오.
 
-## When to delegate
+## 언제 위임해야 하는가 (When to delegate)
 
-Delegate when parallel or specialized work will materially improve the outcome:
+병렬 작업이나 특화된 작업이 결과의 질을 유의미하게 향상시킬 때 위임하십시오:
 
-- repository exploration across independent areas
-- implementation split by file, module, or feature boundary
-- independent verification, review, or test-failure diagnosis
-- research where multiple angles can be checked in parallel
-- high-uncertainty tasks where a second opinion is useful
-- large tasks where one worker can make progress while another investigates
+- 서로 독립적인 영역에 걸친 저장소 코드 탐색
+- 파일, 모듈 또는 기능 단위 경계로 분할된 구현 작업
+- 독립적인 검증, 리뷰 또는 테스트 실패 원인 분석
+- 여러 관점을 병렬로 확인해야 하는 조사/리서치
+- 두 번째 의견(교차 검증)이 유용한 불확실성이 높은 작업
+- 한 작업자가 조사를 진행하는 동안 다른 작업자가 진전을 이룰 수 있는 대규모 작업
 
-Keep work local when:
+다음 경우에는 직접 로컬에서 처리하십시오:
 
-- the task is small enough that delegation overhead dominates
-- the next step depends on a single fact you can quickly inspect
-- the work is tightly coupled and concurrent edits would create conflicts
-- the task involves secrets, destructive actions, production systems, or other
-  high-risk operations that need direct control
+- 위임하는 데 드는 오버헤드가 더 클 정도로 작업이 작은 경우
+- 다음 단계가 빠르게 확인할 수 있는 단 하나의 사실에만 의존하는 경우
+- 작업 간의 결합도가 높아 동시 수정 시 충돌이 발생할 위험이 큰 경우
+- 보안 비밀(secret), 파괴적 작업, 프로덕션 시스템 등 직접적인 제어가 필요한 고위험 작업인 경우
 
-Do not spawn workers just to appear parallel. Every worker should have a clear
-reason to exist and a definition of done.
+단지 병렬로 일하는 것처럼 보이기 위해 작업자를 띄우지 마십시오. 모든 작업자는 명확한 존재 이유와 완료 기준(definition of done)을 가져야 합니다.
 
-## Delegation patterns
+## 위임 패턴 (Delegation patterns)
 
-Use one of these patterns instead of vague "help with this" prompts.
+모호하게 "이것 좀 도와줘" 식의 프롬프트를 쓰지 말고, 다음 패턴 중 하나를 사용하십시오.
 
-### Explorer
+### 1. 탐색자 (Explorer)
 
-Use for read-only investigation.
+읽기 전용 조사 작업에 사용합니다.
 
-Give the worker:
+작업자에게 전달할 내용:
+- 답변해야 할 정확한 질문
+- 작업 디렉토리(cwd)
+- 조사를 시작할 관련 파일, 명령어 또는 검색어
+- 반환해야 할 증거
+- 수정하지 말아야 할 것
 
-- the exact question to answer
-- the cwd
-- relevant files, commands, or search terms to start with
-- what evidence to return
-- what not to modify
-
-Example:
-
+예시:
 ```text
-Investigate how authentication is configured in this repository.
+이 저장소에서 인증(authentication)이 어떻게 설정되어 있는지 조사하십시오.
 Cwd: /abs/path/to/repo
-Do not edit files. Read the relevant config and auth modules, then write
-findings to {session_output_dir}/auth-investigation/findings.md.
-Return: key files, current behavior, likely change points, and risks.
+파일을 수정하지 마십시오. 관련 설정 및 인증 모듈을 읽은 뒤,
+조사 결과를 {session_output_dir}/auth-investigation/findings.md 에 작성하십시오.
+반환할 내용: 핵심 파일 목록, 현재 동작 방식, 예상 변경 지점, 잠재적 위험.
 ```
 
-### Implementer
+### 2. 구현자 (Implementer)
 
-Use for bounded code changes.
+범위가 명확히 한정된 코드 변경에 사용합니다.
 
-Give the worker:
+작업자에게 전달할 내용:
+- 담당할 파일 또는 모듈
+- 구현해야 할 동작
+- 준수해야 할 제약 조건 및 기존 코드 패턴
+- 실행해야 할 테스트 (알고 있는 경우)
+- 산출물 또는 요약 파일 경로
 
-- owned files or modules
-- behavior to implement
-- constraints and existing patterns to preserve
-- tests to run, if known
-- artifact or summary path
+한쪽이 명시적으로 편집하지 않는 리뷰어인 경우가 아니라면, 두 작업자에게 쓰기 권한이 겹치도록 지정하지 마십시오.
 
-Avoid giving two workers overlapping write ownership unless one is explicitly a
-reviewer and will not edit.
-
-Example:
-
+예시:
 ```text
-Implement validation for config field X.
+설정 필드 X에 대한 유효성 검사(validation)를 구현하십시오.
 Cwd: /abs/path/to/repo
-Owned files: src/app/config.py and tests/test_config.py.
-Preserve existing public APIs and style.
-Run the focused tests if practical.
-Write a brief summary and test output to
-{session_output_dir}/config-validation/summary.md.
+담당 파일: src/app/config.py 및 tests/test_config.py
+기존 공개 API 규격과 코드 스타일을 유지하십시오.
+가능하다면 관련 단위 테스트를 실행하십시오.
+간략한 요약과 테스트 출력을 {session_output_dir}/config-validation/summary.md 에 작성하십시오.
 ```
 
-### Verifier
+### 3. 검증자 (Verifier)
 
-Use after implementation or when claims need checking.
+구현이 끝난 후 또는 주장의 진위 확인이 필요할 때 사용합니다.
 
-Give the verifier:
+검증자에게 전달할 내용:
+- 무엇이 변경되었는지 또는 검증해야 할 주장이 무엇인지
+- 실행할 명령어
+- 검사할 파일 또는 산출물
+- 성공/실패 판정 기준
+- 관련 없는 다른 코드를 수정하지 말라는 지침
 
-- what changed or what claim to verify
-- commands to run
-- files or artifacts to inspect
-- pass/fail criteria
-- instruction not to make unrelated fixes
-
-Example:
-
+예시:
 ```text
-Verify the recent config validation change.
+최근 적용된 설정 유효성 검사 변경 사항을 검증하십시오.
 Cwd: /abs/path/to/repo
-Do not edit files unless a test command requires generated caches.
-Run the focused config tests and inspect the implementation for missed edge
-cases. Write results to {session_output_dir}/verification/config.md.
+테스트 명령어가 생성 캐시를 필요로 하는 경우가 아니면 파일을 편집하지 마십시오.
+관련 설정 테스트를 실행하고, 놓친 예외 케이스(edge case)가 없는지 구현 코드를 점검하십시오.
+결과를 {session_output_dir}/verification/config.md 에 작성하십시오.
 ```
 
-### Cross-check
+### 4. 교차 검증 (Cross-check)
 
-Use when correctness matters more than speed or when the task is ambiguous.
-Give two workers the same question only when independent agreement is valuable.
-Tell them not to read each other's outputs unless that is the point of the task.
+속도보다 정확성이 훨씬 중요하거나 작업이 모호할 때 사용합니다.
+독립적인 합의가 가치 있을 때에만 두 작업자에게 동일한 질문을 부여하십시오.
+작업의 목적 자체가 서로의 결과를 검토하는 것이 아니라면, 작업자들에게 서로의 출력을 보지 말라고 지시하십시오.
 
-## Worker prompt checklist
+## 작업자 프롬프트 체크리스트
 
-Every `spawn_agent` prompt should be self-contained. Include:
+모든 `spawn_agent` 프롬프트는 그 자체로 완결성을 가져야 합니다. 다음을 포함하십시오:
 
-- objective: the exact outcome you need
-- context: what the user asked and what you already know
-- cwd: absolute working directory
-- ownership: files, directories, or scope the worker owns
-- constraints: non-goals, style rules, safety limits, and what not to touch
-- output: what to return and where to write artifacts
-- done criteria: tests, evidence, or decision points
+- **목표(objective)**: 달성해야 하는 정확한 결과물
+- **맥락(context)**: 사용자의 요청 사항 및 이미 파악된 사실
+- **작업 디렉토리(cwd)**: 절대 경로
+- **담당 범위(ownership)**: 작업자가 전담할 파일, 디렉터리 또는 범위
+- **제약 조건(constraints)**: 비목표(non-goals), 스타일 규칙, 안전 한계, 건드리지 말아야 할 것
+- **출력(output)**: 반환할 내용 및 산출물을 저장할 위치
+- **완료 기준(done criteria)**: 테스트, 증거, 또는 판단 기준
 
-Prefer concrete nouns over broad instructions. "Inspect
-`src/team_harness/tools/agent_tools.py` and explain the wait behavior" is better
-than "look into agents."
+광범위하고 모호한 지시 대신 구체적인 명사를 사용하십시오. "에이전트 좀 살펴봐"보다는 "`src/team_harness/tools/agent_tools.py`를 검사하고 대기 동작 방식을 설명해줘"가 훨씬 좋습니다.
 
-If team-harness has a worker suffix or footer configured, it is appended
-automatically. Do not duplicate those instructions in each prompt.
+team-harness에 작업자 접미사(suffix)나 바닥글(footer)이 설정되어 있다면 자동으로 덧붙여집니다. 각 프롬프트에 해당 지침을 중복 작성하지 마십시오.
 
-## Choosing agent types
+## 에이전트 유형 선택 (Choosing agent types)
 
-Use the available agent types as execution backends:
+사용 가능한 에이전트 유형을 실행 백엔드로 활용하십시오:
 
-- Use stronger or slower agents for complex design, broad review, or risky code.
-- Use faster agents for targeted search, simple edits, or focused verification.
-- If a worker type fails due to an API or infrastructure error, retry the same
-  task with a different type rather than changing the task.
-- When spawning a nested `harness` worker, pass its `agents` allowlist only for
-  genuinely nested orchestration. Avoid nesting for ordinary subtasks.
+- 복잡한 설계, 광범위한 리뷰, 위험도가 높은 코드에는 더 강력하거나 신중한 에이전트를 사용하십시오.
+- 타겟 검색, 단순 수정, 집중 검증에는 더 빠른 에이전트를 사용하십시오.
+- API 또는 인프라 오류로 작업자 유형이 실패한 경우, 작업을 바꾸기보다 다른 에이전트 유형으로 동일 작업을 재시도하십시오.
+- 중첩된 `harness` 작업자를 생성할 때는 진정한 다단계 오케스트레이션이 필요할 때만 `agents` 허용 목록을 전달하십시오. 일반적인 하위 작업에는 중첩을 피하십시오.
 
-The exact available types depend on the user's configuration. If unsure, inspect
-the tool schema or current agent list rather than assuming every backend exists.
+사용 가능한 정확한 유형은 사용자의 설정에 따라 다릅니다. 확실하지 않다면 모든 백엔드가 존재한다고 단정하지 말고 도구 스키마나 현재 에이전트 목록을 확인하십시오.
 
-## Monitoring workers
+## 작업자 모니터링 (Monitoring workers)
 
-After spawning, track worker ids and use a patient loop:
+작업자를 생성한 후에는 작업자 ID를 추적하고 여유 있는 루프를 사용하십시오:
 
-1. `wait_for_any` with the active ids and a realistic timeout.
-2. If a worker finishes, read its stdout and artifacts before acting on its
-   summary.
-3. If the wait times out, treat `timed_out=true` as "still running", not as
-   failure.
-4. Use `list_agents` or `agent_status` when you need a status snapshot.
-5. Use `read_new_agent_output` for incremental stdout. Use `read_agent_output`
-   when you need stdout plus stderr tails, especially before considering a kill.
-6. Wait again unless there is productive local synthesis or another independent
-   worker to launch.
+1. 활성 ID 목록과 현실적인 타임아웃으로 `wait_for_any`를 호출합니다.
+2. 작업자가 완료되면 요약에 따라 행동하기 전에 표준 출력(stdout)과 산출물을 먼저 읽으십시오.
+3. 대기 시간이 초과된 경우, `timed_out=true`를 실패가 아니라 "아직 실행 중"으로 취급하십시오.
+4. 상태 스냅샷이 필요할 때는 `list_agents` 또는 `agent_status`를 사용하십시오.
+5. 점진적인 표준 출력을 확인할 때는 `read_new_agent_output`을 사용하십시오. 강제 종료(kill)를 고려하기 전, 특히 표준 출력과 에러(stderr)의 뒷부분을 확인해야 할 때는 `read_agent_output`을 사용하십시오.
+6. 생산적인 로컬 종합 작업이 있거나 새로 시작할 독립적인 작업자가 있는 경우가 아니라면 다시 대기하십시오.
 
-Do not poll in a tight loop. Do not kill a worker merely because it is quiet or
-slow. Before termination, inspect output, respect the configured minimum
-lifetime, and make sure the worker is not still producing useful stderr or
-stdout.
+너무 잦은 간격으로 폴링(tight loop)하지 마십시오. 작업자가 조용하거나 느리다는 이유만으로 종료시키지 마십시오. 강제 종료 전에는 출력을 확인하고, 설정된 최소 수명을 존중하며, 작업자가 유용한 표준 에러나 출력을 여전히 생성하고 있지 않은지 확인하십시오.
 
-## Reading outputs
+## 출력 결과 검토 (Reading outputs)
 
-Workers can report results in stdout and can write artifacts under the session
-output directory. Before final synthesis:
+작업자는 표준 출력으로 결과를 보고하거나 세션 출력 디렉터리 아래에 산출물을 작성할 수 있습니다. 최종 종합을 작성하기 전에:
 
-- read every relevant artifact you asked workers to create
-- read stdout for workers that did not write files
-- compare overlapping findings
-- check tests or command output directly when workers claim they ran them
-- note failed, killed, or unfinished workers explicitly
+- 작업자에게 생성을 요청한 모든 관련 산출물을 직접 읽으십시오.
+- 파일을 생성하지 않은 작업자의 표준 출력을 읽으십시오.
+- 겹치는 조사 내용을 비교하십시오.
+- 작업자가 테스트나 명령어를 실행했다고 주장하는 경우, 해당 테스트 결과나 명령어 출력을 직접 확인하십시오.
+- 실패했거나, 강제 종료되었거나, 완료되지 않은 작업자를 명시적으로 기록하십시오.
 
-Never claim a result you have not read. If evidence is missing, either gather it
-or say it is missing.
+직접 읽어보지 않은 결과를 사실이라고 주장하지 마십시오. 증거가 누락되었다면 증거를 수집하거나 누락되었다고 솔직히 밝히십시오.
 
-## Synthesis
+## 결과 종합 (Synthesis)
 
-Your final answer should be shorter than the worker outputs and more useful than
-a transcript. Include:
+여러분의 최종 답변은 작업자들의 출력보다 짧아야 하며, 단순한 로그 나열보다 유용해야 합니다. 다음을 포함하십시오:
 
-- outcome: what was done or found
-- evidence: tests, files, artifacts, or worker findings you inspected
-- changes: files changed, if relevant
-- risks: unresolved questions, failed workers, or verification gaps
-- next steps only when they directly follow from the user's request
+- **결과(outcome)**: 무엇이 완료되었거나 발견되었는지
+- **증거(evidence)**: 직접 확인한 테스트, 파일, 아티팩트 또는 작업자의 발견 사항
+- **변경 사항(changes)**: 수정된 파일 (해당되는 경우)
+- **위험 요소(risks)**: 해결되지 않은 질문, 실패한 작업자, 검증 공백
+- **다음 단계(next steps)**: 사용자의 요청에서 직접 이어지는 경우에만 기술
 
-Resolve disagreement explicitly. If two workers disagree, inspect the underlying
-evidence or assign a verifier. Do not average conflicting claims.
+의견 불일치를 명시적으로 해결하십시오. 두 작업자의 의견이 엇갈린다면 기반 증거를 조사하거나 검증자를 배정하십시오. 상충되는 주장을 대충 절충하지 마십시오.
 
-## Common failure modes
+## 흔한 실패 유형 (Common failure modes)
 
-- Over-delegation: too many workers doing overlapping work.
-- Under-specification: prompts that lack cwd, ownership, output format, or done
-  criteria.
-- Premature synthesis: answering before workers finish or before reading their
-  artifacts.
-- Duplicate effort: redoing a worker's task locally while it is still running.
-- Premature kill: treating normal timeout or quiet stdout as a stuck worker.
-- Blind trust: repeating a worker's claim without checking the referenced file,
-  command output, or artifact.
-- Unbounded nested harness use: spawning a `harness` worker when a single normal
-  worker would do.
+- **과도한 위임(Over-delegation)**: 너무 많은 작업자가 중복된 작업을 수행함.
+- **불충분한 명세(Under-specification)**: 프롬프트에 cwd, 소유권, 출력 형식, 완료 기준이 결여됨.
+- **성급한 종합(Premature synthesis)**: 작업자가 끝나기 전이나 산출물을 읽기 전에 답변을 내림.
+- **노력 중복(Duplicate effort)**: 작업자가 실행 중인데 로컬에서 같은 작업을 다시 수행함.
+- **성급한 강제 종료(Premature kill)**: 정상적인 타임아웃이나 조용한 출력을 멈춘 것으로 오인함.
+- **맹목적 신뢰(Blind trust)**: 언급된 파일, 명령어 출력, 산출물을 확인하지 않고 작업자의 주장을 그대로 읊음.
+- **무제한 중첩 하네스 사용**: 단일 작업자로 충분한 상황에서 중첩 `harness` 작업자를 생성함.
 
-When in doubt, make the next action evidence-producing: read, wait, verify, or
-ask one bounded worker to answer one bounded question.
+확신이 서지 않을 때는 다음 행동을 항상 "증거를 생성하는 방향"으로 잡으십시오: 직접 읽고, 기다리고, 검증하거나, 한 명의 한정된 작업자에게 한정된 질문 하나를 물어보십시오.

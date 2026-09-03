@@ -1,107 +1,57 @@
-# Coordinator shell-command lifecycle
+# 조율자 셸 명령어 라이프사이클 (Coordinator shell-command lifecycle)
 
-Status: binding design, implementing TH-D8.
+상태: 구속력 있는 공식 설계 문서 (TH-D8 구현).
 
-## Problem
+## 문제 정의 (Problem)
 
-The coordinator uses `bash` for local commands that are not worker-agent
-assignments: validation, tests, evaluators, and repository utilities. Before
-TH-D8, `tools/shell_tools.py` applied an unconditional 120-second timeout.
-That was reasonable for a quick command but incorrect for a known long-running
-foreground batch.
+조율자는 작업자 에이전트 할당이 아닌 로컬 명령어를 실행할 때 `bash` 도구를 사용합니다(유효성 검사, 테스트 실행, 평가자, 저장소 유틸리티 등). TH-D8 이전에는 `tools/shell_tools.py`가 무조건 120초의 고정 타임아웃을 적용했습니다. 이는 빠른 명령에는 합리적이었으나, 장시간 실행이 예정된 포그라운드 배치 작업에는 부적합했습니다.
 
-Nested timeout flags do not solve this mismatch. Suppose `eval-banana` runs
-five checks sequentially and gives each judge up to 10,800 seconds. Its flag
-controls one judge subprocess; it does not change Team Harness's outer shell
-deadline. Terminating the outer command after 120 seconds can leave prompt
-artifacts but no aggregate report. The absence of that report means the run was
-interrupted, not that the evaluated work failed.
+중첩된 타임아웃 플래그로는 이 불일치를 해결할 수 없습니다. 예를 들어 `eval-banana`가 5개의 검사를 순차적으로 실행하고 각 심사자에게 최대 10,800초를 부여한다고 가정해 봅시다. 해당 프로그램 내부의 플래그는 하나의 하위 프로세스를 제어할 뿐, Team Harness의 외부 셸 데드라인을 변경하지 못합니다. 120초 후 외부 명령이 강제 종료되면 프롬프트 아티팩트는 남지만 종합 보고서가 생성되지 못합니다. 종합 보고서가 없다는 것은 실행이 중단되었음을 의미할 뿐, 평가 대상 작업이 실패했음을 의미하지 않습니다.
 
-## Tool contract
+## 도구 규약 (Tool contract)
 
-`tools/shell_tools.py::bash` accepts:
+`tools/shell_tools.py::bash`는 다음 인자를 받습니다:
 
-- `command`: the shell command;
-- `cwd`: its working directory, defaulting to the current directory; and
-- `timeout_seconds`: a positive integer deadline for the complete foreground
-  command, defaulting to 120 seconds.
+- `command`: 실행할 셸 명령
+- `cwd`: 작업 디렉토리 (기본값: 현재 디렉토리)
+- `timeout_seconds`: 전체 포그라운드 명령에 대한 양의 정수 데드라인 (기본값: 120초)
 
-The default and its error text preserve existing callers. The schema has no
-arbitrary maximum because a batch deadline must cover the number of sequential
-operations it contains. It is still bounded: every call has one explicit,
-finite deadline. Invalid booleans, non-integers, and values below one fail
-before a subprocess is created.
+기본값과 오류 메시지는 기존 호출자와의 하위 호환성을 유지합니다. 스키마에는 임의의 최대값 제한이 없습니다. 배치 작업의 데드라인은 내부에 포함된 순차적 작업의 총합을 감당할 수 있어야 하기 때문입니다. 그럼에도 불구하고 여전히 경계가 지정됩니다. 모든 호출은 명시적이고 유한한 데드라인을 갖습니다. 불리언, 정수가 아닌 값, 1 미만의 값은 하위 프로세스가 생성되기 전에 실패 처리됩니다.
 
-The deadline belongs to the outer shell call. It is distinct from any timeout
-inside the command. A coordinator running a sequential evaluator therefore
-derives the outer value from the validated inventory. For example, with `N`
-checks whose per-check ceiling is 10,800 seconds, the caller can invoke the
-tool with `timeout_seconds=N * 10800 + 600`, leaving ten minutes for validation,
-report assembly, and process overhead.
+데드라인은 외부 셸 호출에 귀속됩니다. 명령 내부의 자체 타임아웃과는 완전히 별개입니다. 따라서 순차 평가자를 실행하는 조율자는 검증된 작업 수량을 바탕으로 외부 데드라인을 도출해야 합니다. 예를 들어 검사당 최대 10,800초가 소요되는 검사 `N`개가 있다면, 호출자는 유효성 검사, 보고서 취합 및 프로세스 오버헤드를 위한 10분을 더해 `timeout_seconds=N * 10800 + 600`으로 도구를 호출할 수 있습니다.
 
-The command stays in the foreground. Coordinators must not replace a truthful
-tool deadline with `nohup`, shell backgrounding, or PID polling: those patterns
-detach command completion and errors from the tool result and make cleanup
-less reliable.
+명령은 포그라운드에서 유지됩니다. 조율자는 도구의 정직한 데드라인을 `nohup`, 셸 백그라운드 실행(`&`), 또는 PID 폴링으로 대체해서는 안 됩니다. 그러한 패턴은 명령의 완료 및 오류를 도구 결과와 분리시키고 프로세스 정리를 불안정하게 만듭니다.
 
-## Process lifecycle
+## 프로세스 라이프사이클 (Process lifecycle)
 
-Each command is created with `start_new_session=True`, making its shell the
-leader of a dedicated process group. This matters because many command-line
-programs create their own children. Killing only the shell can leave the real
-work running and writing after Team Harness has declared a timeout.
+각 명령은 `start_new_session=True`로 생성되어, 해당 셸이 전용 프로세스 그룹(process group)의 리더가 됩니다. 많은 명령줄 프로그램이 자체 자식 프로세스를 생성하기 때문에 이는 매우 중요합니다. 셸만 종료시키면 Team Harness가 타임아웃을 선언한 후에도 실제 작업 프로세스가 계속 실행되어 파일 쓰기를 지속할 수 있습니다.
 
-When the deadline expires, the coordinator tool is cancelled, or execution
-otherwise fails after spawn, Team Harness:
+데드라인이 만료되거나, 조율자 도구가 취소되거나, 실행 후 기타 오류가 발생하면 Team Harness는 다음 절차를 수행합니다:
 
-1. sends SIGTERM to the complete command process group;
-2. waits up to the named one-second termination grace period for the group
-   leader;
-3. if that leader remains, sends SIGKILL to its still-owned process group; and
-4. awaits the shell so it is reaped.
+1. 전체 명령 프로세스 그룹에 SIGTERM을 전송합니다.
+2. 그룹 리더에 대해 지정된 1초의 종료 유예 기간을 대기합니다.
+3. 리더가 여전히 종료되지 않은 경우, 여전히 소유 중인 프로세스 그룹에 SIGKILL을 전송합니다.
+4. 셸이 완전히 수거(reap)되도록 대기합니다.
 
-The leader check is a safety boundary. Once the leader exits, its numeric
-process-group id can be recycled for an unrelated process; Team Harness must
-not send a delayed SIGKILL to that id. SIGTERM was already delivered to every
-original member. A descendant that deliberately ignores SIGTERM while its
-leader exits is not safely attributable after that point and is part of the
-hard-crash/durable-registration limitation below.
+리더 생존 확인은 안전 경계 역할을 합니다. 리더가 종료되고 나면 해당 숫자 기반 프로세스 그룹 ID가 무관한 다른 프로세스에 재할당될 수 있으므로, Team Harness는 해당 ID에 지연된 SIGKILL을 전송해서는 안 됩니다. SIGTERM은 이미 모든 원래 멤버에게 전달되었습니다. 리더가 종료되는 동안 SIGTERM을 의도적으로 무시하는 자식 프로세스는 그 시점 이후 안전하게 추적할 수 없으며, 이는 아래의 하드 크래시/영속 등록 한계에 해당합니다.
 
-Timeout returns the existing coordinator-visible `ERROR` string with the
-actual deadline. Cancellation and unexpected exceptions are re-raised after
-cleanup so the harness cannot fabricate a successful tool result.
+타임아웃 시 실제 데드라인이 포함된 기존의 조율자 노출용 `ERROR` 문자열을 반환합니다. 취소 및 예기치 않은 예외는 정리 작업 후에 다시 발생(re-raise)하므로, 하네스가 가짜 성공 결과를 꾸며낼 수 없습니다.
 
-## Evidence and caller responsibilities
+## 증거 및 호출자 책임 (Evidence and caller responsibilities)
 
-The existing coordinator loop records the complete tool-call arguments and
-result in `run.json`; no parallel trace schema is needed. Combined stdout and
-stderr retain the existing 32 KiB return limit.
+기존 조율자 루프는 전체 도구 호출 인자와 결과를 `run.json`에 기록하므로 별도의 병렬 추적 스키마가 필요하지 않습니다. 결합된 표준 출력과 표준 에러는 기존의 32KiB 반환 한도를 유지합니다.
 
-The caller must interpret the invoked tool's own completion artifact. For an
-evaluator, a complete, valid report can prove semantic pass, semantic failure,
-or evaluator error. A missing report after the outer tool timed out proves only
-interruption. The caller must not manufacture report bytes, hashes, receipts,
-or semantic conclusions for that attempt; it should let the infrastructure
-attempt fail visibly and retry in a fresh output location.
+호출자는 실행된 도구 자체의 완료 아티팩트를 해석해야 합니다. 평가자의 경우, 완전하고 유효한 보고서는 의미적 성공, 의미적 실패 또는 평가자 오류를 증명할 수 있습니다. 외부 도구 타임아웃 후 보고서가 누락된 것은 단지 실행이 중단되었음을 증명할 뿐입니다. 호출자는 해당 시도에 대해 보고서 바이트, 해시, 영수증 또는 의미적 결론을 조작해서는 안 됩니다. 인프라 수준의 실패를 명확히 드러내고 새로운 출력 위치에서 재시도해야 합니다.
 
-## Deliberate boundary
+## 의도적인 설계 경계 (Deliberate boundary)
 
-This mechanism is for synchronous coordinator tools, not worker agents. Worker
-lifecycle, durable session capture, and crash reaping remain governed by
-TH-D2, TH-D4, TH-D5, and `process-lifecycle-and-reaping.md`.
+이 메커니즘은 작업자 에이전트가 아니라 **동기식 조율자 도구**를 위한 것입니다. 작업자 라이프사이클, 영속적 세션 캡처 및 크래시 수거는 계속해서 TH-D2, TH-D4, TH-D5 및 `process-lifecycle-and-reaping.md`의 통제를 받습니다.
 
-If the Team Harness parent is killed without running cancellation cleanup, an
-arbitrary shell command is not yet durably registered for later reaping. Adding
-that recovery surface would require persisted identities and policy comparable
-to worker reaping; it is explicitly outside this focused correction.
+Team Harness 부모 프로세스가 취소 정리 작업을 실행하지 못하고 강제 종료(kill)된 경우, 임의의 셸 명령은 사후 수거를 위해 영속 등록되지 않습니다. 그러한 복구 체계를 추가하려면 작업자 수거와 맞먹는 영속적 식별자 및 정책이 필요하므로, 본 수정 범위에서 명시적으로 제외되었습니다.
 
-## Code and verification map
+## 코드 및 검증 맵 (Code and verification map)
 
-- `src/team_harness/tools/shell_tools.py` defines the schema, validates the
-  deadline, starts the process group, and owns cleanup.
-- `src/team_harness/tools/registry.py` forwards the coordinator's named tool
-  arguments to `bash`.
-- `src/team_harness/coordinator/loop.py` records tool arguments and results in
-  the normal run trace.
-- `src/tests/test_shell_tools.py` covers compatibility, explicit long
-  deadlines, invalid values, process-group cleanup, and cancellation.
+- `src/team_harness/tools/shell_tools.py`: 스키마 정의, 데드라인 검증, 프로세스 그룹 시작 및 정리 담당.
+- `src/team_harness/tools/registry.py`: 조율자의 명명된 도구 인자를 `bash`로 전달.
+- `src/team_harness/coordinator/loop.py`: 일반 실행 추적 로그에 도구 인자 및 결과 기록.
+- `src/tests/test_shell_tools.py`: 호환성, 명시적 장기 데드라인, 유효하지 않은 값, 프로세스 그룹 정리 및 취소 검증.

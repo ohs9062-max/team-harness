@@ -1,12 +1,12 @@
-# JSON Schemas
+# JSON 스키마 정의 (JSON Schemas)
 
-This document defines the JSON schemas used by skill-creator.
+이 문서는 skill-creator에서 사용되는 JSON 스키마를 정의합니다.
 
 ---
 
 ## evals.json
 
-Defines the evals for a skill. Located at `evals/evals.json` within the skill directory.
+스킬에 대한 평가 항목을 정의합니다. 스킬 디렉터리 내 `evals/evals.json`에 위치합니다.
 
 ```json
 {
@@ -14,31 +14,31 @@ Defines the evals for a skill. Located at `evals/evals.json` within the skill di
   "evals": [
     {
       "id": 1,
-      "prompt": "User's example prompt",
-      "expected_output": "Description of expected result",
+      "prompt": "사용자의 예제 프롬프트",
+      "expected_output": "기대되는 결과 설명",
       "files": ["evals/files/sample1.pdf"],
       "expectations": [
-        "The output includes X",
-        "The skill used script Y"
+        "출력에 X가 포함되어 있다",
+        "스킬이 스크립트 Y를 사용했다"
       ]
     }
   ]
 }
 ```
 
-**Fields:**
-- `skill_name`: Name matching the skill's frontmatter
-- `evals[].id`: Unique integer identifier
-- `evals[].prompt`: The task to execute
-- `evals[].expected_output`: Human-readable description of success
-- `evals[].files`: Optional list of input file paths (relative to skill root)
-- `evals[].expectations`: List of verifiable statements
+**필드 설명:**
+- `skill_name`: 스킬의 프론트매터 이름과 일치하는 스킬 이름
+- `evals[].id`: 고유 정수 식별자
+- `evals[].prompt`: 실행할 작업 프롬프트
+- `evals[].expected_output`: 성공에 대한 사람이 읽을 수 있는 설명
+- `evals[].files`: 선택적 입력 파일 경로 목록 (스킬 루트 기준 상대 경로)
+- `evals[].expectations`: 검증 가능한 단언문/기대치 목록
 
 ---
 
 ## history.json
 
-Tracks version progression in Improve mode. Located at workspace root.
+개선 모드에서 버전 진행 상황을 추적합니다. 작업 공간 루트에 위치합니다.
 
 ```json
 {
@@ -71,34 +71,34 @@ Tracks version progression in Improve mode. Located at workspace root.
 }
 ```
 
-**Fields:**
-- `started_at`: ISO timestamp of when improvement started
-- `skill_name`: Name of the skill being improved
-- `current_best`: Version identifier of the best performer
-- `iterations[].version`: Version identifier (v0, v1, ...)
-- `iterations[].parent`: Parent version this was derived from
-- `iterations[].expectation_pass_rate`: Pass rate from grading
-- `iterations[].grading_result`: "baseline", "won", "lost", or "tie"
-- `iterations[].is_current_best`: Whether this is the current best version
+**필드 설명:**
+- `started_at`: 개선 작업이 시작된 ISO 타임스탬프
+- `skill_name`: 개선 중인 스킬의 이름
+- `current_best`: 현재 최고 성능 버전의 식별자
+- `iterations[].version`: 버전 식별자 (v0, v1, ...)
+- `iterations[].parent`: 파생된 부모 버전
+- `iterations[].expectation_pass_rate`: 채점 결과 통과율
+- `iterations[].grading_result`: "baseline", "won", "lost", 또는 "tie"
+- `iterations[].is_current_best`: 현재 최고 버전인지 여부
 
 ---
 
 ## grading.json
 
-Output from the grader agent. Located at `<run-dir>/grading.json`.
+채점 에이전트의 출력입니다. `<run-dir>/grading.json`에 위치합니다.
 
 ```json
 {
   "expectations": [
     {
-      "text": "The output includes the name 'John Smith'",
+      "text": "출력에 '홍길동' 이름이 포함되어 있다",
       "passed": true,
-      "evidence": "Found in transcript Step 3: 'Extracted names: John Smith, Sarah Johnson'"
+      "evidence": "트랜스크립트 3단계에서 발견: '추출된 이름: 홍길동, 이순신'"
     },
     {
-      "text": "The spreadsheet has a SUM formula in cell B10",
+      "text": "스프레드시트 B10 셀에 SUM 수식이 있다",
       "passed": false,
-      "evidence": "No spreadsheet was created. The output was a text file."
+      "evidence": "스프레드시트가 생성되지 않음. 텍스트 파일만 출력됨."
     }
   ],
   "summary": {
@@ -126,43 +126,34 @@ Output from the grader agent. Located at `<run-dir>/grading.json`.
   },
   "claims": [
     {
-      "claim": "The form has 12 fillable fields",
+      "claim": "양식에 12개의 입력 필드가 있다",
       "type": "factual",
       "verified": true,
-      "evidence": "Counted 12 fields in field_info.json"
+      "evidence": "field_info.json에서 12개 필드 확인"
     }
   ],
   "user_notes_summary": {
-    "uncertainties": ["Used 2023 data, may be stale"],
+    "uncertainties": ["2023년 데이터를 사용함, 최신이 아닐 수 있음"],
     "needs_review": [],
-    "workarounds": ["Fell back to text overlay for non-fillable fields"]
+    "workarounds": ["입력 불가 필드에 대해 텍스트 오버레이로 폴백"]
   },
   "eval_feedback": {
     "suggestions": [
       {
-        "assertion": "The output includes the name 'John Smith'",
-        "reason": "A hallucinated document that mentions the name would also pass"
+        "assertion": "출력에 '홍길동' 이름이 포함되어 있다",
+        "reason": "단순 언급만으로도 통과될 수 있으므로 정확성 검증 추가 권장"
       }
     ],
-    "overall": "Assertions check presence but not correctness."
+    "overall": "단언문들이 존재 여부만 검사하고 정확성을 검사하지 않습니다."
   }
 }
 ```
-
-**Fields:**
-- `expectations[]`: Graded expectations with evidence
-- `summary`: Aggregate pass/fail counts
-- `execution_metrics`: Tool usage and output size (from executor's metrics.json)
-- `timing`: Wall clock timing (from timing.json)
-- `claims`: Extracted and verified claims from the output
-- `user_notes_summary`: Issues flagged by the executor
-- `eval_feedback`: (optional) Improvement suggestions for the evals, only present when the grader identifies issues worth raising
 
 ---
 
 ## metrics.json
 
-Output from the executor agent. Located at `<run-dir>/outputs/metrics.json`.
+실행 에이전트의 메트릭 출력입니다. `<run-dir>/outputs/metrics.json`에 위치합니다.
 
 ```json
 {
@@ -183,22 +174,13 @@ Output from the executor agent. Located at `<run-dir>/outputs/metrics.json`.
 }
 ```
 
-**Fields:**
-- `tool_calls`: Count per tool type
-- `total_tool_calls`: Sum of all tool calls
-- `total_steps`: Number of major execution steps
-- `files_created`: List of output files created
-- `errors_encountered`: Number of errors during execution
-- `output_chars`: Total character count of output files
-- `transcript_chars`: Character count of transcript
-
 ---
 
 ## timing.json
 
-Wall clock timing for a run. Located at `<run-dir>/timing.json`.
+실행의 벽시계(Wall clock) 시간 측정 결과입니다. `<run-dir>/timing.json`에 위치합니다.
 
-**How to capture:** When a subagent task completes, the task notification includes `total_tokens` and `duration_ms`. Save these immediately — they are not persisted anywhere else and cannot be recovered after the fact.
+**캡처 방법:** 서브에이전트 작업 완료 시 알림에 `total_tokens`와 `duration_ms`가 포함됩니다. 사후 복구가 불가능하므로 이를 즉시 저장해야 합니다.
 
 ```json
 {
@@ -218,7 +200,7 @@ Wall clock timing for a run. Located at `<run-dir>/timing.json`.
 
 ## benchmark.json
 
-Output from Benchmark mode. Located at `benchmarks/<timestamp>/benchmark.json`.
+벤치마크 모드의 집계 출력입니다. `benchmarks/<timestamp>/benchmark.json`에 위치합니다.
 
 ```json
 {
@@ -252,8 +234,8 @@ Output from Benchmark mode. Located at `benchmarks/<timestamp>/benchmark.json`.
         {"text": "...", "passed": true, "evidence": "..."}
       ],
       "notes": [
-        "Used 2023 data, may be stale",
-        "Fell back to text overlay for non-fillable fields"
+        "2023년 데이터를 사용함",
+        "입력 불가 필드에 대해 텍스트 오버레이로 폴백"
       ]
     }
   ],
@@ -277,43 +259,26 @@ Output from Benchmark mode. Located at `benchmarks/<timestamp>/benchmark.json`.
   },
 
   "notes": [
-    "Assertion 'Output is a PDF file' passes 100% in both configurations - may not differentiate skill value",
-    "Eval 3 shows high variance (50% ± 40%) - may be flaky or model-dependent",
-    "Without-skill runs consistently fail on table extraction expectations",
-    "Skill adds 13s average execution time but improves pass rate by 50%"
+    "'출력이 PDF 파일이다' 단언문은 두 구성 모두에서 100% 통과함 - 스킬 가치 변별력 낮음",
+    "평가 3은 높은 분산(50% ± 40%)을 보임 - 불안정할 가능성 있음",
+    "스킬 미사용 실행은 테이블 추출 기대치에서 일관되게 실패함",
+    "스킬 사용 시 평균 13초가 더 소요되지만 통과율이 50% 향상됨"
   ]
 }
 ```
 
-**Fields:**
-- `metadata`: Information about the benchmark run
-  - `skill_name`: Name of the skill
-  - `timestamp`: When the benchmark was run
-  - `evals_run`: List of eval names or IDs
-  - `runs_per_configuration`: Number of runs per config (e.g. 3)
-- `runs[]`: Individual run results
-  - `eval_id`: Numeric eval identifier
-  - `eval_name`: Human-readable eval name (used as section header in the viewer)
-  - `configuration`: Must be `"with_skill"` or `"without_skill"` (the viewer uses this exact string for grouping and color coding)
-  - `run_number`: Integer run number (1, 2, 3...)
-  - `result`: Nested object with `pass_rate`, `passed`, `total`, `time_seconds`, `tokens`, `errors`
-- `run_summary`: Statistical aggregates per configuration
-  - `with_skill` / `without_skill`: Each contains `pass_rate`, `time_seconds`, `tokens` objects with `mean` and `stddev` fields
-  - `delta`: Difference strings like `"+0.50"`, `"+13.0"`, `"+1700"`
-- `notes`: Freeform observations from the analyzer
-
-**Important:** The viewer reads these field names exactly. Using `config` instead of `configuration`, or putting `pass_rate` at the top level of a run instead of nested under `result`, will cause the viewer to show empty/zero values. Always reference this schema when generating benchmark.json manually.
+**주의:** 뷰어는 이 필드 이름을 정확하게 읽습니다. `configuration` 대신 `config`를 사용하거나, `pass_rate`를 `result` 하위가 아닌 최상위에 두면 뷰어에 빈 값이 표시됩니다. 수동 생성 시 이 스키마를 엄격히 준수하십시오.
 
 ---
 
 ## comparison.json
 
-Output from blind comparator. Located at `<grading-dir>/comparison-N.json`.
+블라인드 비교자의 출력입니다. `<grading-dir>/comparison-N.json`에 위치합니다.
 
 ```json
 {
   "winner": "A",
-  "reasoning": "Output A provides a complete solution with proper formatting and all required fields. Output B is missing the date field and has formatting inconsistencies.",
+  "reasoning": "출력 A는 올바른 서식과 모든 필수 필드를 갖춘 완전한 솔루션을 제공합니다. 출력 B는 날짜 필드가 누락되었고 서식이 일관되지 않습니다.",
   "rubric": {
     "A": {
       "content": {
@@ -349,13 +314,13 @@ Output from blind comparator. Located at `<grading-dir>/comparison-N.json`.
   "output_quality": {
     "A": {
       "score": 9,
-      "strengths": ["Complete solution", "Well-formatted", "All fields present"],
-      "weaknesses": ["Minor style inconsistency in header"]
+      "strengths": ["완전한 솔루션", "우수한 서식", "모든 필드 존재"],
+      "weaknesses": ["헤더의 경미한 스타일 불일치"]
     },
     "B": {
       "score": 5,
-      "strengths": ["Readable output", "Correct basic structure"],
-      "weaknesses": ["Missing date field", "Formatting inconsistencies", "Partial data extraction"]
+      "strengths": ["가독성 있는 출력", "올바른 기본 구조"],
+      "weaknesses": ["날짜 필드 누락", "서식 불일치"]
     }
   },
   "expectation_results": {
@@ -364,7 +329,7 @@ Output from blind comparator. Located at `<grading-dir>/comparison-N.json`.
       "total": 5,
       "pass_rate": 0.80,
       "details": [
-        {"text": "Output includes name", "passed": true}
+        {"text": "출력에 이름 포함", "passed": true}
       ]
     },
     "B": {
@@ -372,7 +337,7 @@ Output from blind comparator. Located at `<grading-dir>/comparison-N.json`.
       "total": 5,
       "pass_rate": 0.60,
       "details": [
-        {"text": "Output includes name", "passed": true}
+        {"text": "출력에 이름 포함", "passed": true}
       ]
     }
   }
@@ -383,7 +348,7 @@ Output from blind comparator. Located at `<grading-dir>/comparison-N.json`.
 
 ## analysis.json
 
-Output from post-hoc analyzer. Located at `<grading-dir>/analysis.json`.
+사후 분석가의 출력입니다. `<grading-dir>/analysis.json`에 위치합니다.
 
 ```json
 {
@@ -391,26 +356,26 @@ Output from post-hoc analyzer. Located at `<grading-dir>/analysis.json`.
     "winner": "A",
     "winner_skill": "path/to/winner/skill",
     "loser_skill": "path/to/loser/skill",
-    "comparator_reasoning": "Brief summary of why comparator chose winner"
+    "comparator_reasoning": "비교자가 승자를 선택한 이유 요약"
   },
   "winner_strengths": [
-    "Clear step-by-step instructions for handling multi-page documents",
-    "Included validation script that caught formatting errors"
+    "다중 페이지 문서 처리를 위한 명확한 단계별 지침",
+    "서식 오류를 잡아내는 유효성 검사 스크립트 포함"
   ],
   "loser_weaknesses": [
-    "Vague instruction 'process the document appropriately' led to inconsistent behavior",
-    "No script for validation, agent had to improvise"
+    "'문서를 적절히 처리하라'는 모호한 지침으로 일관성 없는 동작 유발",
+    "유효성 검사 스크립트가 없어 에이전트가 임의로 처리하다 오류 발생"
   ],
   "instruction_following": {
     "winner": {
       "score": 9,
-      "issues": ["Minor: skipped optional logging step"]
+      "issues": ["경미: 선택적 로깅 단계 건너뜀"]
     },
     "loser": {
       "score": 6,
       "issues": [
-        "Did not use the skill's formatting template",
-        "Invented own approach instead of following step 3"
+        "스킬의 서식 템플릿 미사용",
+        "3단계를 따르지 않고 자체적인 접근 방식 고안"
       ]
     }
   },
@@ -418,13 +383,13 @@ Output from post-hoc analyzer. Located at `<grading-dir>/analysis.json`.
     {
       "priority": "high",
       "category": "instructions",
-      "suggestion": "Replace 'process the document appropriately' with explicit steps",
-      "expected_impact": "Would eliminate ambiguity that caused inconsistent behavior"
+      "suggestion": "'문서를 적절히 처리하라'를 명시적 단계로 대체",
+      "expected_impact": "일관성 없는 동작을 유발한 모호성 해소"
     }
   ],
   "transcript_insights": {
-    "winner_execution_pattern": "Read skill -> Followed 5-step process -> Used validation script",
-    "loser_execution_pattern": "Read skill -> Unclear on approach -> Tried 3 different methods"
+    "winner_execution_pattern": "스킬 읽기 -> 5단계 프로세스 준수 -> 유효성 검사 스크립트 사용",
+    "loser_execution_pattern": "스킬 읽기 -> 접근 방식 혼선 -> 3가지 다른 방법 시도"
   }
 }
 ```

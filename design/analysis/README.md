@@ -1,12 +1,9 @@
 # design/analysis/
 
-Working notes: investigations, code read-throughs, option comparisons, and reasoning that
-led to a decision or design. **Not binding**, and may be out of date or superseded.
+작업용 메모 디렉터리: 조사 내용, 코드 분석, 대안 비교, 결정이나 설계로 이어진 논리적 근거들을 담고 있습니다. **구속력이 없으며**, 내용이 오래되었거나 다른 문서로 대체되었을 수 있습니다.
 
-- Binding architecture lives in `design/designs/`.
-- The authoritative record of a decision lives in `design/decisions.md`.
-- If a note here contradicts a decision or a design doc, the note is wrong (or stale) — fix or
-  delete it, and update the authoritative doc.
+- 구속력 있는 공식 아키텍처는 `design/designs/`에 위치합니다.
+- 결정에 대한 최종 권위를 갖는 기록은 `design/decisions.md`에 위치합니다.
+- 여기 있는 메모가 결정 또는 설계 문서와 상충될 경우, 해당 메모가 잘못되었거나 오래된 것이므로 수정하거나 삭제하고 최종 권위 문서를 업데이트하십시오.
 
-Anything a future agent must rely on belongs in `design/designs/` or `design/decisions.md`, not
-here.
+미래의 에이전트가 반드시 의존해야 하는 모든 내용은 여기가 아니라 `design/designs/` 또는 `design/decisions.md`에 작성해야 합니다.

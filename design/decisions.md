@@ -1,384 +1,116 @@
-# Architecture Decision Log
+# 아키텍처 결정 로그 (Architecture Decision Log)
 
-Decisions made while building and reviewing team-harness, recorded with the context and
-rationale a future reader — a human, or an agent with **no memory of the conversation that
-produced them** — needs to understand each one cold.
+team-harness를 구축하고 검토하는 과정에서 내린 결정들을 기록한 문서입니다. 미래의 독자(인간 또는 **이 결정을 내린 대화의 기억이 전혀 없는 에이전트**)가 맥락 없이도 각각의 결정을 이해할 수 있도록 배경과 근거를 담았습니다.
 
-Companion docs:
-- `CLAUDE.md` — developer reference (commands, architecture map, release process).
-- `design/designs/` — self-contained, binding design docs (the detailed form of decisions).
-- `design/analysis/` — working notes (may be messy or superseded).
-- `README.md` — user-facing framing.
+관련 문서:
+- `CLAUDE.md` — 개발자 참고서 (명령어, 아키텍처 맵, 릴리스 프로세스).
+- `design/designs/` — 구속력 있는 자체 완결형 공식 설계 문서 (결정들의 상세 형태).
+- `design/analysis/` — 작업 메모 (정리되지 않았거나 대체되었을 수 있음).
+- `README.md` — 사용자 관점의 프레이밍.
 
-Each entry states the **Decision** (the conclusion, plainly), the **Context** (what problem
-it solves or why the question arose), and the **Consequences**. A `**Refined by**` line
-records later decisions that modify an earlier one.
+각 항목은 **결정 (Decision)**(명확한 결론), **맥락 (Context)**(어떤 문제를 해결하는지, 왜 질문이 제기되었는지), 그리고 **결과 (Consequences)**를 기술합니다.
 
-> **Some of these are deliberate choices that read like defects to someone skimming the
-> code.** They are recorded here precisely so a future agent does not "fix" them by accident.
-> team-harness is a library other projects depend on — before changing a behavior below, read
-> the entry and consider the consumer impact.
+> **이들 중 일부는 코드를 대충 훑어보는 사람에게는 결함(버그)처럼 보이는 의도된 선택입니다.** 미래의 에이전트가 실수로 이를 "수정"하지 않도록 여기에 명확히 기록해 두었습니다. team-harness는 다른 프로젝트들이 의존하는 라이브러리입니다. 아래의 동작을 변경하기 전에 반드시 해당 항목을 읽고 소비자에게 미칠 영향을 고려하십시오.
 
 ---
 
-## TH-D1. The coordinator orchestrates; workers implement
+## TH-D1. 조율자는 오케스트레이션(계획/위임)을 담당하고, 작업자가 구현을 담당한다
 
-**Decision.** The **coordinator** is an LLM that plans and delegates by emitting tool calls;
-it never implements the work itself. The actual work is done by **workers** — external coding
-CLIs (Codex, Gemini, Claude Code, opencode, pi, OpenHands) spawned as subprocesses. The
-coordinator's tools spawn workers, read/write files, run shell, and manage a todo list, but
-"do the change" always means "delegate to a worker."
+**결정.** **조율자(Coordinator)**는 도구 호출을 생성하여 계획을 세우고 위임하는 LLM이며, 결코 스스로 작업을 구현하지 않습니다. 실제 작업은 서브프로세스로 실행되는 **작업자(Workers)**(Codex, Gemini, Claude Code, opencode, pi, OpenHands 등의 외부 코딩 CLI)가 수행합니다. 조율자의 도구는 작업자 생성, 파일 읽기/쓰기, 셸 실행, 작업 목록(todo) 관리 등을 수행하지만, "변경 작업 수행"은 항상 "작업자에게 위임"함을 의미합니다.
 
-**Context.** Mixing planning and implementation in one agent makes long tasks unfocused and
-hard to supervise. Separating a thin orchestrating brain from swappable execution engines lets
-team-harness be model- and CLI-agnostic, and keeps responsibility legible.
+**맥락.** 단일 에이전트에서 계획과 구현을 혼합하면 장기 작업 시 초점을 잃고 감독하기 어려워집니다. 얇은 조율 브레인과 교체 가능한 실행 엔진을 분리함으로써 team-harness가 특정 모델이나 CLI에 종속되지 않도록 만들고 책임 소재를 명확히 할 수 있습니다.
 
-**Consequences.** The coordinator loop (`coordinator/loop.py`) runs until the LLM returns
-content with no tool calls. Workers are the unit of real work and the unit of failure. Adding
-a new backend means adding an agent template (`agents/template.py`), not touching the loop.
+**결과.** 조율자 루프(`coordinator/loop.py`)는 LLM이 도구 호출 없이 텍스트 응답을 반환할 때까지 실행됩니다. 작업자는 실제 작업의 단위이자 실패의 단위입니다. 새로운 백엔드를 추가하는 것은 루프를 수정하는 것이 아니라 에이전트 템플릿(`agents/template.py`)을 추가하는 것을 의미합니다.
 
-## TH-D2. Workers are one-shot batch subprocesses, not reattachable sessions
+## TH-D2. 작업자는 재연결 가능한 세션이 아니라, 1회성 배치 서브프로세스이다
 
-**Decision.** Each worker is launched with `asyncio.create_subprocess_exec` as a **one-shot
-batch process**: `stdin=asyncio.subprocess.DEVNULL`, `stdout`/`stderr` redirected to **files**,
-no controlling TTY (`agents/spawner.py`). It runs to completion and exits. There is no
-interactive channel and nothing to "reattach" to.
+**결정.** 각 작업자는 `asyncio.create_subprocess_exec`를 통해 **1회성(one-shot) 배치 프로세스**로 실행됩니다: `stdin=asyncio.subprocess.DEVNULL`, `stdout`/`stderr`는 **파일**로 리다이렉트되며, 제어 TTY가 없습니다(`agents/spawner.py`). 끝까지 실행되고 종료됩니다. 대화형 채널이 없으며 "다시 연결(reattach)"할 대상이 없습니다.
 
-**Context.** The worker CLIs are invoked in their non-interactive/exec mode: give them a
-prompt, let them run, collect the result. This is simpler and more reproducible than driving an
-interactive REPL, and it is what the CLIs are designed for in automation.
+**맥락.** 작업자 CLI는 비대화형/실행(exec) 모드로 호출됩니다: 프롬프트를 주고, 실행하게 두고, 결과를 수집합니다. 이는 대화형 REPL을 제어하는 것보다 훨씬 단순하고 재현 가능하며, 자동화 환경에서 CLI들이 설계된 방식과 일치합니다.
 
-**Consequences.** Process control lives entirely in the parent's in-memory
-`asyncio.subprocess.Process` handle (held by `agents/manager.py`'s `AgentManager`). **If the
-parent dies, you cannot re-adopt a running worker** — there is no stdio to reconnect and no way
-to rebuild the asyncio transport; the worker's output is in its log files, but there is no
-control channel. Continuing a worker's *work* after an interruption is therefore a *new*
-process that resumes the logical session (TH-D4), never a reattachment. This is the premise
-behind TH-D5.
+**결과.** 프로세스 제어는 전적으로 부모의 인메모리 `asyncio.subprocess.Process` 핸들(`agents/manager.py`의 `AgentManager`가 보관)에 머뭅니다. **부모가 죽으면 실행 중인 작업자를 다시 입양(re-adopt)할 수 없습니다.** 다시 연결할 stdio가 없고 비동기 트랜스포트를 재구축할 방법이 없습니다. 작업자의 출력은 로그 파일에 남아 있지만 제어 채널은 사라집니다. 따라서 중단 후 작업자의 *작업*을 계속하는 것은 논리적 세션을 재개하는 *새로운* 프로세스를 띄우는 것(TH-D4)이지, 기존 프로세스에 재연결하는 것이 아닙니다. 이것이 TH-D5의 전제입니다.
 
-## TH-D3. A normal `run()` return means "the loop ended cleanly," not "every worker succeeded"
+## TH-D3. `run()`의 정상 반환은 "루프가 깔끔하게 끝났다"를 의미할 뿐, "모든 작업자가 성공했다"를 의미하지 않는다
 
-**Decision.** `TeamHarness.run()` returns a `TeamHarnessResult` when the coordinator loop ends
-without a *terminal* error; it raises `TeamHarnessError` only on terminal failures (API/retry
-exhaustion, or a recorded `run_log.error`) — see `harness.py`. A **failed worker does not by
-itself fail the run**: failed workers survive as entries in `TeamHarnessResult.agents`, and the
-coordinator may legitimately finish after a worker failed (synthesize an answer, route around
-it, decide it has enough).
+**결정.** `TeamHarness.run()`은 조율자 루프가 *치명적(terminal)* 오류 없이 끝났을 때 `TeamHarnessResult`를 반환합니다. 치명적 실패(API/재시도 소진 또는 기록된 `run_log.error`) 시에만 `TeamHarnessError`를 발생시킵니다(`harness.py`). **작업자 실패 자체가 실행 전체를 실패시키지는 않습니다.** 실패한 작업자는 `TeamHarnessResult.agents`의 항목으로 보존되며, 조율자는 작업자가 실패한 후에도 합법적으로 작업을 완료할 수 있습니다(답변 종합, 우회 경로 탐색, 충분한 정보 확보 등).
 
-**Context.** The coordinator is an orchestrator, not a build system. Whether the *task* was
-truly accomplished is a judgment the coordinator (and the caller) make from the workers'
-outputs — it is not mechanically decidable from "the loop returned."
+**맥락.** 조율자는 오케스트레이터이지 빌드 시스템이 아닙니다. *작업*이 진정으로 완수되었는지는 조율자(및 호출자)가 작업자의 출력을 바탕으로 내리는 판단이며, "루프가 반환되었다"는 기계적 사실만으로 결정할 수 없습니다.
 
-**Consequences.** **Consumers must not equate a normal return with task success.** They should
-inspect `TeamHarnessResult.agents` (statuses, exit codes) and apply their own acceptance
-criteria. `loopy-loop` depends on exactly this contract (its own decision log records that an
-iteration's mechanical completion is distinct from the work being good). Changing this — e.g.
-making a failed worker raise — is a breaking change to the consumer contract (AGENTS.md Rule 3).
+**결과.** **소비자는 정상 반환을 작업 성공과 동일시해서는 안 됩니다.** 소비자는 `TeamHarnessResult.agents`(상태, 종료 코드)를 검사하고 자체적인 승인 기준을 적용해야 합니다. `loopy-loop`가 정확히 이 계약에 의존합니다(이터레이션의 기계적 완료와 작업의 질적 성공을 구분함). 실패한 작업자가 예외를 발생시키도록 바꾸는 것은 소비자 계약을 깨뜨리는 변경(breaking change)입니다 (AGENTS.md 규칙 3).
 
-## TH-D4. Worker continuity is via captured session id + resume, not process adoption
+## TH-D4. 작업자 연속성은 프로세스 입양이 아니라 캡처된 세션 ID + 재개(Resume)를 통해 이루어진다
 
-**Decision.** team-harness captures each worker's vendor **session id** from its output
-(`agents/session_capture.py`) and records resume capability per agent type
-(`tracking/worker_sessions.py`, `WorkerResumeInfo`). To continue a worker's work, you spawn a
-**new** process that resumes that logical session (the CLIs' `--resume`/`continue` modes) —
-never by reattaching to a still-running process (which TH-D2 makes impossible).
+**결정.** team-harness는 출력에서 각 작업자의 벤더 **세션 ID**를 캡처하고(`agents/session_capture.py`), 에이전트 유형별 재개 기능을 기록합니다(`tracking/worker_sessions.py`, `WorkerResumeInfo`). 작업자의 작업을 이어가려면 해당 논리 세션을 재개하는 **새로운** 프로세스(CLI의 `--resume`/`continue` 모드)를 생성해야 하며, 실행 중인 프로세스에 재연결하는 방식을 사용하지 않습니다(TH-D2에 의해 불가능함).
 
-Within the same live harness run, a coordinator resumes with
-`spawn_agent(mode="resume", resume_from_agent_id="<agent id>")`. The harness resolves that
-agent's captured vendor session internally and rejects the request before spawning unless the
-source exists in this run, is terminal, has the same agent type, and has a captured session id.
-`resume_from_session_id` remains the explicit interface for a raw id obtained from a finalized
-`worker_sessions.json`, including a prior run. Both selectors require `mode="resume"`, and the
-two selectors are mutually exclusive.
-team-harness never silently turns a failed resume into a fresh spawn; the coordinator must make
-that fallback explicit with a self-contained prompt.
+동일한 라이브 하네스 실행 내에서 조율자는 `spawn_agent(mode="resume", resume_from_agent_id="<agent id>")`로 재개합니다. 하네스는 해당 에이전트의 캡처된 벤더 세션을 내부적으로 리졸브하며, 소스가 이번 실행에 존재하고, 종료 상태이며, 동일한 에이전트 유형이고, 캡처된 세션 ID를 가지고 있지 않으면 생성 전에 거부합니다. `resume_from_session_id`는 이전 실행을 포함하여 마감된 `worker_sessions.json`에서 얻은 원시 ID를 위한 명시적 인터페이스로 유지됩니다. 두 선택자 모두 `mode="resume"`이 필요하며 상호 배타적입니다. 하네스는 실패한 재개를 조용히 새로운 생성으로 전환하지 않으며, 조율자가 자립형 프롬프트로 명시적 폴백을 수행해야 합니다.
 
-**Context.** Long tasks and crashes need a way to pick up where a worker left off. The vendor
-CLIs already persist their own session state; capturing the id lets team-harness re-enter that
-state cleanly. A live coordinator previously had to provide the raw vendor id even though
-`worker_sessions.json` is finalized only after the coordinator loop ends and `list_agents`
-exposes harness agent ids, not vendor ids. In a real run the coordinator guessed a plausible
-Codex thread id, created a process that failed with `no rollout found`, and then had to route
-around it with a fresh worker. Resolving the live agent id inside `tools/agent_tools.py` removes
-that guessing step without exposing or duplicating provider-specific state in the prompt.
+**맥락.** 장기 작업과 크래시 상황에서는 작업자가 중단한 지점부터 다시 시작할 수 있는 방법이 필요합니다. 벤더 CLI들은 이미 자체 세션 상태를 영속화하고 있으므로, ID를 캡처하면 team-harness가 해당 상태로 깔끔하게 다시 진입할 수 있습니다.
 
-**Consequences.** Process *identity* (is it still running?) and session *continuity* (resume
-the work) are two different concerns handled by two different mechanisms — resume by session id
-(this decision), and process reaping by pid/pgid (TH-D5). Not every backend supports resume
-(`WorkerResumeInfo.supported`); callers must handle the unsupported case. Same-run lookup is
-additive and does not change raw-id resume. Invalid source references create no worker process or
-agent record. A rejected vendor resume remains a visible failed worker under TH-D3: automatic
-fresh retry would be unsafe because a short continuation prompt may depend on context that exists
-only in the old vendor session.
+**결과.** 프로세스 *식별*(아직 실행 중인가?)과 세션 *연속성*(작업 재개)은 서로 다른 두 가지 관심사이며 서로 다른 두 가지 메커니즘으로 처리됩니다(세션 ID 기반 재개는 이번 결정, PID/PGID 기반 프로세스 수거는 TH-D5). 모든 백엔드가 재개를 지원하지는 않으므로 호출자는 미지원 케이스를 처리해야 합니다.
 
-## TH-D5. Persist worker process identity and spawn workers in their own process group, to enable orphan reaping
+## TH-D5. 고아 프로세스 수거를 가능하게 하기 위해 작업자 프로세스 식별자를 영속화하고 자체 프로세스 그룹에서 실행한다
 
-**Decision.** team-harness will **persist each worker's process identity** — `pid`, process
-group id (`pgid`), and process `starttime` — into the per-run worker-session manifest
-(extending `WorkerSessionRecord` / `WorkerSessionsManifest`, which already persists rich
-per-agent metadata but no process identity today), and will **spawn each worker with its own
-process group** (`start_new_session=True`). It will expose a **reap** operation that, given a
-prior run's manifest, kills any still-alive worker process group — verifying identity by
-`(pgid, starttime)` so a recycled id is never killed.
+**결정.** team-harness는 각 작업자의 프로세스 식별자(`pid`, 프로세스 그룹 ID `pgid`, 프로세스 `starttime`)를 실행별 작업자 세션 매니페스트에 **영속화**하고, 각 작업자를 **자체 프로세스 그룹**(`start_new_session=True`)으로 실행합니다. 또한 이전 실행의 매니페스트가 주어졌을 때 여전히 살아있는 작업자 프로세스 그룹을 종료시키는 **수거(reap)** 작업을 노출하며, `(pgid, starttime)`으로 식별자를 검증하여 재활용된 PID를 절대 종료시키지 않습니다.
 
-**Context.** The `AgentManager` handle that lets team-harness kill a worker is **in memory
-only**; nothing durable records which OS processes a run launched. Because workers are one-shot
-subprocesses in the parent's process group (TH-D2), a **hard crash of the parent** (OOM,
-SIGKILL, panic) reparents the workers to init and leaves them running — still spending money,
-still writing to the target checkout — with nothing tracking them and no startup cleanup
-anywhere. Re-adopting them is impossible (TH-D2), so the only durable fix is *prevent and
-reap*: know what was launched, and be able to kill leftovers on restart.
+**맥락.** team-harness가 작업자를 kill할 수 있게 해주는 `AgentManager` 핸들은 **인메모리에만** 존재하며, 실행이 어떤 OS 프로세스를 시작했는지 영속적으로 기록되지 않았습니다. 작업자는 부모의 프로세스 그룹에 속한 1회성 서브프로세스였으므로(TH-D2), **부모의 비정상 크래시**(OOM, SIGKILL 등) 시 작업자가 init의 자식으로 재할당되어 계속 실행되면서 비용을 쓰고 저장소에 쓰기를 지속하는 문제가 있었습니다. 이들을 다시 입양하는 것은 불가능하므로(TH-D2), 유일하고 지속 가능한 해결책은 *예방 및 수거*입니다.
 
-**Consequences.**
-- The existing worker-session manifest gains `pid`/`pgid`/`starttime`; spawning gains
-  `start_new_session=True` so a whole worker (and any nested sub-workers, up to the configured
-  `max_depth`) is one killable group.
-- Identity + a durable `is_group_alive(pgid, starttime)` liveness check turns the restart
-  decision into a **policy per orphan**, not a hardcoded kill: **drain (bounded)** — wait up to a
-  timeout for the worker to finish, then finalize its manifest record from the completed output
-  files (a worker record and its repo edits — never a fabricated run result; the dead
-  coordinator's outcome is not reconstructed); **reap** (SIGTERM→grace→SIGKILL) —
-  the escape for force-stop / hung-past-timeout / unsafe-to-finish; or **ignore**. `starttime`
-  verification guards every path against pid reuse. team-harness stays mechanism-neutral and does
-  not hardcode the default; the recommended default for a cost-conscious, git-is-truth consumer
-  is **bounded drain** (it avoids wasting near-complete work and half-applied edits, and the
-  serialization objection is moot because draining happens during recovery before new work is
-  dispatched). This extends `AgentManager.kill()` from in-memory-only to persisted-and-reapable.
-- **Consumer contract (loopy-loop):** the consumer owns *its own* process liveness (e.g. a
-  worker pid + heartbeat) and, on crash recovery, chooses a policy per orphan for the interrupted
-  run before starting fresh. team-harness provides the manifest, the liveness check, and the
-  policy operations; the consumer decides which and when. See
-  `design/designs/process-lifecycle-and-reaping.md` for the full contract.
-- **Cross-platform:** `start_new_session` + `os.killpg` work on macOS (dev) and Linux (prod);
-  cgroup-based supervision would be more bulletproof but is Linux-only and is a documented
-  non-goal for now.
-- This does **not** add process *adoption* (TH-D2 still holds) — it adds cleanup of the
-  processes a dead parent left behind.
+**결과.**
+- 작업자 매니페스트에 `pid`/`pgid`/`starttime`이 추가되고, `start_new_session=True`로 전체 서브트리가 단일 kill 가능 그룹이 됩니다.
+- 영속 식별자 + `is_group_alive(pgid, starttime)` 생존 확인을 통해 재시작 결정이 하드코딩된 kill이 아니라 **고아별 정책**으로 바뀝니다: **드레인(drain, 유한 대기)**(타임아웃까지 대기 후 완료된 파일로부터 매니페스트 마감), **수거(reap)**(SIGTERM→유예→SIGKILL), 또는 **무시(ignore)**. `starttime` 검증이 PID 재사용을 방어합니다. 비용 효율적인 git-is-truth 소비자에게는 **유한 드레인**이 권장 기본값입니다.
+- 프로세스 *입양*을 추가한 것이 아니라(TH-D2 유지), 죽은 부모가 남긴 프로세스의 *정리(수거)*를 추가한 것입니다.
 
-Detailed design: `design/designs/process-lifecycle-and-reaping.md`.
+상세 설계: `design/designs/process-lifecycle-and-reaping.md`.
 
-## TH-D6. Per-spawn model/effort overrides fail loudly and are audited; the harness never second-guesses the choice
+## TH-D6. 생성별 모델/추론 노력 오버라이드는 명확히 실패를 알리고 감사(audit)되며, 하네스는 선택을 임의로 재단하지 않는다
 
-**Decision.** The coordinator may override a worker's model and reasoning effort per spawn
-(`spawn_agent(model=…, effort=…)`); the explicit argument always wins over the agent
-template's default. Two invariants govern the feature:
+**결정.** 조율자는 생성 시 작업자의 모델과 추론 노력(reasoning effort)을 오버라이드할 수 있습니다(`spawn_agent(model=…, effort=…)`). 명시적 인자가 항상 에이전트 템플릿의 기본값보다 우선합니다. 두 가지 불변 규칙이 적용됩니다:
+1. **절대 조용히 넘어가지 않고 명확히 실패를 알린다(Fail loudly).** 요청대로 적용될 수 없는 오버라이드는 무시되거나 중복 적용되는 대신 `spawn_agent`에서 조율자가 볼 수 있는 ERROR를 반환합니다(노력 값을 전달할 수 없는 템플릿, 빈 레벨 등).
+2. **감사 추적은 실제로 일어난 사실만을 기록한다.** 각 생성은 `requested_model`/`requested_effort`(조율자의 명시적 인자)와 `effective_model`/`effective_effort`(리졸브 후 실제로 주입된 값)를 `run.json`에 기록합니다.
 
-1. **Fail loudly, never silently.** An override that cannot take effect as requested
-   returns a coordinator-visible ERROR from `spawn_agent` instead of being dropped or
-   double-applied: an agent type whose template cannot carry an effort value (no
-   `reasoning_effort_flag` with an `{effort}` placeholder — see
-   `template_supports_effort()` in `agents/template.py`), a blank level, or a raw
-   `flags` entry that carries the same reasoning-effort option the override would render.
-2. **The audit trail claims only what actually happened.** Each spawn records
-   `requested_model`/`requested_effort` (the coordinator's explicit arguments; null =
-   left to the template default) and `effective_model`/`effective_effort` (what was
-   actually injected after resolution) on its `run.json` agent record. `effective_model`
-   is null when the template has no model-injection surface (`model_flag` /
-   `model_env_vars`), and for env-only templates it accounts for caller `env` overrides
-   winning the spawn-env merge (null when the override is partial or conflicting) — see
-   `_recorded_model()` in `agents/spawner.py`.
+**맥락.** loopy-loop의 모델 티어 정책을 위해 구축되었습니다. 강력한 하네스 조율자가 작업별로 더 저렴하거나 강력한 작업자를 선택하고, 외부 리뷰어가 실제로 해당 티어에서 작업이 수행되었는지 검증합니다.
 
-**Context.** Built for loopy-loop's model-tier policy (loopy D9): strong harness
-coordinators choose cheaper or stronger workers per task from named tiers, and an *outer
-reviewer* — not the engine — verifies that e.g. a review actually ran on the strong tier.
-That consumer makes honest audit fields the load-bearing part of the feature: a recorded
-effort the worker never received, or a model claim for a template that injects nothing,
-is worse than no record at all. The same reasoning rejects silent drops: a coordinator
-that believes it escalated when it didn't will happily mark the work reviewed.
+**결과.** 하네스는 *렌더링 가능 여부*만을 검증하며 *정책*을 검증하지 않습니다(모델 허용 목록이나 비용 제한을 강제하지 않음). 선택의 타당성은 감사 필드를 검토하는 소비자의 판단에 맡깁니다.
 
-**Consequences.** The harness validates *renderability*, never *policy* — there is no
-model allowlist, no cost fence, no per-depth restriction; whether a choice was wise is
-the consumer's judgment call over the audit fields. A template whose
-`reasoning_effort_flag` lacks the `{effort}` placeholder now renders nothing rather than
-a valueless option (the level never reached the worker either way; the old behavior
-could make the CLI eat the next token as the option's value). Anyone adding a new
-injection surface to templates must extend `_recorded_model()`/`template_supports_effort()`
-so the audit fields keep telling the truth.
+## TH-D7. 임베디드 호출자는 명시적인 실행 및 위임 계약을 협상한다
 
-## TH-D7. Embedded callers negotiate an explicit run and delegation contract
+**결정.** team-harness는 명명된 호출자 기능(capabilities)과 추가적인 `CallerContext`를 노출합니다. v1 계약을 선택한 호출자는 절대 추적 루트와 부모 시도/세션/할당 식별자를 제공합니다. 하네스는 해당 위치에 독립적인 실행 ID 자식 디렉터리를 생성하고 성공 및 구조화된 실패 시 정본 `run.json`, 세션 출력, 생성된 조율자 입력 경로를 반환합니다. 첫 공급자 호출 전에 생성된 조율자 입력을 영속화하고 모든 직접 생성에 대해 할당 엔벨로프를 자동으로 작성합니다.
 
-**Decision.** team-harness exposes named caller capabilities and an additive
-`CallerContext`. A caller that selects the v1 contract supplies an absolute
-caller-owned trace root plus parent attempt/session/assignment identity. The
-harness writes one self-contained run-id child there and returns the canonical
-`run.json`, session-output, and generated-coordinator-input paths on success and
-structured failure. It persists generated coordinator system/user input before
-the first provider operation and automatically writes an assignment envelope
-for every direct spawn. Coordinators choose free-form delegated role, task id,
-expected outputs, state responsibility, model, effort, and topology; the harness
-records those choices but does not turn them into an allowlist or policy gate.
+구조화된 트레이스는 정확한 조율자 입력, 직접 할당, 작업자 프롬프트, 명령어, stdout/stderr 경로, 공급자 세션 식별자를 보존합니다. JSON 아티팩트는 원자적으로 교체되며, 작업자 스트림은 호출자 소유의 정본 로그 파일에 직접 기록됩니다. 최종 실행 스냅샷은 작업자 감시자 및 세션 캡처 태스크의 완료를 대기합니다.
 
-Structured traces preserve the exact coordinator input, direct assignments,
-worker prompts, commands, stdout/stderr paths, and provider session identifiers.
-JSON artifacts are replaced atomically, and worker streams go directly to the
-canonical caller-owned log files. The final run snapshot awaits the worker
-watcher and provider session-id capture task, including its last stdout
-prefix/tail scan. Worker shutdown is bounded by the caller's configured natural
-exit timeout plus a named one-second SIGTERM grace period; the outer bound
-includes both so it does not preempt graceful termination. The retained
-watcher/capture phase separately uses the configured shutdown timeout. On
-timeout the harness uses the process-group id it created to SIGKILL any unreaped
-worker without depending on a process-table probe. That releases watchers
-blocked in `proc.wait()`; the harness then cancels and settles its own
-cancellation-cooperative watcher/capture tasks so `asyncio.run()` teardown does
-not inherit pending work. Exceptions and phase-specific timeouts are collected
-rather than allowed to bypass cleanup; their classes and exact messages are
-persisted because these are raw caller-owned traces, not sanitized export
-artifacts. `run.json` and `worker_sessions.json` are written first, then the SDK
-raises a structured `TeamHarnessError` containing their canonical caller-owned
-paths.
+내장된 `type=harness`의 경우 검증된 `TEAM_HARNESS_CALLER_CONTEXT` 엔벨로프를 자식 환경으로 자동 전파합니다. 중첩 조율자는 외부 세션/깊이/워크플로 식별자를 유지하면서 자체 추적 루트와 부모 실행 ID를 전달받습니다.
 
-The generated coordinator and worker footers name the harness run lineage. For
-the built-in `type=harness`, team-harness propagates a validated
-`TEAM_HARNESS_CALLER_CONTEXT` envelope. A nested coordinator gets its direct
-assignment, its own trace root, and the parent harness run id while retaining
-the same outer session/depth/workflow identity. This is lineage and context,
-not a new loop layer or a delegation constraint. Arbitrary workers that launch
-`th` independently are outside this automatic propagation contract.
+추가적인 `capability_roster_context_v1` 기능은 호출자가 동결된 하네스 패밀리/강도 티어 명부의 절대 경로, 다이제스트 및 컴팩트 JSON 요약을 제공할 수 있게 합니다.
 
-The additive `capability_roster_context_v1` capability lets a caller also
-supply the absolute path, digest, and compact JSON summary of its frozen
-harness-family/strength-tier roster. Team-harness renders the supplied summary
-for root and nested coordinators and records the same fields in every direct
-agent assignment. It does not open, derive, or enforce the caller-owned roster:
-the caller remains the source of truth, and coordinators retain judgment over
-which available bundle fits a delegated task.
+**맥락.** loopy-loop와 같은 임베딩 소비자는 영속 세션 트리를 소유하지만, 과거 team-harness는 조율자 `run.json`을 전역 개인 디렉터리에 보관하고 작업자 아티팩트는 호출자 출력 아래에 두어 경로가 분리되는 문제가 있었습니다.
 
-**Context.** Embedding consumers such as loopy-loop own a durable session tree,
-but team-harness previously kept the complete coordinator `run.json` in its
-global private directory while worker artifacts lived under caller output. The
-SDK returned only a run id, forcing consumers to guess internal paths and making
-ordinary success, recovery, usage, and future trace export disagree. The
-coordinator and workers also depended on prompt authors remembering outer-loop
-identity and absolute paths.
+**결과.** 패키지 버전 추측이 아닌 기능 명칭이 호환성 경계가 됩니다. 컨텍스트 인식 실행은 독립적이며 모든 직접 에이전트는 영속 입력과 외부 생태계 내 위치를 갖습니다. 상세 계약: `design/designs/embedded-caller-run-and-spawn-contract.md`.
 
-**Consequences.** Capability names, not package-version guesses or signature
-inspection, are the compatibility boundary. Context-aware runs are
-self-contained and every direct agent has durable authored/effective input plus
-its place in the outer ecosystem. Accountability remains prompt-and-evidence
-based, consistent with TH-D1; no static agent graph, path ACL, model policy, or
-semantic acceptance gate is introduced. Legacy callers keep the old layout and
-the original three required `TeamHarnessResult` fields. In caller-context runs,
-persisted process identity names the worker process-group leader; wait, kill,
-session capture, and orphan reap cover that execution group. Captured artifacts
-are an exact operational record; the caller owns access, retention, and any
-transformation before external export.
-Nested harness lineage is automatic only on the explicit built-in harness spawn
-path, so the implementation does not guess process ancestry. Full contract:
-`design/designs/embedded-caller-run-and-spawn-contract.md`.
+## TH-D8. 조율자 셸 명령어는 명시적인 전체 명령 데드라인을 갖는다
 
-## TH-D8. Coordinator shell commands have explicit whole-command deadlines
+**결정.** 조율자의 `bash` 도구는 기존의 120초 기본값을 유지하면서 선택적인 양의 정수 `timeout_seconds`를 허용합니다. 이 값은 순차적인 모든 자식 작업을 포함한 전체 포그라운드 셸 명령의 데드라인입니다. 임의의 최대값은 없습니다. 모든 명령은 새 프로세스 그룹에서 시작됩니다. 타임아웃, 도구 취소 또는 기타 실행 실패 시 그룹에 SIGTERM을 보내고, 짧은 유예 기간을 대기한 뒤, 그룹 리더가 남아 있으면 SIGKILL을 보내고 셸을 수거합니다. 리더 검사는 재활용된 프로세스 그룹 ID에 시그널이 전달되는 것을 방지합니다.
 
-**Decision.** The coordinator's `bash` tool keeps its historical 120-second
-default and accepts an optional positive integer `timeout_seconds`. That value
-is the deadline for the entire foreground shell command, including all of its
-sequential child work. There is no arbitrary maximum: a caller must be able to
-derive a truthful batch deadline from the work it is invoking. Every command
-starts in a new process group. Timeout, tool cancellation, or another
-post-spawn execution failure sends SIGTERM to the group, waits one named short
-grace period, then sends SIGKILL if the group leader remains and reaps the shell
-before the tool returns or re-raises. The leader check prevents a freed process
-group id from being signalled after the operating system recycles it.
+**맥락.** 기존의 고정 120초 데드라인은 장시간 실행되는 정당한 포그라운드 도구(예: 여러 검사를 순차 실행하는 `eval-banana`)를 조기에 강제 종료시켜 종합 보고서 생성을 방해했습니다. 백그라운드로 돌리고 PID를 추측하는 것은 프로세스 정리와 오류 추적을 약화시킬 뿐이었습니다.
 
-**Context.** The old fixed 120-second deadline was shorter than legitimate
-foreground tools while being invisible to their own timeout settings. For
-example, an `eval-banana` command may run five or eighty-four checks in
-sequence, each with its own judge timeout. Giving each judge 10,800 seconds
-does not extend the outer shell call. The shell used to terminate that batch at
-120 seconds, after partial prompt files but before the aggregate report, so a
-coordinator could neither finish the evaluation nor publish an honest verdict.
-Backgrounding the command and guessing its PID would weaken lifecycle cleanup
-and output/error attribution rather than fix the contract.
+**결과.** 기존 호출은 기본값에서 바이트 단위 호환성을 유지합니다. 장기 배치를 실행하는 조율자는 전체 포그라운드 작업에 충분한 명시적 데드라인을 전달해야 합니다. 상세 계약: `design/designs/coordinator-shell-command-lifecycle.md`.
 
-**Consequences.** Existing calls are byte-compatible at the default, including
-the timeout error text. A coordinator that knowingly invokes a long batch must
-pass a named deadline large enough for the complete foreground operation; the
-tool-call arguments and result already remain in `run.json`. A timeout is an
-interrupted command, not evidence that the command's semantic task failed.
-Because a hard parent-process crash can still outlive in-memory tool cleanup,
-durable registration and recovery of arbitrary shell commands remains a
-separate future concern; this decision does not turn shell commands into
-TH-D2 workers. Full contract:
-`design/designs/coordinator-shell-command-lifecycle.md`.
+## TH-D9. 조율자의 아티팩트 읽기는 경로 기반이며 범위가 제한되고 페이지 조회가 가능하다
 
-## TH-D9. Coordinator artifact reads are path-driven, bounded, and pageable
+**결정.** 호출자 엔벨로프와 프롬프트는 아티팩트 내용이 아니라 절대 아티팩트 경로를 제공합니다. 일반 파일 내용을 반환할 수 있는 두 조율자 도구는 해당 경로 경계에서 크기가 제한됩니다:
+- `read_file`은 디코딩된 문자 기준 최대 32,768자, UTF-8 인코딩 후 최대 32KiB와 짧은 메타데이터를 반환합니다. `offset_chars`와 `limit_chars` 인자를 통해 명시적인 임의 접근 페이지 조회를 지원합니다.
+- `read_new_file_content`는 실행별 추가 커서로부터 동일한 콘텐츠 한도 내에서 반환합니다. 읽지 않은 잔여분을 FIFO 순서로 보존하며 더 읽을 내용이 있으면 동일 경로로 다시 호출할 것을 안내합니다.
 
-**Decision.** Caller envelopes and prompts provide absolute artifact paths, not
-artifact contents. The two coordinator tools that can return general file
-content are bounded at that path boundary:
+소용량 파일 읽기는 래퍼 없이 정확한 내용을 그대로 반환합니다. 소스 파일 전체는 수정되지 않고 온전히 유지됩니다.
 
-- `read_file` returns at most 32,768 decoded characters and 32 KiB after UTF-8
-  encoding, plus short metadata. Its named `offset_chars` and `limit_chars`
-  arguments provide explicit random-access pagination.
-- `read_new_file_content` returns at most the same content limits from its
-  per-run append cursor. It preserves unread backlog in FIFO order and tells
-  the coordinator to call again with the same path when more is available.
+**맥락.** 평가 실행기가 1.9MiB 크기의 보고서를 열었을 때 구버전 도구가 파일 전체를 반환하여 다음 조율자 요청이 모델 컨텍스트 한도를 초과해 실패한 사고가 있었습니다. 파일 도구 자체가 무제한인 상태에서는 경로 전용 프롬프팅만으로 안전을 보장할 수 없었습니다.
 
-Both tools report the range returned by a partial page and never permit a
-content page above either fixed maximum. Small reads still return their exact
-contents without a wrapper. The complete source file remains untouched and
-available for further pages or a coordinator-chosen focused projection such
-as `jq`.
+**결과.** 조율자는 여전히 자율적입니다. 하네스는 의미 필드를 임의 선택하거나 내용을 사전 요약하지 않으며, 단지 각 읽기 작업이 전송 용량 내에 맞도록 보장할 뿐입니다. 상세 계약: `design/designs/bounded-coordinator-file-reading.md`.
 
-**Context.** A loopy-loop eval runner received only the absolute path to a
-1.9 MiB canonical report, then reasonably called `read_file` to inspect it.
-The old tool returned the complete file. Because the report embedded verbose
-judge transcripts, that one result expanded the next coordinator request past
-the model's effective context limit. The five checks had already passed, but
-the coordinator failed before it could publish the receipt and goal-check
-output. Context tracking could not compact between a tool result and its
-required follow-up request, so path-only prompting was not sufficient while
-the file tool itself was unbounded. Review of the repair found that
-`read_new_file_content` had the same risk on its first call: its cursor began at
-zero and it read to EOF. Bounding only `read_file` would therefore have left a
-second core path for the same failure.
+## TH-D10. 작업자의 하드 속도 제한(Rate-limit) 발생 시 실행 범위의 패밀리 서킷을 연다
 
-**Consequences.** The coordinator remains autonomous: the harness does not
-choose semantic fields, summarize evidence, or inject file contents before a
-tool call. It only makes each read fit the transport it must traverse. Agents
-may page sequentially, request a smaller page, grep for a target, or run a
-structured projection. Existing small-read consumers are byte-compatible;
-consumers that expected one call to return more than 32,768 characters or
-32 KiB after UTF-8 encoding must follow `read_file`'s continuation offset or
-call `read_new_file_content` again with the same path. Full contract:
-`design/designs/bounded-coordinator-file-reading.md`.
+**결정.** 작업자가 종료된 후, team-harness는 캡처된 stdout JSONL에서 명시적인 하드 공급자 시그널(HTTP 429를 보고하는 실패 결과, 또는 `rejected` 상태의 `rate_limit_event`)을 스캔합니다. 거부 이벤트는 작업자 CLI가 내부 재시도 후 성공할 수 있으므로 잠정적이며, 프로세스 종료 코드 0은 패밀리 차단을 방지하는 두 번째 가드입니다.
 
-## TH-D10. Hard worker rate limits open a run-scoped family circuit
+활성 상태는 에이전트 템플릿 패밀리(`claude`, `codex`, `gemini` 등)를 키로 사용합니다. 유효 만료 시점까지 동일 패밀리에 대한 `spawn_agent` 호출은 할당, 에이전트 레코드 또는 프로세스를 생성하지 않고 구조화된 거부 응답을 반환합니다.
 
-**Decision.** After a worker finishes, team-harness scans its captured stdout
-JSONL for explicit hard provider signals: a failing terminal result that
-reports HTTP 429, or a `rate_limit_event` whose `status` or `overageStatus` is
-`rejected` and is not followed by a successful terminal result. A rejected
-event is provisional because worker CLIs may retry internally and subsequently
-succeed; process exit zero is a second guard against blocking a family after a
-successful worker. A failed stdout read is retried by the next synchronization
-rather than being treated as a completed scan.
+**맥락.** Claude 계정 7일 제한에 걸렸을 때 프로덕션 조율자가 4턴에 걸쳐 약 9개의 Claude 서브프로세스를 반복 실행하고 잃어버리는 문제가 있었습니다. 이미 몇 시간 뒤로 지정된 리셋 시간이 스트림에 포함되어 있었음에도 반복적인 시작 및 장애 지연 비용을 치렀습니다.
 
-Active state is keyed by the agent-template family (`claude`, `codex`,
-`gemini`, and so on); the effective model remains audit metadata. The family is
-the blocking scope because it is the provider-routing choice the coordinator
-can change. A retrip merges its candidate expiry with the current family expiry
-using the later of the two. It can extend a window, but can never shorten an
-active provider reset to the configurable 15-minute fallback. Until that
-effective expiry, a same-family `spawn_agent` call returns a structured
-rejection without creating an assignment, agent record, or process.
-
-**Context.** A hard seven-day Claude limit caused one production coordinator to
-launch and lose roughly nine Claude subprocesses across four turns. Existing
-API-error guidance could recommend another family after each failure, but no
-run-level mechanism remembered that the provider family was unavailable. Each
-repeat paid subprocess startup and failover latency even though the captured
-stream already contained an authoritative reset time hours away.
-
-**Consequences.** Worker processes remain one-shot under TH-D2, and failed
-workers remain ordinary agent records under TH-D3. The new circuit only
-prevents a later redundant launch. `agent_availability` gives the coordinator a
-separate query without changing the historical `list_agents` array contract.
-Every observed trip is appended to the additive `run.json`
-`rate_limited_families` list and remains there after expiry for audit; active
-in-memory state expires automatically, so the next spawn re-probes. The feature
-is enabled by default and can be disabled to recover the old behavior. A
-programmatic caller can distinguish the unchanged bare `agent_<id>` success
-from the JSON short-circuit via `parse_rate_limited_spawn_result`. Non-429
-failures never open the circuit. Full contract:
-`design/designs/worker-rate-limit-circuit-breaker.md`.
+**결과.** 작업자 프로세스는 TH-D2에 따라 1회성으로 유지되고, 실패한 작업자는 TH-D3에 따라 일반 레코드로 남습니다. 새 서킷은 불필요한 중복 실행만 차단합니다. `agent_availability`는 기존 `list_agents`를 깨뜨리지 않고 조율자에게 별도 조회 도구를 제공합니다. 모든 차단 기록은 감사용으로 `run.json`의 `rate_limited_families`에 추가됩니다. 상세 계약: `design/designs/worker-rate-limit-circuit-breaker.md`.

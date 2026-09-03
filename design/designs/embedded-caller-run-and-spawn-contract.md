@@ -1,299 +1,102 @@
-# Design: Embedded Caller Run Records and Direct-Spawn Assignments
+# 설계: 임베디드 호출자 실행 레코드 및 직접 생성 작업 할당 규약 (Embedded Caller Run Records and Direct-Spawn Assignments)
 
-**Status:** Implemented
-**Date:** 2026-07-15
-**Decision:** `design/decisions.md` TH-D7
-**Primary consumer:** `loopy-loop`, while the API is generic for any embedding
-caller that owns a larger session or workflow state machine.
+**상태:** 구현 완료  
+**작성일:** 2026-07-15  
+**결정:** `design/decisions.md` TH-D7  
+**주요 소비자:** `loopy-loop` (더 큰 세션이나 워크플로 상태 머신을 소유하는 모든 임베딩 호출자를 위한 범용 API).
 
-## The problem
+## 문제 정의 (The problem)
 
-The SDK historically split one run across two private locations. The complete
-coordinator record lived at `~/.team-harness/runs/<run-id>/run.json`, while
-worker logs and `worker_sessions.json` lived at `<output_dir>/<run-id>/`. An
-embedding caller therefore could not identify one self-contained canonical run
-record without knowing team-harness internals. The SDK result exposed only the
-run id, so success and failure paths also required callers to reconstruct paths.
+과거 SDK는 단일 실행의 산출물을 두 개의 비공개 위치로 나누어 저장했습니다. 전체 조율자 레코드는 `~/.team-harness/runs/<run-id>/run.json`에 저장된 반면, 작업자 로그와 `worker_sessions.json`은 `<output_dir>/<run-id>/`에 위치했습니다. 따라서 임베딩 호출자는 team-harness 내부 구조를 알지 못하면 독립적이고 정본인 단일 실행 레코드를 식별할 수 없었습니다. SDK 결과는 실행 ID만 노출했기 때문에, 성공 및 실패 경로 모두에서 호출자가 파일 경로를 직접 재구성해야 했습니다.
 
-The harness coordinator received the user's task, but did not receive typed
-identity from an outer session tree. Its direct `spawn_agent` calls carried only
-a free-form prompt. A coordinator could explain the outer workflow to a worker,
-but nothing guaranteed that every spawn got the parent attempt, session depth,
-absolute assignment path, output location, or an auditable task/role label.
+또한 하네스 조율자는 사용자의 작업을 수신했지만 외부 세션 트리로부터 타입화된 식별자를 전달받지 못했습니다. 조율자의 직접적인 `spawn_agent` 호출은 자유 형식의 프롬프트만 전달했습니다. 조율자가 작업자에게 외부 워크플로를 말로 설명할 수는 있었지만, 모든 작업자 생성이 부모 시도, 세션 깊이, 절대 작업 경로, 출력 위치, 감사 가능한 작업/역할 라벨을 전달받는다는 보장이 없었습니다.
 
-The caller also needed the generated coordinator input, each direct assignment,
-worker stdout/stderr, and provider session identifiers to remain together and
-discoverable after the in-memory coordinator transcript was gone.
+호출자는 메모리 내 조율자 트랜스크립트가 사라진 후에도 생성된 조율자 입력, 각 직접 할당 작업, 작업자 stdout/stderr, 공급자 세션 식별자가 한곳에 모여 있고 탐색 가능하게 유지될 필요가 있었습니다.
 
-## Public capability negotiation
+## 공개 기능 협상 (Public capability negotiation)
 
-`team_harness.caller_contract` exports `get_capabilities()` and
-`TEAM_HARNESS_CAPABILITIES`. Callers negotiate named semantics rather than
-guessing from the installed package version or inspecting constructor
-parameters. Caller-contract version 1 advertises:
+`team_harness.caller_contract`는 `get_capabilities()`와 `TEAM_HARNESS_CAPABILITIES`를 export합니다. 호출자는 설치된 패키지 버전을 추측하거나 생성자 매개변수를 검사하는 대신, 명명된 시맨틱을 협상합니다. 호출자 계약 버전 1이 제공하는 기능들:
 
-- `caller_run_record_v1` — a caller can supply an absolute trace root and gets
-  the canonical `run.json` path on both success and structured failure;
-- `coordinator_input_v1` — generated system/user input is persisted atomically
-  before client construction or model discovery;
-- `spawn_assignment_v1` — every direct spawn receives an automatic assignment
-  envelope and effective prompt footer; and
-- `nested_caller_context_v1` — a built-in `type=harness` descendant receives a
-  validated outer caller-context envelope and parent harness run lineage; and
-- `capability_roster_context_v1` — a caller can attach a frozen capability
-  roster path, digest, and compact JSON summary to root, nested, and direct
-  agent assignment context.
+- `caller_run_record_v1` — 호출자가 절대 추적 루트를 제공할 수 있으며, 성공 및 구조화된 실패 모두에서 정본 `run.json` 경로를 반환받음.
+- `coordinator_input_v1` — 생성된 시스템/사용자 입력이 클라이언트 생성이나 모델 검색 전에 원자적으로 영속화됨.
+- `spawn_assignment_v1` — 모든 직접 생성 작업자가 자동 할당 엔벨로프와 유효 프롬프트 바닥글을 전달받음.
+- `nested_caller_context_v1` — 내장 `type=harness` 자손이 검증된 외부 호출자 컨텍스트 엔벨로프와 부모 하네스 실행 계통을 전달받음.
+- `capability_roster_context_v1` — 호출자가 동결된 기능 명부 경로, 다이제스트, 컴팩트 JSON 요약을 루트, 중첩 및 직접 에이전트 할당 컨텍스트에 첨부할 수 있음.
 
-Names, not the integer contract version, are the compatibility gate. A future
-build may add a capability without changing the meaning of these names.
+정수 버전이 아닌 **기능 명칭**이 호환성 게이트 역할을 합니다.
 
-## Caller context and canonical paths
+## 호출자 컨텍스트 및 정본 경로 (Caller context and canonical paths)
 
-An embedding caller passes the additive SDK argument
-`TeamHarness(caller_context=CallerContext(...))`. `CallerContext` requires:
+임베딩 호출자는 `TeamHarness(caller_context=CallerContext(...))` 인자를 전달합니다. `CallerContext`의 필수 항목:
 
-- an absolute caller-owned `trace_root`;
-- the absolute `parent_assignment_path`;
-- parent attempt, root session, and current session identifiers;
-- the current session depth and workflow role; and
-- optional absolute `relevant_state_paths`.
+- 호출자 소유의 절대 `trace_root`
+- 절대 `parent_assignment_path`
+- 부모 시도, 루트 세션 및 현재 세션 식별자
+- 현재 세션 깊이 및 워크플로 역할
+- 선택적인 절대 `relevant_state_paths`
 
-The caller may also provide `capability_roster_path`,
-`capability_roster_sha256`, and `capability_roster_summary`. The path names the
-canonical caller-owned artifact, the digest pins its frozen identity, and the
-JSON summary makes the actual enabled harness/tier choices visible without
-forcing the coordinator to load the complete artifact. Team-harness renders
-the supplied summary verbatim as structured JSON; it does not read the path or
-invent provider/model mappings.
+호출자는 `capability_roster_path`, `capability_roster_sha256`, `capability_roster_summary`를 추가로 제공할 수 있습니다.
 
-`parent_harness_run_id` is optional. An embedding caller such as loopy-loop
-omits it for the first harness coordinator. Team-harness fills it when it
-derives the context for a nested harness coordinator.
+각 호출에 대해 `TeamHarness.run()`은 `<trace_root>/<run-id>/`를 생성합니다. 이 자식 디렉터리가 정본 실행 및 아티팩트 디렉터리가 됩니다. 여기에는 `run.json`, `coordinator_input.json`, `worker_sessions.json`, `workers/` 로그, `agents/` 할당 엔벨로프가 포함됩니다. 호출자가 논리적 시도를 재시도할 때 파괴적 충돌이 방지됩니다. `TeamHarnessResult`는 `run_json_path`, `session_output_dir`, `coordinator_input_path`를 반환하며, `TeamHarnessError.detail`도 동일한 필드를 반환합니다.
 
-For each invocation, `TeamHarness.run()` creates
-`<trace_root>/<run-id>/`. That run-id child is the canonical run and artifact
-directory. It contains `run.json`, `coordinator_input.json`,
-`worker_sessions.json`, `workers/` logs, and `agents/` assignment envelopes.
-The child avoids destructive collisions when a caller retries a logical
-attempt. `TeamHarnessResult` returns `run_json_path`, `session_output_dir`, and
-`coordinator_input_path`; `TeamHarnessError.detail` returns the same fields.
-Callers must consume those explicit paths rather than reconstruct them.
+## 조율자 입력 및 식별자 (Coordinator input and identity)
 
-Legacy callers that omit `caller_context` keep the existing split layout and
-may continue constructing `TeamHarnessResult` with only `text`, `agents`, and
-`run_id`. The new result fields have empty-string defaults.
+`TeamHarness.run()`은 시스템 및 사용자 메시지를 생성하고, 자동 호출자 컨텍스트 시스템 바닥글을 적용한 뒤, 공급자에 연결하기 전에 `coordinator_input.json`을 원자적으로 기록합니다. 이 파일은 조율자 호출에 사용된 정확한 논리적 메시지를 담고 있습니다.
 
-## Coordinator input and identity
+설정이나 프롬프트 생성이 실패하더라도, 컨텍스트 인식 실행은 정본 경로를 반환하고 `status: "incomplete"` 및 사전 점검 실패 사유가 기록된 `coordinator_input.json`을 남깁니다.
 
-`TeamHarness.run()` now generates its system and user messages, applies the
-automatic caller-context system footer, and atomically writes
-`coordinator_input.json` before `_make_client()` or
-`resolve_model_limit()` can contact a provider. The file contains the exact
-logical messages used for the coordinator call.
+자동 시스템 바닥글이 조율자에게 알려주는 내용:
+- 자신이 소유한 루트/세션/깊이/워크플로 할당 정보
+- 절대 부모 할당 및 관련 상태 경로의 위치
+- 명시적 하네스 실행 ID 및 기록 위치
+- 생성된 에이전트들은 위임자일 뿐이며, 조율자 본인이 통합 및 루프 수준 결정에 대한 책임을 진다는 점
 
-If configuration or prompt generation fails before a complete system envelope
-exists, a context-aware run still returns its canonical paths and writes
-`coordinator_input.json` with `status: "incomplete"`, the user task,
-and the preflight failure. It does not pretend that an ungenerated system input
-was complete. Legacy callers keep their historical exception behavior for
-configuration failures.
+## 동적 직접 생성 작업 할당 (Dynamic direct-spawn assignment)
 
-The automatic system footer tells the coordinator:
+`spawn_agent`는 네 가지 선택적 메타데이터 필드를 받습니다:
+- `delegated_role`
+- `delegated_task_id`
+- `expected_outputs`
+- `state_responsibility`
 
-- which root/session/depth/workflow assignment it owns;
-- where the absolute parent assignment and relevant state paths are;
-- the explicit harness run id and where that run is recorded; and
-- that spawned agents are delegates while the coordinator remains accountable
-  for integration and the loop-layer decision.
+조율자가 이 값들을 동적으로 지정합니다. 하네스는 이를 기록하지만 생성을 승인하거나 모델을 선택하는 등의 용도로는 사용하지 않습니다.
 
-This is context and accountability, not a filesystem permission system.
+서브프로세스를 실행하기 전에 `tools/agent_tools.py`는 `agents/<agent-id>/agent_assignment.json`을 작성합니다. 여기에는 부모 하네스 실행, 외부 시도/세션 정보, 절대 할당 경로, 에이전트 출력 디렉터리, 메타데이터 필드 및 두 가지 프롬프트 형태가 포함됩니다:
+1. `authored_prompt` — 조율자가 직접 작성하여 위임한 원본 프롬프트
+2. `effective_prompt` — 작성된 프롬프트에 설정된 접미사와 자동 바닥글이 결합된 최종 프롬프트
 
-## Dynamic direct-spawn assignment
+## 프롬프트, 출력 및 세션 캡처 (Prompt, output, and session capture)
 
-`spawn_agent` accepts four optional, non-enumerated metadata fields:
+`tracking/persistence.py`는 크래시가 발생해도 파일이 잘리지 않도록 구조화된 JSON을 원자적으로 기록합니다. `agents/spawner.py`는 작업자의 stdout과 stderr를 호출자 소유의 정본 로그 경로에 직접 기록합니다.
 
-- `delegated_role`;
-- `delegated_task_id`;
-- `expected_outputs`; and
-- `state_responsibility`.
+### 공급자 세션 ID 마감 처리
+세션 ID가 공급자의 최종 이벤트에서만 방출되는 경우가 있습니다. 따라서 생성된 작업자 감시자(watcher)와 세션 캡처 코루틴은 즉시 버려지는 태스크가 아니라 실행별 `AgentManager`에 보존됩니다. `harness._finalize_run()`은 먼저 모든 작업자를 종료 상태로 만든 뒤 해당 태스크들을 대기합니다. 감시자 중지 이벤트를 확인하고 최종 스캔을 마친 후에만 `run.json`을 마감하고 `worker_sessions.json`을 작성합니다.
 
-The coordinator chooses their values dynamically. Team-harness records them but
-does not use them to approve a spawn, choose a model, constrain a path, or judge
-the result. Omitting them remains valid for old coordinator prompts, though the
-schema asks new coordinators to provide useful values.
-
-Before launching a subprocess, `tools/agent_tools.py` writes
-`agents/<agent-id>/agent_assignment.json`. It includes the parent harness run,
-outer attempt/session identity when available, absolute parent and per-agent
-assignment paths, the agent output directory, relevant state paths, the four
-dynamic metadata fields, the optional capability-roster path/digest/summary,
-and both prompt forms:
-
-`assignment_path` always names the spawned agent's own envelope, matching the
-same field in `run.json`; `parent_assignment_path` names the enclosing
-assignment that directly delegated this agent. For a top-level harness run
-that is the outer loopy assignment; at deeper harness nesting it is the parent
-coordinator's own agent assignment. The distinct names prevent a nested
-coordinator from confusing its own responsibility with its parent's.
-
-1. `authored_prompt` — exactly what the coordinator delegated; and
-2. `effective_prompt` — the authored prompt plus configured suffixes and the
-   automatic ecosystem/output footers.
-
-The effective footer points the worker to its own absolute assignment and
-output directory, names its parent harness run id, and states that it reports
-to the harness coordinator rather than owning the loop-layer decision.
-`run.json` retains the same authored and effective forms as the
-backward-compatible `prompt` and `full_prompt` fields, plus the assignment path
-and delegation metadata. This makes the run id available to eval workers in
-their operational prompt, not only in an adjacent file they might forget to
-open.
-
-## Prompt, output, and session capture
-
-`tracking/persistence.py` atomically writes structured JSON so a crash cannot
-leave a truncated `run.json`, coordinator input, assignment, or worker-session
-manifest. `agents/spawner.py` writes worker stdout and stderr directly to the
-canonical caller-owned log paths. The run record retains the worker command,
-prompt, status, exit code, and those absolute paths; `worker_sessions.json`
-adds compact tails and provider-session metadata for recovery and inspection.
-Captured artifacts contain the exact operational inputs and outputs. Access
-control, retention, and any transformation before external export belong to
-the caller that owns the trace directory.
-
-### Provider session-id finalization
-
-Session ids are sometimes emitted only in a provider's final event. Spawned
-worker watcher and session-capture coroutines are therefore retained by the
-per-run `AgentManager`, rather than launched as fire-and-forget tasks.
-`harness._finalize_run()` first makes every worker terminal, then awaits those
-tasks. `capture_session_id_from_path()` observes the watcher stop event and
-performs one final prefix/tail scan. Only after that scan does team-harness
-finalize `run.json` and write `worker_sessions.json`. A caller can consequently
-use either final artifact without racing a late provider session id.
-
-A watcher or final session-scan coroutine can itself fail (for example, an OS
-error while waiting on the worker), and a process waiter can remain pending
-after process-table probing fails. `harness._finalize_run()` therefore gives
-workers the configured `shutdown_timeout_s` to exit naturally, followed by the
-named one-second `_WORKER_SIGTERM_GRACE_S` period after SIGTERM. The outer
-shutdown bound is the sum of those two periods, so it cannot race and replace
-the intended SIGTERM grace with immediate SIGKILL. It then gives the retained
-watcher/session-capture tasks the configured `shutdown_timeout_s` through
-`AgentManager.await_finalization_tasks(timeout_s=...)`.
-
-When the shutdown deadline expires or process-group verification fails,
-team-harness sends SIGKILL to any still-unreaped worker group using the
-process-group id created by this live harness. This does not depend on the
-failed process-table probe: the group identity remains trustworthy for the
-lifetime of the harness that created it. Killing the worker releases any
-watcher blocked in `proc.wait()`. The harness then cancels and settles its own
-cancellation-cooperative watcher/capture tasks instead of leaving pending tasks
-for `asyncio.run()` to gather during teardown, and continues to write both
-durable snapshots.
-
-Lifecycle failures are preserved as a terminal finalization error containing
-the exception class and exact exception message. Timeouts additionally name
-the phase, effective bound, and unfinished task count. This is intentionally
-consistent with the caller-owned trace contract, which captures exact prompts,
-commands, and worker output rather than treating trace artifacts as sanitized
-export data. After `run.json` and `worker_sessions.json` exist, the SDK's normal
-error path raises `TeamHarnessError` with their canonical caller-owned paths.
-
-### Addressing a session during the live run
-
-Provider session capture and coordinator visibility have different timing.
-`AgentManager` may already hold a worker's captured Codex thread or Claude
-session while the coordinator is still running, but `worker_sessions.json` is
-intentionally not final until the run finalizer completes. Requiring the live
-coordinator to pass a raw provider id therefore creates an impossible lookup:
-the durable file that publishes the id does not yet exist, and provider ids are
-not the harness agent ids returned by `spawn_agent` and `list_agents`.
-
-For a same-run continuation, the coordinator passes the stable harness id it
-already has:
-
+### 실행 중 세션 재개 (Resume)
+같은 실행 내에서 이전 세션을 이어갈 때, 조율자는 이미 알고 있는 안정적인 하네스 에이전트 ID를 전달합니다:
 ```text
 spawn_agent(
     type="codex",
-    prompt="Apply the three review fixes and re-run validation.",
+    prompt="리뷰 수정 사항 3개를 적용하고 유효성 검사를 다시 실행하십시오.",
     cwd="/absolute/repository/path",
     mode="resume",
     resume_from_agent_id="agent_aed3b8a457d8",
 )
 ```
+`tools/agent_tools.py`는 현재 `AgentManager`를 통해 해당 소스를 리졸브한 뒤 캡처된 벤더 세션 ID만 `agents/spawner.py`에 전달합니다. 소스 프로세스가 종료되었고 작업자 타입이 일치할 때만 리졸브가 성공합니다.
 
-`tools/agent_tools.py` resolves that source through the current
-`AgentManager`, then passes only its captured vendor id to
-`agents/spawner.py`. Resolution succeeds only after the source process is
-terminal, the source and requested worker types match, and session capture has
-produced an id. Unknown, live, cross-type, or not-yet-captured sources return a
-coordinator-visible `ERROR` before an assignment envelope, subprocess, or
-agent record is created. `resume_from_agent_id` and
-`resume_from_session_id` both require `mode="resume"` and are mutually
-exclusive. This avoids silently discarding a supplied session selector while
-launching a fresh worker with a context-dependent continuation prompt.
+## 중첩 하네스 컨텍스트 전파 (Nested harness context propagation)
 
-Raw `resume_from_session_id` remains useful when the coordinator or embedding
-caller already has a provider id from a finalized current or earlier
-`worker_sessions.json`. It is deliberately not removed or inferred from an
-agent id outside the current in-memory run.
+호출자 컨텍스트를 가진 조율자가 `spawn_agent(type="harness", ...)`를 선택하면, `tools/agent_tools.py`는 새로운 `CallerContext`를 도출하여 자식 환경에 `TEAM_HARNESS_CALLER_CONTEXT`로 주입합니다. 자식 `TeamHarness` 생성자는 명시적 SDK 컨텍스트가 없을 때 이를 로드하고 검증합니다.
 
-A resume subprocess can still fail because the provider deleted or rejected a
-once-valid session. That failed process remains in `run.json` like any other
-failed worker (TH-D3). team-harness does not silently retry it fresh: a prompt
-such as "apply the review fixes" may be meaningful only with the old session's
-context. The coordinator may explicitly spawn a fresh worker, but must give it
-a self-contained assignment. This keeps both the semantic choice and the audit
-trail honest.
+중첩 컨텍스트는 부모 시도, 루트/현재 세션, 세션 깊이, 워크플로 역할 등을 유지합니다. 부모 할당을 직접 에이전트 할당으로 변경하고, 중첩 실행 아티팩트를 `<agent-output>/harness_runs/<nested-run-id>/` 아래에 배치하며, 현재 실행을 `parent_harness_run_id`로 기록합니다. 하네스 조율자를 중첩 추가하는 것은 하나의 루프 할당 내부에서의 동적 위임이지, 새로운 loopy-loop 계층을 생성하는 것이 아닙니다.
 
-## Nested harness context propagation
+## 코드 맵 및 검증
 
-When a caller-context coordinator chooses `spawn_agent(type="harness", ...)`,
-`tools/agent_tools.py` derives a new `CallerContext` and writes it to the child
-environment as `TEAM_HARNESS_CALLER_CONTEXT`. The child `TeamHarness`
-constructor loads and validates it when no explicit SDK context was supplied.
-The generated value overrides a free-form `env` value supplied in the tool
-call, so lineage cannot accidentally be spoofed or dropped.
-
-The nested context keeps the same parent attempt, root/current session,
-session depth, workflow role, relevant state paths, and capability-roster
-context. It changes the parent assignment to the direct agent assignment,
-places nested run artifacts under
-`<agent-output>/harness_runs/<nested-run-id>/`, and records the current run as
-`parent_harness_run_id`. Keeping the loop fields unchanged matters: adding a
-harness coordinator is dynamic delegation inside one loop assignment, not the
-creation of a new loopy-loop layer. Its coordinator footer explicitly says the
-parent harness coordinator retains the loop-layer decision and shows the same
-caller-frozen roster summary.
-
-This automatic contract is deliberately limited to the built-in
-`type=harness` spawn path. A generic worker can execute arbitrary programs; the
-harness does not inspect its process tree and guess that it independently
-launched `th`. `agents/spawner.py` removes a stale inherited caller-context
-variable from generic worker environments, because it would describe the
-parent coordinator's assignment rather than that worker's assignment. Such a
-worker still has its direct assignment/footer, but any independent nested
-harness it creates must be given context explicitly.
-
-## Code map and verification
-
-- `caller_contract.py` — public context, capabilities, and coordinator footer.
-- `harness.py` — caller-owned path selection, pre-provider input persistence,
-  structured result/error paths, and context propagation.
-- `tools/agent_tools.py` — dynamic schema fields, assignment envelope, and
-  direct-agent footer.
-- `agents/spawner.py` — worker process-group identity and direct stdout/stderr
-  capture under the caller-owned run directory.
-- `tracking/run_log.py` and `tracking/persistence.py` — atomic structured
-  persistence.
-- `tracking/worker_sessions.py` — persisted summaries, session metadata, and
-  invocation artifacts.
-- `tests/test_caller_contract.py` and `tests/test_process_lifecycle.py` —
-  capability, path, ordering, failure, assignment, prompt, output,
-  session-capture, and process-group coverage.
-
-The contract preserves TH-D1: the coordinator still chooses the team and
-workers still implement. It preserves TH-D2 and TH-D3: workers remain one-shot
-subprocesses, and a normal harness return still means the coordinator loop
-ended cleanly rather than that every worker succeeded.
+- `caller_contract.py`: 공개 컨텍스트, 기능(capabilities) 및 조율자 바닥글.
+- `harness.py`: 호출자 소유 경로 선택, 공급자 호출 전 입력 영속화, 구조화된 결과/에러 경로, 컨텍스트 전파.
+- `tools/agent_tools.py`: 동적 스키마 필드, 할당 엔벨로프, 직접 에이전트 바닥글.
+- `agents/spawner.py`: 작업자 프로세스 그룹 식별자 및 호출자 소유 실행 디렉터리 아래 stdout/stderr 직접 캡처.
+- `tracking/run_log.py` 및 `tracking/persistence.py`: 원자적 구조화 영속성.
+- `tracking/worker_sessions.py`: 영속화된 요약, 세션 메타데이터 및 호출 아티팩트.
+- `tests/test_caller_contract.py` 및 `tests/test_process_lifecycle.py`: 기능, 경로, 순서, 실패, 할당, 프롬프트, 출력, 세션 캡처 및 프로세스 그룹 테스트.

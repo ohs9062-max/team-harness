@@ -1,6 +1,6 @@
 # Team Harness
 
-Coordination layer for other harnesses (Codex, Gemini, Claude Code, Grok Build, Antigravity, OpenCode, pi, OpenHands).
+다른 코딩 하네스(Codex, Gemini, Claude Code, Grok Build, Antigravity, OpenCode, pi, OpenHands)를 위한 조율(Coordination) 계층.
 
 <br>
 
@@ -8,111 +8,106 @@ Coordination layer for other harnesses (Codex, Gemini, Claude Code, Grok Build, 
   <img src=".github/assets/images/logo.png" alt="team-harness logo" width="400">
 </p>
 
-## What does it do?
+## 어떤 일을 하나요? (What does it do?)
 
-You can run prompts like this one:
+다음과 같은 프롬프트를 실행할 수 있습니다:
 
+```text
+MVP 달성을 위해 아직 누락된 주요 구성 요소가 무엇인지 알려줘.
+
+이를 위해 에이전트 팀을 구성해줘.
+
+다음 작업을 담당할 에이전트 팀을 만들어:
+- CODEX, CLAUDE, GEMINI를 사용하여 분석 수행
+    - 분석을 최대한 철저히 수행하고 그 결과를 전용 디렉터리 내의 새 파일에 출력할 것
+- 최종 보고서 작성
+    - 이전 에이전트들의 모든 분석을 읽고, 최종 결과와 의견을 SUMMARY.md에 정리할 것
 ```
-Tell me what are the main pieces that are still missing for achieving the MVP.
 
-You will make an agentic team to achieve it.
+Team Harness는 Codex, Claude Code, Gemini CLI 간의 협업을 조율합니다.
 
-Create an agent team to do it. They should be responsible for:
-- coming up with the analysis using CODEX, CLAUDE and GEMINI
-    - perform the analysis as best as you can and output your findings into a new file inside the dedicated directory
-- creating the final report
-    - read all the analyses from the previous agents, and write down the final version of the findings and opinions into a SUMMARY.md
-```
+Claude Code의 에이전트 팀 기능으로도 유사한 결과를 얻을 수 있습니다.
+하지만 Team Harness를 사용하면 **원하는 어떤 모델이든 연결**할 수 있으며, 기본 시스템 프롬프트도 훨씬 쉽게 미세 조정할 수 있습니다.
 
-Team Harness will coordinate the work between Codex, Claude Code and Gemini CLI.
-
-You could achieve a similar result if you used Claude Code's agent teams functionality.
-However, Team Harness gives you the ability to plug in any model + you can tweak the underlying system prompts much more easily.
-
-## Installation
+## 설치 (Installation)
 
 ```bash
 pip install team-harness
-# or
+# 또는
 uv tool install team-harness
 ```
 
-To upgrade to the latest version:
+최신 버전으로 업그레이드:
 
 ```bash
 pip install --upgrade team-harness
-# or
+# 또는
 uv tool install --upgrade team-harness
 ```
 
-## Prerequisites
+## 사전 준비 사항 (Prerequisites)
 
-Worker CLIs must be installed and authenticated separately. You do not need all of them; restrict a run with `--agents codex,gemini` to use only the ones you have.
-Install with `pip install openhands` (the PyPI distribution name is `openhands`, provided by the OpenHands-CLI repo).
+작업자(Worker) CLI는 별도로 설치하고 인증해야 합니다. 모든 작업자를 설치할 필요는 없으며, 보유하고 있는 작업자만 사용하도록 `--agents codex,gemini` 옵션으로 실행을 제한할 수 있습니다.
+OpenHands는 `pip install openhands`로 설치합니다(PyPI 배포 패키지 이름은 OpenHands-CLI 저장소에서 제공하는 `openhands`임).
 
-| Worker    | Install docs                                                |
-|-----------|-------------------------------------------------------------|
-| `codex`   | [Codex CLI](https://github.com/openai/codex)               |
-| `gemini`  | [Gemini CLI](https://github.com/google-gemini/gemini-cli)  |
-| `claude`  | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) |
-| `grok`    | [Grok Build CLI](https://docs.x.ai/build/cli/headless-scripting) (`XAI_API_KEY` or `grok login`) |
+| 작업자 | 설치 안내 문서 |
+|---|---|
+| `codex` | [Codex CLI](https://github.com/openai/codex) |
+| `gemini` | [Gemini CLI](https://github.com/google-gemini/gemini-cli) |
+| `claude` | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) |
+| `grok` | [Grok Build CLI](https://docs.x.ai/build/cli/headless-scripting) (`XAI_API_KEY` 또는 `grok login`) |
 | `antigravity` | [Antigravity CLI](https://antigravity.google/docs/cli-overview) |
 | `openhands` | [OpenHands CLI](https://github.com/OpenHands/OpenHands-CLI) |
-| `opencode`| [opencode](https://github.com/opencode-ai/opencode)        |
-| `pi`      | [pi](https://github.com/badlogic/pi-mono)                  |
+| `opencode` | [opencode](https://github.com/opencode-ai/opencode) |
+| `pi` | [pi](https://github.com/badlogic/pi-mono) |
 
-## Quick start
+## 빠른 시작 (Quick start)
 
 ```bash
-# run from your project root
-cd <your project>
+# 프로젝트 루트 디렉토리에서 실행
+cd <대상 프로젝트 디렉토리>
 
-# Create a project-local config in ./.team-harness/
-# Creates config.toml, coordinator_system_message.md, worker_suffix.md, and worker_footer.md
+# ./.team-harness/ 디렉터리에 프로젝트 로컬 설정 생성
+# config.toml, coordinator_system_message.md, worker_suffix.md, worker_footer.md 생성
 th init
 ```
 
-### If you are authenticated to codex
+### Codex 로그인이 되어 있는 경우
 ```bash
 TEAM_HARNESS_PROVIDER=codex th repl
 ```
+또는 `<your project>/.team-harness/config.toml` 파일에서 `provider = "codex"` 설정
 
-or
-
-in `<your project>/.team-harness/config.toml` set `provider = "codex"`
-
-### Alternatively with API keys
+### API 키를 사용할 경우
 ```bash
 OPENROUTER_API_KEY="sk-or-..." th repl
 ```
-
-or 
-
+또는
 ```bash
-OPENAI_API_KEY="sk-or-..." TEAM_HARNESS_API_BASE="https://openai.com/api/v1" th repl
+OPENAI_API_KEY="sk-..." TEAM_HARNESS_API_BASE="https://openai.com/api/v1" th repl
 ```
 
-### Headless
+### 비대화형 실행 (Headless)
 
 ```bash
-# Single-shot run
+# 단일 명령어 실행
 th run "Write unit tests for src/utils.py using pytest"
 
-# From a file
+# 파일에서 프롬프트 읽기
 th run -f task.txt
 ```
 
-### Viewing Logs
+### 로그 확인 (Viewing Logs)
 
 ```bash
-# View run logs
+# 실행 로그 보기
 th logs
 th logs <run-id>
 ```
 
 ## Python SDK
 
-Use team-harness programmatically from Python:
+파이썬 코드에서 프로그래밍 방식으로 team-harness를 사용할 수 있습니다:
 
 ```python
 import asyncio
@@ -124,8 +119,8 @@ async def main():
         api_key="sk-or-...",
         model="anthropic/claude-sonnet-4",
         agents=["codex", "gemini"],
-        # Optional embedding contract: keeps the complete run beneath a
-        # caller-owned root and supplies outer-session identity to agents.
+        # 선택적 임베딩 계약: 전체 실행을 호출자 소유의 루트 아래에 유지하고
+        # 에이전트에게 외부 세션 식별자를 제공합니다.
         caller_context=CallerContext(
             trace_root=Path("/abs/session/traces/attempt-42"),
             parent_assignment_path=Path("/abs/session/attempt-42/assignment.json"),
@@ -146,23 +141,23 @@ async def main():
 asyncio.run(main())
 ```
 
-All CLI options are available as constructor parameters:
+모든 CLI 옵션은 생성자 매개변수로 지원됩니다:
 
 ```python
 harness = TeamHarness(
-    provider="codex",           # or "openai_compat" (default)
+    provider="codex",           # 또는 "openai_compat" (기본값)
     model="codex-mini-latest",
     api_base="https://openrouter.ai/api/v1",
     api_key="sk-or-...",
     codex_auth_path="~/.codex/auth.json",
-    agents=["codex", "gemini"], # or "codex,gemini"
+    agents=["codex", "gemini"], # 또는 "codex,gemini"
     max_retries=5,
     retry_base_delay_s=1.0,
     retry_max_delay_s=30.0,
     max_depth=3,
     rate_limit_circuit_breaker=True,
     rate_limit_default_cooldown_s=900,
-    system_prompt="Extra instructions",
+    system_prompt="추가 지침",
     system_prompt_file="prompt.txt",
     agent_models={"codex": "gpt-5.5"},
     agent_reasoning_efforts={"codex": "high"},
@@ -172,34 +167,22 @@ harness = TeamHarness(
 )
 ```
 
-`agent_models` and `agent_reasoning_efforts` override the resolved worker
-template defaults for the named agent types. They do not change the
-coordinator model used by `model=...`, and a per-spawn `model` argument still
-wins for that one worker.
+`agent_models` 및 `agent_reasoning_efforts`는 지정된 에이전트 유형의 템플릿 기본값을 오버라이드합니다. `model=...`로 지정된 조율자 모델은 변경되지 않으며, 생성 시 전달된 `model` 인자가 해당 작업자에 대해 여전히 최우선합니다.
 
-`output_dir` overrides `[coordinator].output_dir` for SDK runs. Each run still
-creates a child directory named by the team-harness run id.
+`output_dir`은 SDK 실행을 위한 `[coordinator].output_dir`을 오버라이드합니다. 각 실행은 여전히 team-harness 실행 ID로 이름 지어진 하위 디렉터리를 생성합니다.
 
-The `run()` method returns a `TeamHarnessResult` with:
+`run()` 메서드는 다음 정보를 담은 `TeamHarnessResult`를 반환합니다:
 
-- `text` -- final assistant response
-- `agents` -- list of `AgentSummary` (id, agent_type, status, exit_code, cwd)
-- `run_id` -- unique run identifier
-- `run_json_path` -- explicit canonical coordinator run record
-- `session_output_dir` -- worker/session artifact directory
-- `coordinator_input_path` -- generated system/user input captured before the
-  first provider operation
+- `text` -- 최종 어시스턴트 응답
+- `agents` -- `AgentSummary` 목록 (id, agent_type, status, exit_code, cwd)
+- `run_id` -- 고유 실행 식별자
+- `run_json_path` -- 명시적인 정본 조율자 실행 레코드 경로
+- `session_output_dir` -- 작업자/세션 아티팩트 디렉터리
+- `coordinator_input_path` -- 첫 공급자 호출 전에 캡처된 생성 시스템/사용자 입력 경로
 
-Errors raise `TeamHarnessError`. Structured failures expose the same three paths
-in `error.detail`. Embedding callers can inspect `get_capabilities()` for the
-named caller contract before selecting it. Run logs are always finalized, even
-on failure. For caller-context runs, generated coordinator input, direct-agent
-assignments, and worker stdout/stderr stay under the returned run directory.
+오류 발생 시 `TeamHarnessError`가 발생합니다. 구조화된 실패 시 `error.detail`에 동일한 세 경로가 노출됩니다. 임베딩 호출자는 호출자 계약을 선택하기 전에 `get_capabilities()`를 검사할 수 있습니다. 실행 로그는 실패하더라도 항상 정상 마감됩니다.
 
-Capability names, rather than the package version, are the compatibility
-boundary. Caller-contract v1 advertises `caller_run_record_v1`,
-`coordinator_input_v1`, `spawn_assignment_v1`, and
-`nested_caller_context_v1`:
+기능 명칭이 패키지 버전 대신 호환성 경계가 됩니다. 호출자 계약 v1은 `caller_run_record_v1`, `coordinator_input_v1`, `spawn_assignment_v1`, `nested_caller_context_v1`을 제공합니다:
 
 ```python
 from team_harness import get_capabilities
@@ -212,35 +195,30 @@ required = {
 }
 capabilities = get_capabilities()
 if not capabilities.supports(*required):
-    raise RuntimeError("installed team-harness lacks the required caller contract")
+    raise RuntimeError("설치된 team-harness에 필요한 호출자 계약이 누락되었습니다")
 ```
 
-`nested_caller_context_v1` applies specifically when a coordinator dynamically
-chooses the built-in `type="harness"`. That child coordinator retains the same
-outer loop session, depth, attempt, role, and absolute relevant-state paths; it
-receives its own direct assignment and harness artifact subtree and records the
-parent harness run id. It is delegation inside the current loop assignment,
-not a newly created loop layer.
+`nested_caller_context_v1`은 조율자가 내장 `type="harness"`를 동적으로 선택할 때 적용됩니다. 해당 자식 조율자는 외부 루프 세션, 깊이, 시도, 역할 및 관련 상태 경로를 유지하며, 자체 직접 할당 및 하네스 아티팩트 서브트리를 받고 부모 하네스 실행 ID를 기록합니다.
 
-## Configuration
+## 설정 (Configuration)
 
-th works out of the box with built-in defaults. To create a config file explicitly:
+`th`는 내장 기본값만으로도 바로 동작합니다. 명시적인 설정 파일을 생성하려면:
 
 ```bash
-# Create project-local config for the current repo
+# 현재 저장소를 위한 프로젝트 로컬 설정 생성
 th init
 
-# Create global config under ~/.team-harness/config.toml
+# ~/.team-harness/config.toml 아래에 전역 설정 생성
 th init --global
 
-# Overwrite an existing config file
+# 기존 설정 파일 덮어쓰기
 th init --force
 th init --global --force
 ```
 
-Global config is intended for user-wide defaults. Project config is intended for repo-specific settings and should not contain secrets; keep API keys in environment variables.
+전역 설정은 사용자 전역 기본값을 위한 것입니다. 프로젝트 설정은 저장소 전용 설정을 위한 것이며 보안 비밀을 포함해서는 안 됩니다. API 키는 환경 변수에 보관하십시오.
 
-Example global config:
+전역 설정 예시:
 
 ```toml
 [coordinator]
@@ -253,15 +231,14 @@ worker_footer_file = "worker_footer.md"
 system_prompt = ""
 output_dir = "_outputs"
 
-# Worker agents are described as structured commands: a base `command`
-# list, `shared_flags` that are always applied, and `resume_flags` that
-# are applied only when resuming a previous session. A `session_capture`
-# sub-table describes how the harness extracts the provider's session id
-# from the worker's stream-json output so the run can be resumed later.
+# 작업자 에이전트는 구조화된 명령어로 정의됩니다: 기본 `command` 리스트,
+# 항상 적용되는 `shared_flags`, 이전 세션을 재개할 때만 적용되는 `resume_flags`.
+# `session_capture` 하위 테이블은 하네스가 작업자의 stream-json 출력에서 공급자의
+# 세션 ID를 추출하여 나중에 재개할 수 있도록 하는 방법을 정의합니다.
 #
-# Any field you omit is inherited from the built-in default for that
-# agent type, so it is fine to override only the piece you care about.
-# Run `th init --force` to regenerate a complete, commented sample.
+# 생략된 모든 필드는 해당 에이전트 유형의 내장 기본값에서 상속되므로,
+# 관심 있는 부분만 오버라이드하면 됩니다.
+# 주석이 포함된 완전한 샘플을 다시 생성하려면 `th init --force`를 실행하십시오.
 
 [agents.codex]
 command = ["codex", "exec"]
@@ -280,7 +257,7 @@ deduplicate_flags = [
     "--json",
 ]
 reasoning_effort_flag = ["-c", "model_reasoning_effort={effort}"]
-# reasoning_effort = "high"   # uncomment to pin a level
+# reasoning_effort = "high"   # 레벨을 고정하려면 주석 해제
 
 [agents.codex.session_capture]
 strategy = "stream_json_event"
@@ -320,11 +297,10 @@ deduplicate_flags = [
     "--verbose",
 ]
 reasoning_effort_flag = ["--effort", "{effort}"]
-# default_model = "claude-sonnet-4-6"   # uncomment to pin a default
-# reasoning_effort = "high"               # values: low|medium|high|max
+# default_model = "claude-sonnet-4-6"   # 기본값을 고정하려면 주석 해제
+# reasoning_effort = "high"             # 값: low|medium|high|max
 
-# Uncomment the provider_env block to route claude through OpenRouter.
-# See "Connecting workers to OpenRouter" below for the full recipe.
+# claude를 OpenRouter로 라우팅하려면 provider_env 블록 주석 해제.
 # [agents.claude.provider_env]
 # ANTHROPIC_BASE_URL = "https://openrouter.ai/api"
 # ANTHROPIC_AUTH_TOKEN = "{env:OPENROUTER_API_KEY}"
@@ -385,77 +361,44 @@ command = ["th", "run"]
 model_flag = "--model"
 ```
 
-OpenHands runs are not auto-resumable from team-harness today. The `--json` output format is not parseable as stream-json.
+OpenHands는 현재 team-harness에서 자동 재개를 지원하지 않습니다. `--json` 출력 형식이 stream-json으로 파싱되지 않기 때문입니다.
+`--override-with-envs`는 `LLM_MODEL` 주입을 위해 필요하지만, 셸의 `LLM_MODEL`, `LLM_API_KEY`, `LLM_BASE_URL`도 가져오므로 결정론적 동작을 위해 필요한 경우 unset하십시오.
 
-`--override-with-envs` is required so `LLM_MODEL` injection works. A side-effect is that any `LLM_MODEL`, `LLM_API_KEY`, or `LLM_BASE_URL` already set in your shell will also be picked up by the worker. Unset or override them if you want deterministic per-run behavior.
+Grok Build(`grok`)는 `--always-approve`, `--output-format streaming-json`, `--no-auto-update`로 비대화형 실행됩니다. 세션 ID는 최종 NDJSON `end` 이벤트(`sessionId`)에서 캡처되며 `--resume <id>`로 재개합니다.
 
-Grok Build (`grok`) runs headless with `--always-approve`, `--output-format streaming-json`, and `--no-auto-update`. Session ids are captured from the final NDJSON `end` event (`sessionId`) and resume uses `--resume <id>`. Auth is external: set `XAI_API_KEY` or run `grok login`. Set `GROK_HOME` when CI needs an isolated Grok home; `GROK_DISABLE_AUTOUPDATER=1` is an optional environment-policy fallback to `--no-auto-update` and is not injected by the built-in template. Do not put `--session-id` in `shared_flags` — combining it with `--resume` forks rather than resumes. A crash before the `end` event may leave no captured session id. Unattended tool approval is intentional for harness workers.
+Antigravity는 `agy --print`를 사용하여 비대화형 서브프로세스로 실행됩니다. 대화 ID를 이미 알고 있는 호출자는 `--conversation <id>`를 통해 재개 모드를 사용할 수 있습니다.
 
-Antigravity runs use `agy --print` so the worker can run as a non-interactive subprocess. Automatic session capture is not configured because print mode does not emit stream-json; callers that already know a conversation id can still use resume mode, which renders `--conversation <id>`.
+### 프롬프트 설정
 
-Custom `[agents.openhands]` or `[agents.grok]` sections in existing `.team-harness/config.toml` files will, after upgrade, inherit the new built-in defaults for any fields they do not explicitly set (including `shared_flags`). If your custom section was a standalone agent that coincidentally used the name `openhands` or `grok`, rename it or explicitly clear inherited fields (e.g. `shared_flags = []`, `prompt_flag = false`, `model_env_vars = []`).
+`th init`은 대상 `.team-harness/` 디렉터리에 4개의 파일을 생성합니다:
 
-### Prompt configuration
+| 파일 | 용도 |
+|---|---|
+| `config.toml` | 모든 조율자 및 에이전트 설정 |
+| `coordinator_system_message.md` | 편집 가능한 조율자 기본 시스템 프롬프트 |
+| `worker_suffix.md` | 생성되는 모든 작업자 프롬프트에 자동 추가되는 텍스트 |
+| `worker_footer.md` | 기본 작업자 출력 요구사항 템플릿 |
 
-`th init` creates four files in the target `.team-harness/` directory:
+프롬프트 관련 설정 키:
 
-| File                | Purpose                                                                     |
-|---------------------|-----------------------------------------------------------------------------|
-| `config.toml`            | All coordinator and agent settings                                          |
-| `coordinator_system_message.md`  | Editable coordinator base prompt (seeded from the built-in default)         |
-| `worker_suffix.md`       | Text automatically appended to every spawned worker prompt (empty by default)|
-| `worker_footer.md`       | Default worker output requirements template, editable per project           |
+| 키 | 용도 |
+|---|---|
+| `coordinator_system_message_file` | 조율자 기본 프롬프트 파일 경로 |
+| `worker_suffix_file` | 모든 작업자 프롬프트에 추가되는 접미사 파일 경로 |
+| `worker_footer_file` | 접미사 뒤에 추가되는 작업자 바닥글 템플릿 경로 |
+| `system_prompt` | 조율자 기본 프롬프트 뒤에 인라인으로 추가되는 확장 텍스트 |
 
-Prompt-related config keys:
+프롬프트 파일은 UTF-8로 읽히며 최대 100KB로 제한됩니다.
 
-| Key                       | Purpose                                                                    |
-|---------------------------|----------------------------------------------------------------------------|
-| `coordinator_system_message_file` | Path to the coordinator base prompt file                                   |
-| `worker_suffix_file`      | Path to text appended to every spawned worker prompt                       |
-| `worker_footer_file`      | Path to the worker footer template appended after the suffix               |
-| `system_prompt`           | Inline extension text appended after the coordinator base prompt           |
+### 프로젝트 수준 설정
 
-**`coordinator_system_message_file`** — Points to the coordinator base prompt file. If the file is missing, a warning is emitted and the built-in default is used. If no key is configured, the built-in default is used silently.
+`th init`은 `./.team-harness/config.toml`, `coordinator_system_message.md`, `worker_suffix.md`, `worker_footer.md`를 생성합니다. 로컬 설정 탐색은 `--cwd`에서 상위로 올라가며 가장 가까운 조상 설정이 전역 설정을 오버라이드합니다.
 
-**`worker_suffix_file`** — Points to a file whose contents are appended to every spawned worker prompt. The coordinator is told that this suffix exists so it does not duplicate those instructions. If the file is missing or empty, no suffix is appended.
+목록(List) 설정은 덧붙이지 않고 대체합니다.
 
-**`worker_footer_file`** — Points to a file whose contents define the footer appended to every spawned worker prompt. The footer should usually keep the `{session_output_dir}` placeholder so workers are told where to write artifacts. If the file is missing or empty, the built-in footer is used.
+`[coordinator].output_dir`은 실행별 조율자 및 작업자 아티팩트가 기록되는 위치를 제어합니다. 각 실행은 `<output_dir>/<run_id>/`를 생성합니다.
 
-**`system_prompt`** — Inline text appended as an extension after the base prompt. This is separate from `coordinator_system_message_file` and is additive.
-
-**CLI `--system-prompt-file`** — Reads extra text from a file and appends it as a runtime extension. This is an extension source (like `system_prompt`), not a base prompt replacement. CLI paths resolve relative to the current working directory.
-
-Prompt file paths in `config.toml` resolve relative to the directory containing the config file that defined them. Absolute paths are used as-is.
-
-Prompt files are read with UTF-8 encoding and are limited to 100 KB. Files that exceed this limit, are not valid UTF-8, or are unreadable produce a clear error message.
-
-Experimental Codex config:
-
-```toml
-[coordinator]
-provider = "codex"
-model = "codex-mini-latest"
-# optional override for custom proxies or tests
-# api_base = "https://chatgpt.com/backend-api"
-# optional explicit auth location
-# codex_auth_path = "~/.codex/auth.json"
-```
-
-### Project-level configuration
-
-`th init` writes `./.team-harness/config.toml`, `coordinator_system_message.md`, `worker_suffix.md`, and `worker_footer.md`. Local config discovery walks upward from the effective `--cwd` and the nearest ancestor config overrides the global file.
-
-Lists replace rather than extend. For example, setting `[coordinator].allowed_agents` in a local config replaces the global list instead of appending to it.
-
-`[coordinator].output_dir` controls where per-run coordinator and worker
-artifacts are written. Each run creates `<output_dir>/<run_id>/`, and the
-coordinator may instruct workers to place notes, reports, logs, or other
-deliverables there. The harness also writes a compact
-`worker_sessions.json` manifest in that directory summarizing every spawned
-worker for the run. Relative `output_dir` values resolve against the effective
-`--cwd`.
-
-Coordinator retry behavior is controlled by three `[coordinator]` keys:
+조율자 재시도 동작 제어 키:
 
 ```toml
 max_retries = 5
@@ -463,249 +406,83 @@ retry_base_delay_s = 1.0
 retry_max_delay_s = 30.0
 ```
 
-Retry records for transient coordinator API/network failures are written to
-`run.json` under `coordinator_retries`, and the terminal run-level failure is
-written under `failure`.
-
-Hard rate limits reported by worker JSONL streams use a run-scoped family
-circuit by default:
+작업자의 하드 속도 제한(Rate-limit) 처리:
 
 ```toml
 rate_limit_circuit_breaker = true
 rate_limit_default_cooldown_s = 900
 ```
 
-When a worker finishes with a failing terminal 429, or with a rejected
-rate-limit event that is not followed by terminal success, later spawns for the
-same agent-template family short-circuit until the provider's reset time (or
-the fallback cooldown when no reset is present). Retrips can extend but never
-shorten an active reset. `agent_availability` shows which families remain
-usable, and `run.json` records the trip under `rate_limited_families`. Set the
-boolean to `false` to retain the previous spawn behavior. Programmatic tool
-callers can use `team_harness.parse_rate_limited_spawn_result` to distinguish
-the JSON short-circuit from the unchanged bare `agent_<id>` success result.
+작업자가 실패한 429 또는 거부된 속도 제한 이벤트로 종료되면, 동일한 에이전트 템플릿 패밀리의 후속 생성은 공급자 리셋 시점까지 단락(차단)됩니다.
 
-`th init --force` overwrites `config.toml` but preserves existing `coordinator_system_message.md`, `worker_suffix.md`, and `worker_footer.md` files to protect user customizations. Missing sidecar files are re-created.
+### 설정 우선순위
 
-Project-level `.team-harness/config.toml`, `.team-harness/coordinator_system_message.md`, `.team-harness/worker_suffix.md`, and `.team-harness/worker_footer.md` should normally be committed to version control so prompt behavior is reproducible across contributors and CI.
+1. CLI 플래그
+2. 환경 변수
+3. 로컬 `.team-harness/config.toml`
+4. 전역 `~/.team-harness/config.toml`
+5. 내장 기본값
 
-### Configuration resolution order
-
-1. CLI flags
-2. Environment variables
-3. Local `.team-harness/config.toml`
-4. Global `~/.team-harness/config.toml`
-5. Built-in defaults
-
-Relevant environment variables:
-
+관련 환경 변수:
 - `TEAM_HARNESS_PROVIDER`
 - `TEAM_HARNESS_MODEL`
 - `TEAM_HARNESS_API_BASE`
 - `TEAM_HARNESS_CODEX_AUTH_PATH`
-- `OPENROUTER_API_KEY` or `OPENAI_API_KEY`
+- `OPENROUTER_API_KEY` 또는 `OPENAI_API_KEY`
 
-### Adding custom agent types
+### 커스텀 에이전트 유형 추가
 
-Add a new `[agents.<name>]` section with a structured command. The only
-required field is `command`; everything else has sensible defaults.
+구조화된 명령어로 `[agents.<이름>]` 섹션을 추가하십시오. 유일한 필수 필드는 `command`입니다.
 
 ```toml
 [agents.myagent]
 command = ["my-custom-cli"]
 shared_flags = ["--mode", "auto"]
-model_flag = "--model"   # set to `false` if the CLI has no model flag
+model_flag = "--model"   # CLI에 모델 플래그가 없으면 `false`로 설정
 ```
 
-Some CLIs use env-based model injection instead of a `--model` flag. OpenHands is the built-in example:
+새로운 유형은 조율자의 `spawn_agent` 도구에 자동으로 표시됩니다.
 
-```toml
-[agents.openhands]
-command = ["openhands"]
-shared_flags = ["--headless", "--json", "--override-with-envs"]
-model_flag = false
-model_env_vars = ["LLM_MODEL"]
-```
+`shared_flags`, `resume_prefix`, `resume_flags` 내부 플레이스홀더:
+- `{session_id}` — 재개 세션 ID로 치환됨 (재개 모드 전용).
+- `{generated_uuid}` — 생성 시 하네스가 생성한 UUID로 치환됨 (`claude`의 `--session-id <uuid>` 형태에 유용).
 
-The new type appears automatically in the coordinator's `spawn_agent` tool.
-The task prompt is appended at the tail of the argv list by default; set
-`prompt_position = "after_command"` if your CLI wants the prompt earlier,
-or `prompt_flag = "-p"` if the prompt is introduced by a flag (like `gemini -p`).
-Use `deduplicate_flags` only for standalone flags that are idempotent if a
-coordinator repeats them through `spawn_agent(flags=[...])`; the built-in Codex
-template uses this for its standalone shared flags such as
-`--dangerously-bypass-approvals-and-sandbox`, and the built-in Claude template
-uses it for `-p`, `--dangerously-skip-permissions`, and `--verbose`.
-The built-in Antigravity template uses it for `--dangerously-skip-permissions`
-and `--print`.
+### 기본 모델 설정
 
-Placeholders that can appear inside `shared_flags`, `resume_prefix`, or
-`resume_flags`:
+- **`default_model`** — 조율자가 명시적인 `model=...`을 전달하지 않았을 때 사용되는 모델.
+- **`model_flag`** — argv에 모델을 주입하는 CLI 플래그 이름 (예: `"--model"`).
 
-- `{session_id}` — substituted with the resume session id (resume mode only).
-- `{generated_uuid}` — substituted with a harness-generated UUID at spawn
-  time. Useful for CLIs like `claude` that accept `--session-id <uuid>` up
-  front so the harness can record the id deterministically.
+우선순위:
+1. 조율자의 명시적 `spawn_agent(model="…")` (최우선)
+2. `[agents.<이름>].default_model`
+3. 작업자 CLI 자체의 내부 기본값 (폴백)
 
-Session ids can be captured from a worker's stream-json output via a
-`[agents.<name>.session_capture]` sub-table with `strategy`, `match`, and
-`field_path` (see the codex/gemini/claude examples above).
+### 추론 노력 (Reasoning effort)
 
-### Setting a default model
+추론 노력 조절을 지원하는 작업자 CLI 설정:
 
-Two config keys control the model a worker runs with:
+- **`reasoning_effort`** — 설정할 값 (예: `"high"`).
+- **`reasoning_effort_flag`** — `{effort}` 플레이스홀더를 포함한 argv 토큰 형태.
 
-- **`default_model`** — the model used when the coordinator does not pass
-  an explicit `model=...` in its `spawn_agent` tool call. Absent = no
-  default; worker CLI uses its own internal default.
-- **`model_flag`** — the CLI flag name used to inject the model into the
-  argv, e.g. `"--model"`.
-
-Precedence:
-
-| Source | Priority |
-|---|---|
-| Explicit `spawn_agent(model="…")` from the coordinator | 1 (highest) |
-| `[agents.<name>].default_model` | 2 |
-| Worker CLI's own internal default | 3 (fallback) |
-
-Note: `[coordinator].model` controls the **coordinator's own** model (the
-one used to talk to OpenRouter / Codex). It does NOT flow through to
-workers. Per-agent defaults come from `[agents.<name>].default_model`.
-
-#### Codex example
-
-```toml
-[agents.codex]
-command = ["codex", "exec"]
-default_model = "gpt-5.5"    # every codex spawn gets --model gpt-5.5
-```
-
-Clear a default on a specific agent with `default_model = false` (or an
-empty string). This is useful if the built-in default is wrong for your
-setup.
-
-#### Claude example — env-var model injection
-
-Claude Code does not rely solely on `--model`. Several internal code
-paths (`getBestModel`, the Max-subscriber branch of `getDefaultMainLoopModel`)
-bypass `ANTHROPIC_MODEL` and read `ANTHROPIC_DEFAULT_OPUS_MODEL` or
-`ANTHROPIC_DEFAULT_SONNET_MODEL` directly. Setting just `ANTHROPIC_MODEL`
-is not enough for a deterministic override.
-
-Templates can declare `model_env_vars` — a list of env var names that the
-spawner will set to the effective model on every spawn:
-
-```toml
-[agents.claude]
-command = ["claude"]
-shared_flags = [
-    "-p",
-    "--dangerously-skip-permissions",
-    "--output-format", "stream-json",
-    "--verbose",
-]
-model_flag = "--model"
-model_env_vars = [
-    "ANTHROPIC_MODEL",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL",
-]
-default_model = "claude-sonnet-4-6"   # optional; leave unset to let the
-                                      # coordinator decide per spawn
-```
-
-The built-in `claude` default intentionally lists **only** those three
-env vars and does **not** touch `ANTHROPIC_DEFAULT_HAIKU_MODEL`,
-`ANTHROPIC_SMALL_FAST_MODEL`, or `CLAUDE_CODE_SUBAGENT_MODEL` — cheap
-auxiliary helpers keep running on haiku. If your own shell environment
-sets any of those, they pass through to the worker unchanged (the
-harness only merges its own env vars on top of `os.environ`).
-
-Merge order for child process env: `os.environ` < template `provider_env`
-< template `model_env_vars` < caller's explicit `extra_env`. A test or
-SDK caller can always override a template env var by passing
-`extra_env={"ANTHROPIC_MODEL": "…"}`.
-
-### Reasoning effort
-
-Worker CLIs that expose a reasoning-effort knob are configured via two
-fields:
-
-- **`reasoning_effort`** — the value (e.g. `"high"`). Absent = no
-  injection, worker CLI uses its own default.
-- **`reasoning_effort_flag`** — the argv token shape, with a literal
-  `{effort}` placeholder that the harness substitutes at render time.
-  This ships with a sensible default per built-in agent so users
-  normally only set `reasoning_effort`.
-
-The coordinator can also override the level per spawn with
-`spawn_agent(effort="…")`, mirroring `spawn_agent(model="…")`:
-
-| Source | Priority |
-|---|---|
-| Explicit `spawn_agent(effort="…")` from the coordinator | 1 (highest) |
-| `[agents.<name>].reasoning_effort` | 2 |
-| Worker CLI's own internal default | 3 (fallback) |
-
-`spawn_agent(effort=…)` fails loudly instead of lying: passing it for an
-agent type whose template cannot carry the value (no
-`reasoning_effort_flag` with an `{effort}` placeholder), passing a
-blank level, or combining it with a raw `flags` entry that carries the
-same reasoning-effort option all return an ERROR result rather than
-silently dropping or double-rendering the override.
-
-Each spawn's requested and effective model/effort are recorded on the
-agent's entry in `run.json` (`requested_model` / `requested_effort` /
-`effective_model` / `effective_effort`), so an outer reviewer can verify
-which tier a task actually ran on. `effective_model` only claims what
-was actually injected: it is `null` for templates with no model
-injection surface, and for env-only templates it reflects a caller
-`env` override of the model variable (or `null` when the override is
-partial/conflicting).
-
-Per-CLI shapes and allowed values:
-
-| Worker | `reasoning_effort_flag` | Allowed values |
+| 작업자 | `reasoning_effort_flag` | 허용되는 값 |
 |---|---|---|
-| codex  | `["-c", "model_reasoning_effort={effort}"]` | `low`, `medium`, `high`, `xhigh` |
+| codex | `["-c", "model_reasoning_effort={effort}"]` | `low`, `medium`, `high`, `xhigh` |
 | claude | `["--effort", "{effort}"]` | `low`, `medium`, `high`, `max` |
-| grok   | `["--reasoning-effort", "{effort}"]` | `low`, `medium`, `high` |
-| gemini | (not supported upstream) | — |
+| grok | `["--reasoning-effort", "{effort}"]` | `low`, `medium`, `high` |
+| gemini | (업스트림 미지원) | — |
 
-The harness does **not** validate the value against a per-CLI enum. Pass
-what the worker CLI accepts; invalid levels are reported by the worker.
+조율자는 `spawn_agent(effort="…")`로 생성별 수준을 오버라이드할 수 있습니다.
 
-Example — pin codex to high effort:
+### 작업자를 OpenRouter로 연결하기
 
-```toml
-[agents.codex]
-reasoning_effort = "high"
-```
-
-Clear a default with `reasoning_effort = false` (same convention as
-`default_model`).
-
-### Connecting workers to OpenRouter
-
-team-harness can route worker CLIs through OpenRouter so the same
-OpenRouter account that fuels the coordinator also fuels each worker.
-This relies on a third template field, `provider_env` — a list of env
-vars the spawner sets on the child process. Values may contain
-`{env:VARNAME}` placeholders that are resolved from the parent shell at
-spawn time, so API keys stay in your shell and never touch `config.toml`.
-
-Before either recipe: export your OpenRouter key in your shell once:
+조율자를 구동하는 동일한 OpenRouter 계정으로 작업자 CLI들을 라우팅할 수 있습니다.
+먼저 셸에서 환경 변수를 설정합니다:
 
 ```bash
 export OPENROUTER_API_KEY=sk-or-...
 ```
 
 #### Codex via OpenRouter
-
-Codex reads its provider config from a `-c` command-line override (or
-the `~/.codex/config.toml` file). Add the `-c` tokens to the codex
-template's `shared_flags`:
 
 ```toml
 [agents.codex]
@@ -719,292 +496,182 @@ shared_flags = [
     "-c", 'model_providers.openrouter.base_url="https://openrouter.ai/api/v1"',
     "-c", 'model_providers.openrouter.env_key="OPENROUTER_API_KEY"',
 ]
-default_model = "openai/gpt-5.3-codex"   # the OpenRouter-flavoured model name
+default_model = "openai/gpt-5.3-codex"
 ```
-
-No `provider_env` needed — codex reads `OPENROUTER_API_KEY` itself via
-the `env_key` setting.
 
 #### Claude Code via OpenRouter
 
-Claude Code reads its provider config from env vars. Add a
-`[agents.claude.provider_env]` sub-table:
-
 ```toml
 [agents.claude]
-default_model = "anthropic/claude-opus-4.6"   # OpenRouter-flavoured model name
+default_model = "anthropic/claude-opus-4.6"
 
 [agents.claude.provider_env]
 ANTHROPIC_BASE_URL = "https://openrouter.ai/api"
 ANTHROPIC_AUTH_TOKEN = "{env:OPENROUTER_API_KEY}"
-ANTHROPIC_API_KEY = ""   # must be empty — prevents Claude Code from falling back to native auth
+ANTHROPIC_API_KEY = ""   # 네이티브 인증 폴백 방지를 위해 반드시 비워둠
 ```
 
-The `{env:OPENROUTER_API_KEY}` placeholder is resolved from `os.environ`
-at spawn time. If the variable is missing, the harness warns once and
-substitutes an empty string (the child will then fail its own auth with
-a clear message).
+### 기존 단일 문자열 템플릿에서의 마이그레이션
 
-Note: the three `ANTHROPIC_DEFAULT_*_MODEL` env vars from the "Setting a
-default model" section continue to work and layer on top of
-`provider_env` — setting `default_model = "anthropic/claude-opus-4.6"`
-above populates all three of them automatically.
-
-#### Gemini via OpenRouter
-
-Not supported by the upstream `gemini` CLI — it authenticates directly
-against Google APIs with no OpenAI-compatible base-URL mode. The harness
-does not ship a recipe.
-
-### Migrating from legacy single-string templates
-
-Earlier versions of team-harness accepted a `template = "codex exec ... {prompt}"`
-single-string form. That form was deprecated in #16 and **removed** in the
-follow-up refactor. Attempting to load a config that still contains a
-`template = "..."` line now raises a clear error naming the offending file:
-
-```
-agents.codex.template is no longer supported (in /path/to/config.toml).
-The single-string template form was removed in team-harness after #16.
-Migrate to the structured form, e.g.:
-
-    [agents.codex]
-    command = ["codex", "exec"]
-    shared_flags = ["--dangerously-bypass-approvals-and-sandbox", "--json"]
-
-See README.md → 'Adding custom agent types' for the full schema ...
-```
-
-The fastest migration path is:
+이전 버전의 `template = "codex exec ... {prompt}"` 단일 문자열 형태는 **제거**되었습니다. 해당 설정이 남아 있으면 오류가 발생합니다.
+가장 빠른 마이그레이션 방법:
 
 ```bash
-th init --force    # regenerates a complete structured sample
+th init --force    # 완전한 구조화 샘플 재생성 (사이드카 프롬프트 파일은 보존됨)
 ```
 
-`th init --force` preserves your existing `coordinator_system_message.md`,
-`worker_suffix.md`, and `worker_footer.md` sidecar files, so you can use it
-to regenerate just `config.toml`.
+### 인증 (Authentication)
 
-### Authentication
+- `provider = "openai_compat"`: OpenRouter 또는 OpenAI 호환 API 키 사용.
+- `provider = "codex"`: `codex login`으로 생성된 인증 파일 사용.
+- 각 작업자 CLI는 자체 네이티브 인증을 사용합니다.
+- 하네스는 사용자가 명시적으로 환경 변수 오버라이드를 전달하지 않는 한 조율자 API 키를 작업자에게 전달하지 않습니다.
 
-- `provider = "openai_compat"` uses your OpenRouter or other OpenAI-compatible API key.
-- `provider = "codex"` uses the auth file written by `codex login`.
-- Codex auth resolution order is:
-  1. `codex_auth_path` from CLI or config
-  2. `TEAM_HARNESS_CODEX_AUTH_PATH`
-  3. `$CODEX_HOME/auth.json`
-  4. `~/.codex/auth.json`
-- Codex auth path values that are relative resolve against the effective harness `--cwd`.
-- Each worker CLI uses its own native auth and local config.
-- The harness does not forward the coordinator API key to workers unless you explicitly pass environment overrides at spawn time.
+## CLI 플래그 (CLI flags)
 
-### Codex Subscription
-
-`provider = "codex"` is experimental. team-harness talks to the ChatGPT Codex Responses SSE endpoint through a shared `httpx` client and still uses the same `model` field in config and CLI overrides.
-
-Known built-in Codex model names:
-
-- `codex-mini-latest`
-- `openai/codex-mini-latest`
-- `gpt-5.1-codex-mini`
-- `openai/gpt-5.1-codex-mini`
-- `gpt-5.1-codex-max`
-- `openai/gpt-5.1-codex-max`
-- `gpt-5.5`
-
-Unknown Codex models still work, but startup prints a warning because context tracking may be inaccurate.
-
-## CLI flags
-
-```
+```text
 th run [OPTIONS] [TASK]
 
-Options:
-  -f, --file PATH            Read task from file instead of argument
-  --provider TEXT             Coordinator provider: "openai_compat" or "codex"
-  --model TEXT                Override coordinator model (e.g. "anthropic/claude-sonnet-4")
-  --api-base TEXT             Override coordinator base URL
-  --api-key TEXT              Override coordinator API key for openai_compat
-  --codex-auth-path TEXT      Override Codex auth.json location
-  --agents TEXT               Comma-separated allowlist (e.g. "codex,gemini")
-  --max-retries INT           API retry budget for 429/5xx errors (default: 5)
-  --max-depth INT             Nested harness depth limit (default: 3)
-  --system-prompt TEXT        Extra text appended to the system prompt
-  --system-prompt-file PATH   Read system prompt extension from file
-  --cwd PATH                  Working directory for the run (default: ".")
+옵션:
+  -f, --file PATH            인자 대신 파일에서 작업 내용 읽기
+  --provider TEXT            조율자 공급자: "openai_compat" 또는 "codex"
+  --model TEXT               조율자 모델 오버라이드 (예: "anthropic/claude-sonnet-4")
+  --api-base TEXT            조율자 API 기본 URL 오버라이드
+  --api-key TEXT             openai_compat 조율자 API 키 오버라이드
+  --codex-auth-path TEXT     Codex auth.json 위치 오버라이드
+  --agents TEXT              쉼표로 구분된 허용 에이전트 목록 (예: "codex,gemini")
+  --max-retries INT          429/5xx 오류 API 재시도 예산 (기본값: 5)
+  --max-depth INT            중첩 하네스 깊이 제한 (기본값: 3)
+  --system-prompt TEXT       시스템 프롬프트에 추가할 텍스트
+  --system-prompt-file PATH  파일에서 시스템 프롬프트 확장 내용 읽기
+  --cwd PATH                 실행 작업 디렉토리 (기본값: ".")
 ```
 
-`th repl` accepts the same options (except `-f`/`--file` and the `TASK` argument).
+`th repl`도 동일한 옵션을 받습니다 (`-f`/`--file` 및 `TASK` 인자 제외).
 
-## REPL commands
+## REPL 명령어 (REPL commands)
 
-| Command    | Description                                                     |
-|------------|-----------------------------------------------------------------|
-| `/clear`   | Clear conversation history and context tracking; start fresh    |
-| `/reset`   | Alias for `/clear`                                              |
-| `/compact [focus]` | Manually compact earlier conversation into a summary for the next turn |
-| `/quit`    | Graceful shutdown: wait for running agents, then exit           |
-| `/agents`  | Print current agent status table inline                         |
-| `/log`     | Print the path to the current run log                           |
+| 명령어 | 설명 |
+|---|---|
+| `/clear` | 대화 기록 및 컨텍스트 추적 초기화 (새로 시작) |
+| `/reset` | `/clear`의 별칭 |
+| `/compact [focus]` | 다음 턴을 위해 이전 대화를 요약본으로 수동 압축 |
+| `/quit` | 안전한 종료: 실행 중인 에이전트 완료 대기 후 종료 |
+| `/agents` | 현재 에이전트 상태 테이블 인라인 출력 |
+| `/log` | 현재 실행 로그 파일의 경로 출력 |
 
-## Context management
+## 컨텍스트 관리 (Context management)
 
-- The status bar shows current context occupancy from the latest exact API usage, not cumulative spend.
-- When local changes exist after the last exact usage update, the displayed total may be estimated and prefixed with `~`.
-- Auto-compaction runs proactively before a new coordinator turn once the model-specific threshold is reached, using the same tracked total and falling back to a local estimate when provider usage is unavailable.
-- Auto-compaction only runs when the last message role is `user`, so it never compacts in the middle of a tool exchange.
-- Auto-compaction is always on in v1 and does not have a public config knob.
-- OpenAI-compatible providers may expose provider-prefixed model ids such as `openai/gpt-5.5`; model-limit resolution accepts both bare and prefixed forms.
-- Manual compaction runs between turns and rewrites earlier history into a compact summary for the next turn. `/compact [focus]` never runs in the middle of a tool exchange.
-- `/compact <focus>` lets you bias what the summary emphasizes without changing the command transcript shape that the coordinator sees afterward.
-- `/clear` is the manual escape hatch when you want to keep the same session, run log, and agent state but start with a fresh conversation.
+- 상태 표시줄은 누적 비용이 아니라 최신 API 사용량 기준의 현재 컨텍스트 점유율을 보여줍니다.
+- 모델별 임계값에 도달하면 새 조율자 턴 전에 자동 압축(auto-compaction)이 선제적으로 실행됩니다.
+- 자동 압축은 마지막 메시지 역할이 `user`일 때만 실행되므로, 도구 교환 중간에 압축되지 않습니다.
+- `/compact <focus>`를 통해 요약이 강조할 내용을 편향시킬 수 있습니다.
+- `/clear`는 세션, 실행 로그, 에이전트 상태는 유지하면서 대화만 새로 시작할 때 사용합니다.
 
-## Terminal features
+## 터미널 시각 기능 (Terminal features)
 
-The rich console mode (default when stdout is a TTY) includes several visual enhancements:
+Rich 콘솔 모드(stdout이 TTY일 때 기본 활성화)의 시각 기능:
 
-- **Spinner animation** — an animated braille spinner appears in the status bar while the coordinator is thinking (before tokens start streaming).
-- **iTerm2 tab progress** — when running in iTerm2, an indeterminate progress indicator appears in the terminal tab during processing. This is gated on iTerm2 detection and disabled inside tmux.
-- **User prompt styling** — submitted user prompts are displayed with a dark background (`rgb(55,55,55)`) and white text to visually distinguish them from assistant output.
-- **Agent emojis** — each agent type displays a per-type emoji (e.g., 🔷 codex, ♊ gemini, 🟣 claude) in the agent panel and event log.
-- **Path coloring** — file paths in tool call arguments and results are highlighted in cyan.
-- **Bold consistency** — agent types, turn numbers, and running status use bold styling for emphasis.
+- **스피너 애니메이션** — 조율자가 생각하는 동안(토큰 스트리밍 전) 상태 표시줄에 애니메이션 점자 스피너 표시.
+- **iTerm2 탭 진행률** — iTerm2에서 실행 시 터미널 탭에 진행 표시기 노출.
+- **사용자 프롬프트 스타일링** — 제출된 사용자 프롬프트를 어두운 배경색과 흰색 글씨로 표시하여 모델 출력과 시각적 구분.
+- **에이전트 이모지** — 에이전트 유형별 이모지 표시 (예: 🔷 codex, ♊ gemini, 🟣 claude).
+- **경로 하이라이트** — 도구 호출 인자 및 결과의 파일 경로를 시안(cyan) 색상으로 강조.
 
-These features degrade gracefully: `PlainConsole` shows static indicators, and `SilentConsole` (SDK mode) produces no output.
+## REPL 키 조작 (REPL editing keys)
 
-## REPL editing keys
+| 키 | 동작 |
+|---|---|
+| `Enter` | 현재 입력 제출 |
+| `Shift+Enter` | 줄바꿈 삽입 (멀티라인 편집) |
+| `Alt+Enter` | 줄바꿈 삽입 (대체 키) |
+| `Esc Esc` | 전체 입력 버퍼 비우기 |
+| `Ctrl+C` | REPL 종료 없이 현재 입력만 취소 |
+| `Ctrl+D` | 입력 버퍼가 비어 있을 때 REPL 종료 |
+| `Up` / `Down` | 세션 내 입력 히스토리 탐색 |
 
-| Key              | Action                                         |
-|------------------|------------------------------------------------|
-| `Enter`          | Submit the current input                       |
-| `Shift+Enter`    | Insert a newline (multi-line editing)          |
-| `Alt+Enter`      | Insert a newline (alternative)                 |
-| `Esc Esc`        | Clear the entire input buffer                  |
-| `Ctrl+C`         | Clear current input without exiting the REPL   |
-| `Ctrl+D`         | Exit the REPL (when the input buffer is empty) |
-| `Up` / `Down`    | Navigate input history within the session      |
+긴 텍스트를 붙여넣을 때 줄바꿈이 4개 이상이면 편집 중에는 `[Pasted text #N +M lines]`로 축약 표시되며, 제출 시 전체 텍스트가 자동으로 복원됩니다.
 
-Standard cursor movement keys (Left/Right, Home/End, Ctrl+A/E, Ctrl+W, Ctrl+K) work as expected.
+## 조율자 도구 (Coordinator tools)
 
-In terminals that support bracketed paste, long pasted blocks with at least 4 newline characters collapse to `[Pasted text #N +M lines]` while you edit, and the full pasted text is restored automatically when you submit.
+조율자 모델이 사용할 수 있는 도구 목록:
 
-If Alt/Esc key sequences feel delayed in tmux, set `set -sg escape-time 0` in your tmux config.
+**에이전트 관리:** `spawn_agent`, `kill_agent`, `agent_status`, `list_agents`, `wait_for_agents`, `wait_for_any`, `read_new_agent_output`
 
-## Coordinator tools
+**파일 시스템:** `read_file`, `write_file`, `append_file`, `edit_file`, `multi_edit_file`, `ls`, `glob`, `grep`, `read_new_file_content`
 
-The coordinator model has access to these tools:
+`read_file` 및 `read_new_file_content`는 호출당 파일 콘텐츠 기준 최대 32,768자 및 UTF-8 인코딩 후 최대 32KiB로 제한됩니다. 소용량 판독은 그대로 반환됩니다. 대용량 임의 접근 판독의 경우 반환 결과에 정확한 문자 범위와 다음 `offset_chars`가 명시되며, 조율자는 다음 페이지를 요청할 수 있습니다. 이를 통해 프롬프트가 경로 기반으로 유지되고 단 한 번의 실수로 모델 컨텍스트 전체가 소진되는 것을 방지합니다.
 
-**Agent management:** `spawn_agent`, `kill_agent`, `agent_status`, `list_agents`, `wait_for_agents`, `wait_for_any`, `read_new_agent_output`
+**셸:** `bash`
 
-**File system:** `read_file`, `write_file`, `append_file`, `edit_file`, `multi_edit_file`, `ls`, `glob`, `grep`, `read_new_file_content`
+**작업 추적:** `todo_write`, `todo_read`
 
-`read_file` and `read_new_file_content` return at most 32,768 file-content
-characters and 32 KiB after UTF-8 encoding, plus short pagination metadata,
-per call. Small reads are returned unchanged. For a larger random-access read,
-the result names the exact character range and next `offset_chars`; request
-another bounded page with named `offset_chars` and, optionally, a smaller named
-`limit_chars`. The incremental reader instead keeps a per-run FIFO cursor and
-tells the coordinator to call again with the same path while backlog remains.
-This keeps prompts path-based and lets the coordinator decide what to inspect
-without one accidental read consuming the model's remaining context. For large
-structured artifacts, the coordinator may choose a focused `bash` projection
-such as `jq` before paging into supporting evidence.
+`bash` 도구는 전체 명령 데드라인(기본 120초)을 갖는 포그라운드 명령을 실행합니다. 장기 배치의 경우 양의 `timeout_seconds`를 전달할 수 있습니다. 타임아웃 또는 취소 시 Team Harness는 해당 명령의 프로세스 그룹 전체를 종료하고 수거합니다.
 
-**Shell:** `bash`
+## 에이전트 스킬 (Agent Skills)
 
-**Task tracking:** `todo_write`, `todo_read`
+team-harness는 [Agent Skills](https://agentskills.io) 표준을 지원합니다.
 
-The `bash` tool runs one foreground command with a whole-command deadline. It
-defaults to 120 seconds for compatibility; a coordinator invoking a known
-long-running batch can pass a positive named `timeout_seconds` value sized for
-the complete batch. On timeout or cancellation, Team Harness terminates and
-reaps the command's process group, including descendants. This outer deadline
-is independent of timeout flags understood by the command itself.
+스킬은 YAML 프론트매터(name + description)와 마크다운 지침이 포함된 `SKILL.md` 파일이 있는 디렉터리입니다. 조율자는 시작 시 스킬 메타데이터를 확인하고, 작업에 필요할 때 `read_file` 도구로 전체 지침을 읽어옵니다.
 
-## Agent Skills
+### 스킬 디렉터리 위치
 
-team-harness supports the [Agent Skills](https://agentskills.io) standard — a cross-tool format for giving AI agents specialized knowledge and workflows.
+| 위치 | 범위 |
+|---|---|
+| `<cwd>/.agents/skills/` | 프로젝트 로컬 (루트까지 상위 디렉터리도 탐색) |
+| `~/.agents/skills/` | 사용자 전역 |
 
-A skill is a directory containing a `SKILL.md` file with YAML frontmatter (name + description) and markdown instructions. The coordinator sees skill metadata at startup and can read the full instructions via its `read_file` tool when a task calls for it.
+프로젝트 스킬이 동일한 이름의 사용자 전역 스킬보다 우선합니다. `.agents/skills/` 경로는 Codex CLI 규칙과 일치하므로 Codex용으로 작성된 스킬이 그대로 동작합니다.
 
-### Skill directories
-
-| Location | Scope |
-|----------|-------|
-| `<cwd>/.agents/skills/` | Project-local (also searched in parent directories up to root) |
-| `~/.agents/skills/` | User-global |
-
-Project skills override user-global skills of the same name. The `.agents/skills/` path matches the Codex CLI convention, so skills written for Codex work in team-harness without changes.
-
-### Creating a skill
+### 스킬 생성 예시
 
 ```bash
 mkdir -p .agents/skills/my-skill
 cat > .agents/skills/my-skill/SKILL.md << 'EOF'
 ---
 name: my-skill
-description: Summarize files and produce a brief report. Use when the user asks for a summary or overview.
+description: 파일을 요약하고 간략한 보고서를 작성합니다. 사용자가 요약이나 개요를 요청할 때 사용하십시오.
 ---
 
-# My Skill
+# 내 스킬
 
-## Steps
+## 단계
 
-1. Read the target files using `read_file`
-2. Summarize the key points
-3. Write a brief report
+1. `read_file`을 사용하여 대상 파일 읽기
+2. 핵심 사항 요약
+3. 간략한 보고서 작성
 
-## Notes
+## 참고
 
-- Keep summaries under 500 words
-- Focus on actionable insights
+- 요약은 500단어 이내로 유지
+- 실행 가능한 인사이트에 집중
 EOF
 ```
 
-### Skill naming rules
+### 스킬 명명 규칙
 
-- 1-64 characters, lowercase letters, digits, and hyphens only
-- Must not start or end with a hyphen, no consecutive hyphens
-- Directory name is the canonical skill name
+- 1-64자, 소문자, 숫자, 하이픈만 허용
+- 하이픈으로 시작하거나 끝날 수 없으며, 연속된 하이픈 금지
+- 디렉터리 이름이 정본 스킬 이름이 됨
 
-### Optional subdirectories
+### 선택적 하위 디렉터리
 
-| Directory | Purpose |
-|-----------|---------|
-| `scripts/` | Executable code the agent can run |
-| `references/` | Additional documentation loaded on demand |
-| `assets/` | Templates, data files, schemas |
+| 디렉터리 | 용도 |
+|---|---|
+| `scripts/` | 에이전트가 실행할 수 있는 코드 |
+| `references/` | 필요 시 로드되는 추가 문서 |
+| `assets/` | 템플릿, 데이터 파일, 스키마 |
 
-The agent reads these files on demand via its file tools — they are not loaded at startup.
+## 실행 로그 (Run logs)
 
-## Run logs
+각 실행은 `~/.team-harness/runs/<run-id>/` 아래에 다음 파일을 생성합니다:
 
-Each run creates a directory under `~/.team-harness/runs/<run-id>/` containing:
+- `run.json` — 델타 기반의 전체 실행 로그 (무손실 리플레이 가능)
+- `todo.json` — 영속 작업 목록
 
-- `run.json` — full delta-based run log (losslessly replayable conversation)
-- `todo.json` — persistent task list
+`caller_context`가 지정된 SDK 실행은 `<caller trace_root>/<run-id>/` 아래에 정본 실행 레코드와 모든 세션 아티팩트를 함께 보관합니다.
 
-SDK runs with `caller_context` instead keep the canonical run record and all
-session artifacts together under `<caller trace_root>/<run-id>/`; callers should
-use the explicit paths returned by `TeamHarnessResult` / `TeamHarnessError.detail`.
-Worker stdout and stderr are captured directly at the canonical paths. These
-artifacts contain the exact operational inputs and outputs; the caller owns
-their access controls, retention, and any transformation before external
-export.
-
-The coordinator footer and each direct-worker footer name their current/parent
-harness run id. When the coordinator dynamically spawns the built-in
-`type="harness"`, team-harness also propagates the validated outer caller context
-through `TEAM_HARNESS_CALLER_CONTEXT`. The nested coordinator keeps the same
-outer session depth and workflow role (it is not a new loopy-loop layer), gets
-its own direct assignment and nested trace root, and records the parent harness
-run id. This applies to built-in nested harness spawns; team-harness does not try
-to detect an arbitrary worker independently launching another `th` process.
-
-Each run also creates `<output_dir>/<run-id>/worker_sessions.json`, a compact
-worker index with per-agent prompt, status, timestamps, log paths, and
-resume-related metadata. Worker stdout/stderr logs are written under the same
-session output directory:
+각 실행은 `<output_dir>/<run-id>/worker_sessions.json` 매니페스트도 생성합니다:
 
 ```text
 <output_dir>/<run-id>/workers/<worker-label>__<agent-id>/stdout.jsonl
@@ -1012,52 +679,37 @@ session output directory:
 <output_dir>/<run-id>/agents/<agent-id>/agent_assignment.json
 ```
 
-To continue a terminal worker during the same live harness run, coordinators
-should use `spawn_agent(mode="resume", resume_from_agent_id="<agent-id>", ...)`.
-Team-harness resolves the captured provider session internally and rejects an
-unknown, still-running, cross-type, or not-yet-captured source before spawning.
-Use `resume_from_session_id` only when you already have a raw provider id, such
-as one read from a finalized `worker_sessions.json`. The selectors are mutually
-exclusive, and either selector requires `mode="resume"`; otherwise the request
-fails before spawning. A failed provider resume remains a visible failed worker; the
-harness never silently retries it as a fresh agent because the continuation
-prompt may depend on the old session's context.
+동일한 라이브 하네스 실행 중 종료된 작업자를 이어갈 때는 `spawn_agent(mode="resume", resume_from_agent_id="<agent-id>", ...)`를 사용하십시오.
 
-When a coordinator supplies `worker_label`, it is treated as a filesystem-safe
-label, not as a path. Team-harness rejects labels with path separators and keeps
-all worker logs inside the session output directory. Workers without labels use
-their generated agent id as the directory name.
+## 신뢰 모델 (Trust model)
 
-## Trust model
+- **스킬**은 하네스 프로세스의 전체 권한으로 임의의 파이썬 코드를 실행할 수 있습니다. 스킬 디렉터리를 `PATH`처럼 신뢰하십시오.
+- **`bash` 도구**는 `stdin=/dev/null`로 샌드박스 없이 실행됩니다.
+- **작업자 CLI**는 할당된 작업 디렉터리에서 파일을 읽고 쓸 수 있는 별도의 로컬 프로세스입니다.
+- 하네스는 설정된 API 엔드포인트로만 조율자 작업 내용과 도구 출력을 전송합니다.
 
-- **Skills** execute arbitrary Python with the harness process's full privileges. Treat skill directories as you would your `PATH`.
-- **`bash` tool** runs shell commands unsandboxed with `stdin=/dev/null`; its
-  timeout controls lifecycle, not permissions or semantic acceptance.
-- **Worker CLIs** are separate local processes that may read/write files in their assigned working directories.
-- The harness only sends coordinator task content and tool outputs to the configured API endpoint.
+이 도구는 신뢰할 수 있는 로컬 자동화를 위해 설계되었습니다. 신뢰할 수 없는 작업이나 스킬을 실행하지 마십시오.
 
-This tool is designed for trusted local automation. Do not run untrusted tasks or skills.
+## 마이그레이션 (Migration)
 
-## Migration
+기본 CLI 명령어는 이제 `th`입니다:
 
-The preferred CLI command is now `th`. If you are upgrading from a previous version:
+- `team-harness`는 호환성 별칭으로 계속 동작합니다.
+- `pip install team-harness`는 변경되지 않습니다.
+- `python -m team_harness`는 변경되지 않습니다.
+- 설정, 실행 로그, 스킬은 계속 `~/.team-harness/` 아래에 유지됩니다.
+- 기존 설정 파일은 업그레이드로 인해 수정되지 않습니다.
 
-- `team-harness` still works as a compatibility alias.
-- `pip install team-harness` does not change.
-- `python -m team_harness` does not change.
-- Config, runs, and skills remain under `~/.team-harness/`.
-- Existing config files are not modified by upgrades.
-
-## Development
+## 개발 (Development)
 
 ```bash
 uv sync --extra dev
-uv run ruff check src/        # lint
-uv run ruff format src/        # format
-uv run pyright src/             # type check
-uv run pytest src/tests/ -v    # test
+uv run ruff check src/        # 린트 검사
+uv run ruff format src/        # 포맷팅
+uv run pyright src/             # 타입 검사
+uv run pytest src/tests/ -v    # 테스트 실행
 ```
 
-## License
+## 라이선스 (License)
 
-Apache-2.0 — see [LICENSE](LICENSE).
+Apache-2.0 — [LICENSE](LICENSE) 참조.

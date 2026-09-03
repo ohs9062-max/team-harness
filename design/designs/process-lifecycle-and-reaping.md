@@ -1,255 +1,127 @@
-# Design: Worker Process Lifecycle and Orphan Reaping
+# 설계: 작업자 프로세스 라이프사이클 및 고아 프로세스 수거 (Worker Process Lifecycle and Orphan Reaping)
 
-**Status:** Implemented, reviewed, and hardened (design accepted as TH-D5; shipped in
-the process-lifecycle change — see `CHANGELOG.md` Unreleased). Two independent
-adversarial reviews (Codex, Antigravity) drove the hardening; their key corrections
-are folded into the sections below. Implementation notes:
+**상태:** 구현, 리뷰 및 강화 완료 (TH-D5로 승인됨; 프로세스 라이프사이클 변경으로 출시됨 — `CHANGELOG.md` 참조). 두 번의 독립적인 적대적 리뷰(Codex, Antigravity)를 통해 강화되었으며, 주요 수정 사항이 아래 섹션에 반영되어 있습니다. 구현 참고 사항:
 
-- The crash-durable record is **`run.json`** (flushed at spawn time);
-  `worker_sessions.json` is finalize-only, so `reap_run()` reads `run.json` and
-  refreshes the manifest afterward.
-- Liveness excludes **zombies** (no resources, cannot be killed).
-- Identity tokens: Linux uses the exact kernel identity (**boot id +
-  `/proc/<pid>/stat` start ticks** — immune to NTP/wall-clock shifts and
-  same-second pid reuse); macOS falls back to the pinned-locale/UTC `ps lstart`
-  string (second resolution — a documented residual reuse window).
-- A group whose **leader is gone is unverifiable**: once a group has fully emptied,
-  its pgid can be recycled by an unrelated new session, so surviving leaderless
-  members are never attributed to us — waiting on them is allowed, killing is
-  refused. (In-run shutdown accepts a narrower version of this risk — see §4.4.)
-- Identity is **re-verified before every signal escalation**; `killed` and terminal
-  statuses are recorded only when the group is *observed* gone
-  (`kill_failed_still_running` otherwise); probe failures (broken `ps`) surface as
-  `probe_failed`, never as "exited".
-- `reap_run` **refuses a live run** (parent pid + starttime recorded at run start;
-  `force` overrides), validates inputs before acting, serializes concurrent reapers
-  on an advisory lock, supports per-agent policies and `dry_run`, and keeps report
-  history.
+- 크래시 발생 시에도 신뢰할 수 있는 영속 기록은 **`run.json`**입니다(작업자 생성 시점에 디스크에 플러시됨). `worker_sessions.json`은 정상 종료 시에만 작성되므로, `reap_run()`은 `run.json`을 읽고 사후에 매니페스트를 갱신합니다.
+- 생존 상태(Liveness) 판정에서 **좀비(zombie) 프로세스는 제외**됩니다(자원을 점유하지 않으며 kill이 불가능함).
+- 프로세스 식별 토큰: Linux는 정확한 커널 식별자(**부팅 ID + `/proc/<pid>/stat` 시작 틱**)를 사용하므로 NTP/시스템 시계 변경 및 1초 이내 PID 재사용 공격에 면역입니다. macOS는 로캘/UTC가 고정된 `ps lstart` 문자열(초 단위 해상도 — 문서화된 잔여 재사용 윈도우 존재)을 대체재로 사용합니다.
+- **리더가 종료된 프로세스 그룹은 검증 불가(unverifiable)**로 간주됩니다: 그룹이 완전히 비워진 후에는 무관한 새로운 세션이 해당 PGID를 재활용할 수 있으므로, 리더 없이 살아남은 잔여 멤버는 우리 소유로 단정하지 않습니다. 이들에 대한 대기(wait)는 허용되지만 강제 종료(kill)는 거부됩니다.
+- **신호 에스컬레이션(SIGTERM → SIGKILL) 전에 매번 식별자를 재검증**합니다. 그룹이 완전히 사라진 것이 *직접 관찰*되었을 때만 `killed` 및 최종 상태를 기록합니다(그렇지 않으면 `kill_failed_still_running`). `ps` 고장 등의 프로브 실패는 "종료됨"이 아니라 `probe_failed`로 보고됩니다.
+- `reap_run`은 **살아있는 실행에 대한 개입을 거부**하며(실행 시작 시 부모 PID + 시작 시각 기록, `force`로 오버라이드 가능), 조작 전에 입력을 검증하고, 권고 잠금(advisory lock)으로 동시 수거자를 직렬화하며, 에이전트별 정책과 `dry_run`을 지원하고, 처리 보고서 이력을 보존합니다.
 
-**Accepted limitations** (revisit if they bite): macOS second-resolution identity;
-a userspace probe→signal TOCTOU window narrower than one poll interval (a
-supervisor-leader architecture would close it and is a documented non-goal for
-now); `SIGTERM` to the parent bypasses Python `finally` cleanup (containers should
-stop with a signal the entrypoint handles, or rely on `th reap` afterwards);
-post-hoc session capture uses the *current* config's template spec.
-**Date:** 2026-07-12
-**Decision:** `design/decisions.md` TH-D5 (and its premises TH-D2, TH-D4).
-**Primary consumer:** `loopy-loop`, which runs team-harness in a long-horizon loop and needs
-crash recovery to be safe.
+**승인된 한계점**: macOS의 초 단위 해상도 식별자; 1회 폴링 주기보다 좁은 사용자 공간 프로브→시그널 간 TOCTOU 윈도우; 부모에 대한 `SIGTERM`은 파이썬 `finally` 정리를 우회함(컨테이너는 진입점이 처리하는 시그널로 중지하거나 사후 `th reap`에 의존해야 함); 사후 세션 캡처는 *현재* 설정의 템플릿 사양을 사용함.  
+**작성일:** 2026-07-12  
+**결정:** `design/decisions.md` TH-D5 (및 전제 TH-D2, TH-D4).  
+**주요 소비자:** `loopy-loop` (team-harness를 장기 실행 루프에서 실행하며 안전한 크래시 복구가 필수적임).
 
-This document is self-contained: it explains the process model, why the naive fixes don't
-work, and the design — enough for a future agent or a non-specialist human to implement it
-without re-deriving the reasoning.
+이 문서는 자체 완결성을 갖추고 있습니다: 프로세스 모델, 단순한 해결책이 실패하는 이유, 설계 내용을 미래의 에이전트나 비전문가 인간이 사전 지식 없이도 이해할 수 있도록 설명합니다.
 
-## 1. The process model (what actually runs)
+## 1. 프로세스 모델 (실제 실행 구조)
 
-A team-harness run is a tree of OS processes:
+team-harness의 실행은 OS 프로세스들의 트리 구조입니다:
 
-```
-parent process (the SDK/CLI caller — e.g. a `loopy worker`)
-└── team-harness coordinator loop        (in-process; async, same PID as the parent)
-    ├── worker CLI subprocess  (codex/claude/gemini/…)   ← child of the parent
-    │   └── (that CLI may itself spawn helpers)
-    └── worker CLI subprocess  …                          ← child of the parent
+```text
+부모 프로세스 (SDK/CLI 호출자 — 예: loopy worker)
+└── team-harness 조율자 루프 (인프로세스; 비동기, 부모와 동일한 PID)
+    ├── 작업자 CLI 서브프로세스 (codex/claude/gemini/…) ← 부모의 자식 프로세스
+    │   └── (해당 CLI가 자체적으로 헬퍼를 실행할 수 있음)
+    └── 작업자 CLI 서브프로세스 …                      ← 부모의 자식 프로세스
 ```
 
-Key facts, all verifiable in the code:
+코드에서 검증 가능한 주요 사실들:
 
-- The coordinator loop runs **in the parent process** (`harness.py` → `coordinator/loop.py`);
-  it is not a separate process.
-- Each **worker** is launched with `asyncio.create_subprocess_exec(...)` in
-  `agents/spawner.py`, with `stdin=DEVNULL` and `stdout`/`stderr` redirected to **log files**.
-  It is a **one-shot batch process**: it runs to completion and exits (TH-D2).
-- The only handle to a running worker is the in-memory `asyncio.subprocess.Process` stored in
-  `AgentManager` (`agents/manager.py`). `AgentManager.kill()` calls `proc.terminate()` on that
-  handle.
-- team-harness already **persists a rich per-worker manifest** to disk
-  (`tracking/worker_sessions.py`, `WorkerSessionRecord` / `WorkerSessionsManifest`): agent id,
-  command, cwd, spawn/finish times, exit code, log paths, captured vendor session id, resume
-  info. **It does not persist any OS process identity** (no pid, no pgid).
-- Workers are spawned in the parent's **own process group** (no `start_new_session`), and
-  nesting is bounded by the configured `max_depth` (default 3).
+- 조율자 루프는 **부모 프로세스 내부**에서 실행됩니다(`harness.py` → `coordinator/loop.py`). 별도의 프로세스가 아닙니다.
+- 각 **작업자**는 `agents/spawner.py`에서 `asyncio.create_subprocess_exec(...)`로 실행되며, `stdin=DEVNULL`로 설정되고 `stdout`/`stderr`는 **로그 파일**로 리다이렉션됩니다. 이는 **1회성 배치 프로세스**입니다: 끝까지 실행되고 종료됩니다 (TH-D2).
+- 실행 중인 작업자에 대한 유일한 핸들은 `AgentManager`(`agents/manager.py`)에 저장된 인메모리 `asyncio.subprocess.Process`입니다. `AgentManager.kill()`은 해당 핸들에 대해 `proc.terminate()`를 호출합니다.
+- team-harness는 이미 디스크에 **상세한 작업자별 매니페스트**를 영속화하고 있습니다(`tracking/worker_sessions.py`, `WorkerSessionRecord` / `WorkerSessionsManifest`): 에이전트 ID, 명령어, cwd, 시작/종료 시각, 종료 코드, 로그 경로, 캡처된 벤더 세션 ID, 재개 정보. **하지만 OS 프로세스 식별자(PID, PGID)는 전혀 영속화하지 않았습니다.**
+- 작업자는 부모의 **자체 프로세스 그룹**에서 실행되며(`start_new_session` 미사용), 중첩은 설정된 `max_depth`(기본값 3)로 제한됩니다.
 
-## 2. The problem: orphaned workers after a hard parent crash
+## 2. 문제: 부모의 비정상 크래시 후 남겨진 고아 작업자
 
-If the parent process ends **gracefully**, team-harness finalizes: it terminates tracked
-workers (within `shutdown_timeout_s`) and writes the manifest. Fine.
+부모 프로세스가 **정상적으로(gracefully)** 종료되면 team-harness는 마무리 작업을 수행합니다: 추적 중인 작업자를 종료하고(`shutdown_timeout_s` 내) 매니페스트를 작성합니다. 이는 문제가 없습니다.
 
-If the parent process dies **hard** — OOM kill, `SIGKILL`, a panic, a machine reboot — none of
-that runs. The workers it spawned are reparented to init and **keep running**:
+하지만 부모 프로세스가 **비정상적으로 강제 종료(hard crash)**되면(OOM kill, `SIGKILL`, 패닉, 머신 재부팅) 이러한 마무리 작업이 전혀 실행되지 않습니다. 부모가 생성한 작업자들은 init 프로세스의 자식으로 재할당(reparent)되어 **계속 실행**됩니다:
 
-- they keep **spending money** (each is an LLM-backed CLI making API calls),
-- they keep **writing to the target checkout** (uncoordinated with whatever restarts),
-- and **nothing tracks them**: the `AgentManager` handles died with the parent, and no pid was
-  ever written to disk. A restarted parent has no idea they exist. There is no startup reaping
-  anywhere in team-harness or its consumers today.
+- **비용을 계속 소비**합니다 (각각이 API를 호출하는 LLM 기반 CLI임).
+- **대상 저장소에 계속 쓰기 작업을 수행**합니다 (재시작된 프로세스와 아무런 조율 없이 충돌 발생).
+- **아무도 이들을 추적하지 못합니다**: `AgentManager` 핸들은 부모와 함께 죽었고, PID는 디스크에 기록된 적이 없습니다. 재시작된 부모는 이들의 존재조차 알지 못합니다. 현재 team-harness나 소비자 어디에도 시작 시 고아 수거 로직이 없습니다.
 
-This is a real cost and correctness hazard for any long-running consumer.
+이는 장시간 실행되는 소비자에게 심각한 비용 및 정합성 위협입니다.
 
-## 3. Why the obvious fixes don't work
+## 3. 단순한 해결책이 작동하지 않는 이유
 
-- **"Re-adopt the running worker on restart."** Not possible. Process control is tied to the
-  dead parent's asyncio transport; a new process cannot reconnect a child's stdio or rebuild
-  the transport. And there's nothing to drive anyway — the worker is a one-shot batch job with
-  `stdin=DEVNULL` (TH-D2). Adoption is both impossible and pointless.
-- **"Just kill the pid on restart."** A bare pid is unsafe to kill after any time gap: the OS
-  may have **recycled** it to an unrelated process. Killing a recycled pid can kill something
-  innocent.
-- **"Resume the work instead."** That's a *different* concern (TH-D4, session resume) and
-  doesn't address the orphan that's still running and spending money. Resume is about
-  continuing the work; reaping is about stopping the leftover.
+- **"재시작 시 실행 중인 작업자를 다시 입양(re-adopt)한다."** 불가능합니다. 프로세스 제어는 죽은 부모의 비동기 트랜스포트에 묶여 있습니다. 새 프로세스는 자식의 stdio에 다시 연결하거나 트랜스포트를 재구축할 수 없습니다. 게다가 `stdin=DEVNULL`인 1회성 배치 작업이므로 조작할 인터페이스도 없습니다 (TH-D2). 입양은 불가능하며 무의미합니다.
+- **"재시작 시 그냥 해당 PID를 kill한다."** 시간이 경과한 후 단순 PID를 kill하는 것은 안전하지 않습니다: OS가 해당 PID를 **무관한 다른 프로세스에 재할당(recycle)**했을 수 있습니다. 재할당된 PID를 kill하면 엉뚱한 프로세스가 죽게 됩니다.
+- **"대신 작업을 재개(resume)한다."** 그것은 *별개의* 관심사(TH-D4 세션 재개)이며, 여전히 실행 중이면서 돈을 쓰고 있는 고아 프로세스 문제를 해결하지 못합니다. 재개는 작업을 이어가는 것이고, 수거는 남겨진 찌꺼기를 중단시키는 것입니다.
 
-## 4. The design
+## 4. 설계 (The design)
 
-Two changes to team-harness, plus a clear contract for the consumer.
+team-harness에 대한 두 가지 변경 사항과 소비자를 위한 명확한 계약.
 
-### 4.1 Spawn each worker in its own process group
+### 4.1 각 작업자를 자체 프로세스 그룹에서 실행
 
-In `agents/spawner.py`, pass `start_new_session=True` to `create_subprocess_exec`. This makes
-each worker a **process-group leader**; the worker and any helpers it spawns share one group.
-Killing the group (`os.killpg`) then reliably terminates the **whole subtree** in one call —
-which matters because a worker CLI may spawn its own children up to `max_depth`.
+`agents/spawner.py`에서 `create_subprocess_exec`에 `start_new_session=True`를 전달합니다. 이렇게 하면 각 작업자가 **프로세스 그룹 리더**가 되며, 작업자와 그 작업자가 실행하는 모든 헬퍼가 하나의 그룹을 공유합니다. 그룹을 종료(`os.killpg`)하면 한 번의 호출로 **전체 서브트리**를 안정적으로 종료할 수 있습니다. 작업자 CLI가 `max_depth`까지 자체 자식을 생성할 수 있기 때문에 이는 매우 중요합니다.
 
-### 4.2 Persist process identity in the manifest
+### 4.2 매니페스트에 프로세스 식별자 영속화
 
-Extend `WorkerSessionRecord` with:
+`WorkerSessionRecord`에 다음 필드를 추가합니다:
 
-- `pid: int` — the worker's process id,
-- `pgid: int` — its process-group id (== pid, since it's the group leader),
-- `starttime: str | int` — the process start time (Linux: field 22 of `/proc/<pid>/stat`;
-  portable fallback: the wall-clock spawn time we already record, used as a coarse guard).
+- `pid: int` — 작업자의 프로세스 ID
+- `pgid: int` — 프로세스 그룹 ID (그룹 리더이므로 pid와 동일)
+- `starttime: str | int` — 프로세스 시작 시각 (Linux: `/proc/<pid>/stat`의 22번째 필드; 이식성 폴백: coarse 가드로 사용하는 벽시계 생성 시각)
 
-`starttime` is the **identity guard**: a `(pgid, starttime)` pair is effectively unique, so we
-can tell "the group we launched" from "a recycled id now owned by something else." Write these
-at spawn time and keep updating `status`/`exit_code`/`finished_at` on exit, exactly as the
-manifest is maintained today.
+`starttime`은 **식별자 가드(identity guard)**입니다: `(pgid, starttime)` 쌍은 실질적으로 고유하므로, "우리가 시작한 그룹"과 "다른 프로세스에 재할당된 ID"를 확실히 구분할 수 있습니다. 이를 생성 시점에 기록하고, 오늘날 매니페스트가 유지되는 것과 똑같이 종료 시 `status`/`exit_code`/`finished_at`을 업데이트합니다.
 
-### 4.3 A durable liveness check
+### 4.3 영속적 생존 상태 확인 (Durable liveness check)
 
-Once identity is persisted, "is this worker still running?" becomes a durable, cross-process
-question — today it can only be answered through the in-memory `Process` handle, which dies
-with the parent. Add a small helper:
+식별자가 영속화되면 "이 작업자가 아직 실행 중인가?"는 프로세스 간에 영속적으로 질의할 수 있는 질문이 됩니다(이전에는 부모와 함께 죽는 인메모리 `Process` 핸들을 통해서만 확인 가능했음). 작은 헬퍼 함수를 추가합니다:
 
-```
+```text
 is_group_alive(pgid, starttime) -> bool
 ```
 
-that checks the group leader exists (`os.kill(pgid, 0)` / a `/proc` probe) **and** its
-`starttime` matches what we recorded. The `starttime` guard is what makes this safe against pid
-reuse: a live pid with a *different* start time is a recycled id, not our worker. This helper
-underpins both the reclaim-safety check (a consumer verifying "is the previous run actually
-dead?") and every policy below.
+이 함수는 그룹 리더가 존재하는지(`os.kill(pgid, 0)` / `/proc` 프로브) **그리고** 그 `starttime`이 우리가 기록한 것과 일치하는지 확인합니다. `starttime` 가드가 PID 재사용에 대해 안전성을 보장합니다. 시작 시각이 다른 살아있는 PID는 재활용된 ID이지 우리의 작업자가 아닙니다.
 
-### 4.4 On restart, choose a policy per worker — bounded drain is the sensible default
+### 4.4 재시작 시 작업자별 정책 선택 — 유한 드레인(Bounded drain)이 권장 기본값
 
-Persisted identity + liveness turns the restart decision from a hardcoded kill into a **policy**.
-For each worker the manifest still marks `running`, and that `is_group_alive` confirms, the
-caller can choose:
+영속 식별자 + 생존 확인을 통해 재시작 시의 결정이 하드코딩된 kill이 아니라 **정책(policy)**이 됩니다. 매니페스트에 여전히 `running`으로 표시되어 있고 `is_group_alive`가 확인한 각 작업자에 대해 호출자는 다음을 선택할 수 있습니다:
 
-- **drain (bounded)** *(the recommended default)* — do **not** kill it; wait (poll
-  `is_group_alive`, up to a **timeout**) for the group to exit, then **finalize the worker's
-  manifest record from its now-complete output files** — status, exit code, captured vendor
-  session id (`session_capture`) — exactly the finalization a graceful run performs. If the
-  timeout elapses (a stuck/hung orphan), fall through to reap. This preserves near-complete work
-  and leaves the checkout in a clean, fully-applied state.
+- **드레인(drain, 유한 대기)** *(권장 기본값)* — kill하지 **않고**, 그룹이 스스로 종료될 때까지 대기(타임아웃까지 `is_group_alive` 폴링)한 다음, **완료된 출력 파일로부터 작업자의 매니페스트 레코드를 정상 마감**합니다(상태, 종료 코드, 캡처된 벤더 세션 ID). 타임아웃이 경과하면(멈추거나 걸린 고아) reap으로 넘어갑니다. 이를 통해 거의 완료된 작업을 보존하고 저장소를 온전하게 적용된 상태로 남깁니다.
+  - 드레인이 제공하는 것을 정확히 이해해야 합니다: **완전하고 감사 가능한 작업자 레코드와 작업자가 이미 저장소에 수행한 변경 사항을 건지는 것이지, 실행 결과(run result)를 만들어내는 것이 아닙니다.** 작업자 출력을 소비했을 조율자는 이미 부모와 함께 죽었으므로, 드레인이 조율자가 냈을 최종 실행 결과를 위조해서는 안 됩니다.
+- **수거(reap)** — 그룹에 `SIGTERM`을 보내고, 짧은 유예 기간을 대기한 뒤 `SIGKILL`을 보냅니다. 남겨진 고아를 즉시 중단합니다. 명시적인 강제 중지, 드레인 타임아웃을 초과한 경우, 또는 완료시키는 것이 안전하지 않은 크래시 원인(다시 발생할 OOM, 디스크 풀)을 위한 탈출구입니다.
+- **무시(ignore)** — 그대로 두고 실행 중으로 남겨졌음을 기록합니다(예: 인간 관리자가 판단하도록 위임).
 
-  Be precise about what drain delivers: **a complete, auditable worker record plus whatever the
-  worker already did to the checkout — not a run result.** The coordinator that would have
-  consumed the worker's output is gone (it died with the parent), so drain must never fabricate
-  the run-level outcome the coordinator would have produced. The consumer decides how to record
-  the salvage in its own bookkeeping (see §5).
-- **reap** — send `SIGTERM` to the group, wait a short grace period, then `SIGKILL`. Stops the
-  leftover immediately. The escape hatch: for an explicit force-stop, a hung orphan past the
-  drain timeout, or a crash cause that makes finishing unsafe (an OOM that would just re-trigger,
-  disk full).
-- **ignore** — leave it and record that it was left running (e.g. a human will decide).
+비용을 중시하고 Git을 진실의 근원(git-is-truth)으로 삼는 소비자에게 드레인이 더 나은 기본값인 이유:
+- 편집 도중 강제 종료하면 작업 트리가 손상될 수 있습니다.
+- 완료된 작업은 해당 이터레이션이 재실행되더라도 보존됩니다. 다음 실행의 새로운 조율자가 이를 보고 기반으로 삼을 수 있습니다.
+- 드레인은 복구 단계에서 새 작업이 디스패치되기 *전에* 발생하므로 저장소에 대한 동시 쓰기가 발생하지 않습니다. 유일한 실질적 비용은 대기 지연 시간이며 이는 **타임아웃**으로 제한됩니다.
 
-Why drain is the better default (for a cost-conscious, git-is-truth consumer):
+team-harness는 **메커니즘 중립적**입니다: 생존 확인, 세 가지 작업, 드레인 타임아웃을 제공하지만 어떤 정책이 기본값인지 하드코딩하지 않습니다. 결정하는 크래시/재시작 시맨틱은 소비자에게 속합니다.
 
-- **Killing mid-edit can corrupt the working tree.** An agent killed while writing files or
-  staging changes leaves a half-applied mess; letting it finish yields a clean, complete change.
-- **Completed work survives even if the iteration re-runs.** Under a git-is-truth consumer, a
-  drained worker's commits/edits sit in the working tree, and the *next* run's fresh coordinator
-  sees and builds on them. So drain salvages the substantive output (the repo change), not just a
-  worker's stdout. (What it does *not* salvage is the dead coordinator's orchestration — draining
-  is a salvage tool, not a run-resume tool; run continuation is TH-D4, session resume. The
-  iteration may still be re-run, but from a better, completed starting point.)
-- **The usual objection is weaker than it looks.** Draining happens *during recovery, before any
-  new work is dispatched*, so there is no concurrent second writer on the checkout — the
-  serialization is automatic, and the only real cost is latency, which the **timeout** bounds.
+편리한 래퍼 함수인 `reap_run(manifest_path, policy=..., drain_timeout_s=...) -> ReapReport` (및 `th reap` CLI 명령)는 실행 매니페스트 전반에 걸쳐 선택된 정책을 적용하고 그 결과(`drained` / `reaped` / `drain-timed-out-then-reaped` / `already-exited` / `identity-mismatch-skipped` / `left-running`)를 기록합니다.
 
-team-harness stays **mechanism-neutral**: it provides the liveness check, the three operations,
-and the drain timeout, but does **not** hardcode which policy is the default — the crash/restart
-semantics that decide belong to the consumer. The *recommendation* above (bounded drain) is what
-suits a cost-conscious, git-is-truth consumer like loopy-loop; a different consumer may prefer
-reap for the fastest clean slate.
+### 4.5 의도적으로 하지 않는 것
 
-The reap path is the natural extension of `AgentManager.kill()` from "terminate an in-memory
-handle" to "terminate a persisted, possibly-orphaned group, safely." A convenient wrapper —
-`reap_run(manifest_path, policy=..., drain_timeout_s=...) -> ReapReport` (and/or a `th reap` CLI
-subcommand) — applies a chosen policy across a run's manifest and records the outcome (`drained` /
-`reaped` / `drain-timed-out-then-reaped` / `already-exited` / `identity-mismatch-skipped` /
-`left-running`) back into it.
+- 프로세스 **입양/재연결**은 하지 않음 (TH-D2).
+- cgroup/systemd 기반 감독은 하지 않음 (Linux 전용이므로, macOS와 Linux 모두 동일 코드로 지원하기 위해 `start_new_session` + `os.killpg`를 이식성 있는 표준으로 채택).
 
-### 4.5 What we deliberately do NOT do
+## 5. 소비자 계약 (`loopy-loop`에서의 활용)
 
-- No process **adoption**/reattachment (TH-D2).
-- No cgroup/systemd-scope supervision. It would be more bulletproof but is Linux-only; we
-  target macOS (dev) and Linux (prod) with the same code, so `start_new_session` + `os.killpg`
-  is the portable choice. Documented non-goal, revisit only if the process-group approach
-  proves insufficient on Linux at scale.
+책임은 명확히 나뉩니다:
 
-## 5. Consumer contract (how `loopy-loop` uses this)
+- **team-harness는 작업자 프로세스 라이프사이클을 소유합니다**: 자체 그룹에서 작업자를 실행하고, 식별자를 영속화하며, 생존 확인 헬퍼와 정책 작업(reap / drain / ignore)을 제공합니다. 하네스는 소비자의 크래시/재시작 시맨틱을 모르므로 *어떤 정책을 언제 쓸지* 결정하지 않습니다.
+- **소비자는 자체 프로세스의 생존과 정책 결정을 소유합니다.** `loopy-loop`는 자체 `loopy worker` 프로세스 내부에서 하네스를 실행합니다. 다음을 수행해야 합니다:
+  - 세션 디렉터리에 **작업자 PID + 하트비트**를 기록하여, 재시작된 조율자가 "작업자가 살아있고 바쁨"과 "작업자가 죽음"을 구분할 수 있게 합니다.
+  - 크래시 복구 시 중단된 실행의 매니페스트에 대해 **고아별로 정책을 선택**합니다(유한 드레인 또는 수거).
+  - 드레인 후 드레인된 작업자를 자체 작업 단위에 연결하는 **자체 구제 기록(`salvage.json`)을 작성**합니다.
+  - 이를 운영 도구에 노출합니다(남겨진 그룹을 경고하는 `doctor` 검사, 강제 수거하는 `stop --force`).
 
-Responsibilities split cleanly:
+## 6. 구현 체크리스트
 
-- **team-harness owns worker-process lifecycle**: it launches workers in their own groups,
-  persists their identity, and provides the liveness helper and the policy operations (reap /
-  drain / ignore). It does **not** decide *which policy* or *when* — it has no knowledge of the
-  consumer's crash/restart semantics.
-- **The consumer owns liveness of its own process and the policy decision.** `loopy-loop` runs
-  the harness inside its own `loopy worker` process. It should:
-  - record its **worker pid + a heartbeat** in the session directory, so a restarted
-    coordinator can tell "the worker is alive and busy" from "the worker is dead" — this closes
-    the duplicate-work window where a second `/register` reclaims a task that's still running;
-  - on crash recovery, for the interrupted run's manifest, **pick a policy per orphan**
-    (§4.4): bounded drain (the recommended default — let an in-flight worker finish within a
-    timeout, then finalize its record), or reap (the escape — kill leftovers), or ignore;
-  - after a drain, **write its own salvage record** linking the drained workers to its own unit
-    of work — for loopy-loop: a `salvage.json` in the interrupted iteration's directory (drained
-    agent ids, exit codes, pointers to their harness output dirs, a diffstat of the working
-    tree) and a distinct history code (`abandoned_after_drain` rather than plain `abandoned`).
-    The interrupted unit of work is still re-run — drain preserves the workers' output and repo
-    edits, it does not produce the run result the dead coordinator never wrote;
-  - surface it operationally (a `doctor` check that warns about a leftover group; a
-    `stop --force` that reaps).
-
-The relationship to loopy-loop's own design: its crash-recovery decision (recover session
-*state* from files) is about the coordinator; this design is about the worker *processes* the
-harness spawned. They are complementary — state recovery says "what task were we on," reaping
-says "kill the leftover agents from the task we abandoned." Neither is process adoption.
-
-## 6. Implementation checklist
-
-- [x] `agents/spawner.py`: `start_new_session=True`; capture `pid`/`pgid`/`starttime` into the
-      `SpawnResult`.
-- [x] `tracking/models.py`: add `pid`/`pgid`/`starttime` to `WorkerSessionRecord`
-      (and the `AgentRecord` carrier persisted at spawn time in `run.json`; `AgentState`
-      carries `pgid` so graceful shutdown can group-kill stragglers).
-- [x] `tracking/worker_sessions.py`: persist the new fields at spawn and on status updates.
-- [x] Liveness helper (§4.3) — implemented as `probe_group(pgid, starttime)` in
-      `agents/process_identity.py`, returning a verdict (`dead` / `ours` /
-      `identity_mismatch` / `unverifiable`) rather than a bare bool; zombies are excluded.
-- [x] Policy operations: `drain` (wait for exit up to `drain_timeout_s`, then finalize the
-      record; timeout → reap), `reap` (SIGTERM→grace→SIGKILL), and
-      `reap_run(run_ref, policy=..., drain_timeout_s=...)` + `th reap` CLI subcommand, all with
-      `(pgid, starttime)` verification (§4.4). Note: `reap_run` reads **`run.json`** (flushed
-      at spawn time — the crash-durable record), not `worker_sessions.json` (finalize-only);
-      it refreshes the manifest afterward via the run's recorded `session_output_dir`.
-- [x] Tests (`src/tests/test_process_lifecycle.py`): liveness true/false + recycled-id guard;
-      drain (short-lived worker → wait → record finalized); drain timeout → falls through to
-      reap; orphan reap; ignore policy; pre-identity records (`no_process_identity`); manifest
-      refresh; spawner group leadership; graceful leader-kill fallback preserved; group kill
-      reaches a nested child.
-- [x] `CHANGELOG.md`: manifest schema 2→3, `run.json` additions + atomic writes, `th reap`,
-      and the group-kill shutdown change (consumer-facing — AGENTS.md Rule 3).
+- [x] `agents/spawner.py`: `start_new_session=True`; `SpawnResult`에 `pid`/`pgid`/`starttime` 캡처.
+- [x] `tracking/models.py`: `WorkerSessionRecord` 및 `AgentRecord`에 `pid`/`pgid`/`starttime` 추가.
+- [x] `tracking/worker_sessions.py`: 생성 시 및 상태 업데이트 시 새 필드 영속화.
+- [x] 생존 헬퍼: `agents/process_identity.py`에 `probe_group(pgid, starttime)` 구현. 좀비 프로세스 제외.
+- [x] 정책 작업: `drain`, `reap`, `reap_run` 및 `th reap` CLI 하위 명령 구현.
+- [x] 테스트 (`src/tests/test_process_lifecycle.py`): 생존 판정, 재할당 ID 가드, 드레인 타임아웃, 고아 수거, 무시 정책, 중첩 자식 프로세스 kill 검증.
+- [x] `CHANGELOG.md`: 매니페스트 스키마 2→3, `run.json` 추가 및 원자적 쓰기, `th reap` 기록.

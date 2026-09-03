@@ -1,110 +1,53 @@
-# Bounded coordinator file reading
+# 조율자 파일 읽기 범위 제한 (Bounded coordinator file reading)
 
-**Status:** Binding design, implementing TH-D9.
+**상태:** 구속력 있는 공식 설계 문서 (TH-D9 구현).
 
-## Problem
+## 문제 정의 (Problem)
 
-Team Harness deliberately gives its coordinator file paths and tools rather
-than preloading repository or trace contents into the prompt. That keeps the
-model in control of what it inspects. Before TH-D9, however, both general
-content readers in `src/team_harness/tools/fs_tools.py` could return an entire
-text file as one tool result. `read_file` always read to EOF, while
-`read_new_file_content` read from its append cursor to EOF.
+Team Harness는 프롬프트에 저장소나 추적 로그 전체를 미리 주입하는 대신, 조율자에게 파일 경로와 도구를 의도적으로 제공합니다. 이는 모델이 스스로 무엇을 검사할지 주도권을 갖게 하기 위함입니다. 그러나 TH-D9 이전에는 `src/team_harness/tools/fs_tools.py`의 일반 콘텐츠 판독 도구 두 개가 텍스트 파일 전체를 단일 도구 결과로 반환할 수 있었습니다. `read_file`은 항상 파일 끝(EOF)까지 읽었고, `read_new_file_content`는 추가 커서부터 EOF까지 읽었습니다.
 
-That made a path-only assignment unsafe at the next boundary. In a real
-loopy-loop eval-runner attempt, the coordinator opened a 1.9 MiB canonical
-evaluation report after all five checks had passed. The report contained the
-full provider transcript for each check. One unbounded tool result expanded
-the following coordinator request beyond the effective model context, so the
-harness failed before the eval receipt and goal-check output were published.
-The report was valid and durable; transporting all of it through one model
-turn was the defect. Although that incident used `read_file`, the incremental
-reader had the same failure mode on its first call because a fresh cursor is
-zero. The contract therefore covers both tools.
+이로 인해 대용량 파일 경로가 다음 경계에서 위험해졌습니다. 실제 loopy-loop 평가 실행기 시도에서, 5개의 검사가 모두 통과한 후 조율자가 1.9MiB 크기의 정본 평가 보고서를 열었습니다. 이 보고서에는 각 검사에 대한 전체 공급자 트랜스크립트가 포함되어 있었습니다. 단 하나의 제한 없는 도구 결과로 인해 다음 조율자 요청이 모델의 유효 컨텍스트 창을 초과했고, 그 결과 하네스는 평가 영수증과 목표 검사 출력을 발행하기 전에 실패했습니다. 보고서는 유효하고 온전하게 저장되어 있었지만, 그 전체를 단일 모델 턴에 실어 나른 것이 결함이었습니다. 비록 해당 사고는 `read_file`에서 발생했지만, 증분 판독기(`read_new_file_content`) 역시 새로운 커서가 0이므로 첫 호출 시 동일한 실패 모드를 가집니다. 따라서 이 규약은 두 도구 모두에 적용됩니다.
 
-## Contract
+## 규약 (Contract)
 
-Both readers return at most 32,768 decoded file-content characters and at most
-32 KiB after UTF-8 encoding. Short pagination metadata is outside those content
-limits. A multi-byte or invalid source may therefore yield fewer characters or
-consume fewer raw source bytes than an ASCII page.
+두 판독기는 모두 디코딩된 파일 콘텐츠 기준 최대 32,768자, 그리고 UTF-8 인코딩 후 최대 32KiB까지만 반환합니다. 짧은 페이지네이션 메타데이터는 이 콘텐츠 한도 외부에 위치합니다. 따라서 멀티바이트 문자나 유효하지 않은 소스는 ASCII 페이지보다 적은 글자 수를 산출하거나 원시 소스 바이트를 덜 소비할 수 있습니다.
 
-### Explicit reads
+### 명시적 판독 (`read_file`)
 
-`read_file` is a random-access character-page interface:
+`read_file`은 임의 접근 문자 페이지 인터페이스입니다:
 
-- `path` remains the only required argument and may be absolute or relative.
-- `offset_chars` is a named, zero-based decoded-character offset and defaults
-  to zero.
-- `limit_chars` is a named positive page size. It defaults to 32,768 and may be
-  smaller, but never larger than 32,768.
-- A file that fits in the initial page is returned exactly as before, including
-  the empty string for an empty file.
-- A truncated or explicitly offset page appends plain continuation metadata:
-  the half-open character range, total decoded length, whether EOF was reached,
-  and the next offset when more content remains.
-- Invalid pagination is rejected before filesystem access. Booleans are not
-  accepted as integers.
+- `path`는 유일한 필수 인자로 유지되며 절대 경로 또는 상대 경로일 수 있습니다.
+- `offset_chars`는 0부터 시작하는 디코딩 문자 오프셋(명명된 인자)이며 기본값은 0입니다.
+- `limit_chars`는 양의 페이지 크기(명명된 인자)입니다. 기본값은 32,768이며 더 작을 수는 있지만 32,768보다 클 수는 없습니다.
+- 초기 페이지 안에 모두 들어가는 파일은 이전과 완전히 동일하게 반환되며, 빈 파일은 빈 문자열로 반환됩니다.
+- 잘려 나갔거나 명시적 오프셋이 적용된 페이지에는 일반 텍스트 연속 메타데이터가 추가됩니다(반열린 문자 범위, 총 디코딩 길이, EOF 도달 여부, 남은 내용이 있을 경우 다음 오프셋).
+- 잘못된 페이지네이션 요청은 파일 시스템에 접근하기 전에 거부됩니다. 불리언은 정수로 인정되지 않습니다.
 
-Offsets use decoded Python characters after `errors="replace"`, not raw bytes.
-That keeps page boundaries legible and avoids splitting a Unicode code point.
-The implementation may read the source into process memory; the invariant is
-on the returned page that crosses into coordinator context.
+오프셋은 원시 바이트가 아니라 `errors="replace"` 처리 후의 디코딩된 파이썬 문자를 기준으로 합니다. 이를 통해 페이지 경계를 가독성 있게 유지하고 유니코드 코드 포인트가 중간에 잘리는 것을 방지합니다. 구현체는 소스를 프로세스 메모리로 읽어들일 수 있으나, 불변식은 조율자 컨텍스트로 전달되는 반환 페이지에 적용됩니다.
 
-### Incremental reads
+### 증분 판독 (`read_new_file_content`)
 
-`read_new_file_content` is a stateful FIFO page interface for files that grow:
+`read_new_file_content`는 크기가 증가하는 파일을 위한 상태 기반 FIFO 페이지 인터페이스입니다:
 
-- `path` remains its only argument. Each production binding created by
-  `build_fs_tool_bindings()` owns an isolated raw-byte cursor per path.
-- A call reads from that cursor without skipping backlog. When more observed
-  content remains, metadata reports the returned raw-byte range and tells the
-  coordinator to call again with the same path.
-- The cursor advances only past raw bytes fully represented in the returned
-  text. A UTF-8 code point crossing a page boundary is held for the next page,
-  rather than split into replacement characters. Invalid input still uses the
-  historical replacement-character behavior without exceeding the output cap.
-- A new delta that fits returns exactly as before. No new content returns the
-  empty string. Metadata appears only while backlog remains.
+- `path`가 유일한 인자로 유지됩니다. `build_fs_tool_bindings()`에 의해 생성된 각 프로덕션 바인딩은 경로별로 격리된 원시 바이트 커서를 소유합니다.
+- 호출 시 미처리 누적분을 건너뛰지 않고 해당 커서부터 읽습니다. 관찰된 미처리 내용이 남아 있는 경우, 메타데이터가 반환된 원시 바이트 범위를 보고하고 조율자에게 동일한 경로로 다시 호출할 것을 안내합니다.
+- 커서는 반환된 텍스트에 완전히 표현된 원시 바이트까지만 전진합니다. 페이지 경계에 걸치는 UTF-8 코드 포인트는 대체 문자로 분할되지 않고 다음 페이지로 넘겨집니다. 유효하지 않은 입력은 출력 상한을 초과하지 않고 기존의 대체 문자 동작을 유지합니다.
+- 한 페이지에 들어맞는 새로운 증분은 이전과 동일하게 반환됩니다. 새로운 내용이 없으면 빈 문자열을 반환합니다. 메타데이터는 미처리 잔여분이 있을 때만 표시됩니다.
 
-The incremental reader reads no more than one raw page at a time. Its cursor is
-process state, not a second durable trace: the caller-owned file remains the
-canonical complete artifact.
+증분 판독기는 한 번에 최대 원시 한 페이지만 읽습니다. 커서는 프로세스 상태일 뿐 두 번째 영속 트레이스가 아닙니다. 호출자가 소유한 파일이 여전히 정본 전체 아티팩트로 남습니다.
 
-## Why a fixed maximum is appropriate here
+## 왜 고정 상한이 적절한가
 
-The shell deadline in TH-D8 has no arbitrary maximum because a legitimate
-foreground batch may truthfully require many hours. File-tool output has the
-opposite constraint: every returned character must enter the next model
-request. A fixed page maximum therefore describes a real transport capacity,
-not a policy judgment about how much evidence the agent is allowed to inspect.
-The complete file remains available through additional pages.
+TH-D8의 셸 데드라인은 정당한 포그라운드 배치가 실제로 여러 시간을 필요로 할 수 있기 때문에 임의의 최대값이 없습니다. 그러나 파일 도구 출력은 반대의 제약을 가집니다. 반환된 모든 문자가 다음 모델 요청에 반드시 포함되어야 합니다. 따라서 고정된 페이지 상한은 에이전트가 검사할 수 있는 증거의 양에 대한 정책적 판단이 아니라, **실제 전송 용량의 한계**를 기술한 것입니다. 전체 파일은 추가 페이지 조회를 통해 여전히 접근 가능합니다.
 
-The harness does not decide which evidence matters and does not replace the
-report with a programmatic semantic verdict. For structured data, the
-coordinator may choose a focused command such as `jq` and then open individual
-supporting fields or pages. That choice stays with the coordinator.
+하네스는 어떤 증거가 중요한지 판단하지 않으며, 보고서를 프로그래밍 방식의 의미적 판정으로 대체하지도 않습니다. 구조화된 데이터의 경우 조율자는 `jq`와 같은 타겟 명령을 선택한 뒤 개별 지원 필드나 페이지만 열어볼 수 있습니다. 그 선택권은 온전히 조율자에게 있습니다.
 
-## Compatibility and traces
+## 호환성 및 추적 로그
 
-Small-read return values are unchanged. The `read_file` schema change is
-additive because both pagination arguments are optional; the incremental tool
-keeps its existing path-only schema. Large callers that depended on a single
-complete result must follow the explicit continuation offset, call the
-incremental reader again, or select a focused projection.
+소용량 파일 읽기의 반환값은 변경되지 않았습니다. `read_file`의 스키마 변경은 두 페이지네이션 인자가 모두 선택 사항이므로 추가적(additive) 변경입니다. 증분 도구도 기존의 경로 전용 스키마를 유지합니다. 단일 완전 결과를 기대하던 대용량 호출자는 명시적 연속 오프셋을 따르거나, 증분 판독기를 다시 호출하거나, 특정 투영(projection)을 선택해야 합니다.
 
-`run.json` continues to record the exact tool arguments and returned page. The
-canonical source file is neither rewritten nor copied by `read_file`, so a
-caller-owned trace retains the full evidence independently of what entered the
-coordinator context.
+`run.json`은 정확한 도구 인자와 반환된 페이지를 계속 기록합니다. 정본 소스 파일은 `read_file`에 의해 덮어써지거나 복사되지 않으므로, 호출자 소유의 트레이스는 조율자 컨텍스트에 들어간 것과 무관하게 전체 증거를 독립적으로 보존합니다.
 
-## Verification
+## 검증 (Verification)
 
-`src/tests/test_fs_tools.py` covers exact small-file compatibility, explicit
-default and smaller pages, empty and exact-boundary reads, continuation/EOF
-metadata, Unicode boundaries, invalid UTF-8 expansion, FIFO backlog, schema
-bounds, and invalid pagination. `src/tests/test_harness.py` proves per-run
-incremental cursors remain isolated. `src/tests/test_loop.py` proves that both
-tools reduce a multi-megabyte source to one bounded page in the next model
-request and `run.json`. Repository CI additionally runs Ruff, format checking,
-Pyright, and the full test suite on every supported Python version.
+`src/tests/test_fs_tools.py`는 소용량 파일의 정확한 호환성, 명시적 기본 및 소형 페이지, 빈 파일 및 정확한 경계 판독, 연속/EOF 메타데이터, 유니코드 경계, 잘못된 UTF-8 확장, FIFO 백로그, 스키마 경계, 잘못된 페이지네이션을 테스트합니다. `src/tests/test_harness.py`는 실행별 증분 커서가 격리됨을 검증합니다. `src/tests/test_loop.py`는 두 도구 모두 수 메가바이트 소스를 다음 모델 요청과 `run.json`에서 단일 유한 페이지로 축소함을 검증합니다. 저장소 CI는 지원되는 모든 파이썬 버전에서 Ruff, 포맷 검사, Pyright, 전체 테스트 스위트를 추가로 실행합니다.
