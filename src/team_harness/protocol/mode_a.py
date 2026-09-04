@@ -12,7 +12,6 @@ import re
 
 from team_harness.protocol.checks import CheckRunner
 from team_harness.protocol.config import load_protocol_config
-from team_harness.protocol.config import ProtocolAgentSpec
 from team_harness.protocol.config import ProtocolConfig
 from team_harness.protocol.git import git_preflight
 from team_harness.protocol.mode_c import _block
@@ -64,13 +63,10 @@ async def run_mode_a(
     state = ProtocolState(
         task_id=task_id, mode="A", user_request=user_request, target_repo=target_repo
     )
-    workers = (
-        proto_cfg.mode_a_worker_1.agent_type,
-        proto_cfg.mode_a_worker_2.agent_type,
-    )
+    workers = ("worker_1", "worker_2")
     worker_specs = {
-        proto_cfg.mode_a_worker_1.agent_type: proto_cfg.mode_a_worker_1,
-        proto_cfg.mode_a_worker_2.agent_type: proto_cfg.mode_a_worker_2,
+        "worker_1": proto_cfg.mode_a_worker_1,
+        "worker_2": proto_cfg.mode_a_worker_2,
     }
 
     # -- DEFINE --
@@ -137,8 +133,8 @@ async def run_mode_a(
         state.worker_status[worker] = StageStatus.RUNNING.value
         state_mgr.save_state(state)
 
-        agent_type = resolve_agent_type(worker)
-        worker_spec = worker_specs.get(worker, ProtocolAgentSpec(agent_type=worker))
+        worker_spec = worker_specs[worker]
+        agent_type = resolve_agent_type(worker_spec.agent_type)
         prompt = build_independent_work_prompt(
             task_id=task_id,
             user_request=user_request,
@@ -153,17 +149,27 @@ async def run_mode_a(
             timeout_sec=agent_timeout_sec,
             model=worker_spec.model,
         )
+        effective_model = (
+            result.effective_model
+            if result.effective_model is not None
+            else (result.model if result.model is not None else worker_spec.model)
+        )
         result.agent = worker
         result.agent_type = agent_type
         result.stage = Stage.INDEPENDENT_WORK.value
-        result.model = worker_spec.model
+        result.model = effective_model
+        result.requested_model = worker_spec.model
+        result.effective_model = effective_model
 
         state.handoffs.append(
             {
                 "stage": Stage.INDEPENDENT_WORK.value,
+                "lane": worker,
                 "agent": worker,
                 "agent_type": agent_type,
-                "model": worker_spec.model,
+                "model": effective_model,
+                "requested_model": worker_spec.model,
+                "effective_model": effective_model,
                 "success": result.success,
             }
         )
@@ -214,7 +220,12 @@ async def run_mode_a(
         state.worker_status[worker] = StageStatus.DONE.value
         state_mgr.append_event(
             "worker.finished",
+            lane=worker,
             agent=worker,
+            agent_type=agent_type,
+            model=effective_model,
+            requested_model=worker_spec.model,
+            effective_model=effective_model,
             checkpoint=state.checkpoints.get(worker, ""),
         )
         state_mgr.save_state(state)
@@ -254,10 +265,8 @@ async def run_mode_a(
             json.dumps(state.worker_tests.get(target, []), ensure_ascii=False)
         )[:20_000]
 
-        reviewer_type = resolve_agent_type(reviewer)
-        reviewer_spec = worker_specs.get(
-            reviewer, ProtocolAgentSpec(agent_type=reviewer)
-        )
+        reviewer_spec = worker_specs[reviewer]
+        reviewer_type = resolve_agent_type(reviewer_spec.agent_type)
         prompt = build_cross_review_prompt(
             task_id=task_id,
             user_request=user_request,
@@ -278,17 +287,28 @@ async def run_mode_a(
             timeout_sec=agent_timeout_sec,
             model=reviewer_spec.model,
         )
+        effective_model = (
+            result.effective_model
+            if result.effective_model is not None
+            else (result.model if result.model is not None else reviewer_spec.model)
+        )
         result.agent = reviewer
         result.agent_type = reviewer_type
         result.stage = Stage.CROSS_REVIEW.value
-        result.model = reviewer_spec.model
+        result.model = effective_model
+        result.requested_model = reviewer_spec.model
+        result.effective_model = effective_model
 
         state.handoffs.append(
             {
                 "stage": Stage.CROSS_REVIEW.value,
+                "lane": reviewer,
                 "agent": reviewer,
+                "agent_type": reviewer_type,
                 "target": target,
-                "model": reviewer_spec.model,
+                "model": effective_model,
+                "requested_model": reviewer_spec.model,
+                "effective_model": effective_model,
                 "success": result.success,
             }
         )
@@ -297,6 +317,10 @@ async def run_mode_a(
         state.cross_reviews[key] = {
             "reviewer": reviewer,
             "target": target,
+            "reviewer_agent": reviewer_type,
+            "model": effective_model,
+            "requested_model": reviewer_spec.model,
+            "effective_model": effective_model,
             "success": result.success,
             "output_text": result.output_text,
         }
@@ -324,8 +348,8 @@ async def run_mode_a(
         review_key = f"{reviewer}_reviews_{worker}"
         review_text = state.cross_reviews.get(review_key, {}).get("output_text", "")
 
-        worker_type = resolve_agent_type(worker)
-        worker_spec = worker_specs.get(worker, ProtocolAgentSpec(agent_type=worker))
+        worker_spec = worker_specs[worker]
+        worker_type = resolve_agent_type(worker_spec.agent_type)
         prompt = build_response_prompt(
             task_id=task_id,
             worker=worker,
@@ -340,16 +364,28 @@ async def run_mode_a(
             timeout_sec=agent_timeout_sec,
             model=worker_spec.model,
         )
+        effective_model = (
+            result.effective_model
+            if result.effective_model is not None
+            else (result.model if result.model is not None else worker_spec.model)
+        )
         result.agent = worker
         result.agent_type = worker_type
         result.stage = Stage.RESPONSE.value
-        result.model = worker_spec.model
+        result.model = effective_model
+        result.requested_model = worker_spec.model
+        result.effective_model = effective_model
 
         dispositions = re.findall(
             r"\b(?:ACCEPT|REJECT|PARTIAL|NEEDS_TEST)\b", result.output_text
         )
         state.responses[worker] = {
             "round": 1,
+            "lane": worker,
+            "agent": worker_type,
+            "model": effective_model,
+            "requested_model": worker_spec.model,
+            "effective_model": effective_model,
             "success": result.success,
             "dispositions": dispositions,
             "output_text": result.output_text,
@@ -357,8 +393,12 @@ async def run_mode_a(
         state.handoffs.append(
             {
                 "stage": Stage.RESPONSE.value,
+                "lane": worker,
                 "agent": worker,
-                "model": worker_spec.model,
+                "agent_type": worker_type,
+                "model": effective_model,
+                "requested_model": worker_spec.model,
+                "effective_model": effective_model,
                 "success": result.success,
             }
         )
@@ -385,7 +425,13 @@ async def run_mode_a(
     state_mgr.save_state(state)
     state_mgr.append_event(
         "selection.required",
-        options=["SELECT_CODEX", "SELECT_GEMINI", "SELECT_HYBRID", "REWORK", "CANCEL"],
+        options=[
+            "SELECT_WORKER_1",
+            "SELECT_WORKER_2",
+            "SELECT_HYBRID",
+            "REWORK",
+            "CANCEL",
+        ],
     )
 
     return state
@@ -466,12 +512,7 @@ async def resume_mode_a(
 
     # Verify checkpoints
     workers = (
-        list(state.worktrees.keys())
-        if state.worktrees
-        else [
-            proto_cfg.mode_a_worker_1.agent_type,
-            proto_cfg.mode_a_worker_2.agent_type,
-        ]
+        list(state.worktrees.keys()) if state.worktrees else ["worker_1", "worker_2"]
     )
     for worker in workers:
         cp = state.checkpoints.get(worker, "")
@@ -494,13 +535,18 @@ async def resume_mode_a(
             return _block(state, state_mgr, Stage.CODEX_MERGE.value, str(exc))
 
     # Determine selected workers
-    selected = (
-        [workers[0]]
-        if selection == UserSelection.SELECT_CODEX.value and len(workers) > 0
-        else [workers[1]]
-        if selection == UserSelection.SELECT_GEMINI.value and len(workers) > 1
-        else list(workers)
-    )
+    if selection in (
+        UserSelection.SELECT_WORKER_1.value,
+        UserSelection.SELECT_CODEX.value,
+    ):
+        selected = [workers[0]] if len(workers) > 0 else []
+    elif selection in (
+        UserSelection.SELECT_WORKER_2.value,
+        UserSelection.SELECT_GEMINI.value,
+    ):
+        selected = [workers[1]] if len(workers) > 1 else []
+    else:
+        selected = list(workers)
 
     selected_details = "\n".join(
         f"- {w}: branch={state.worker_branches.get(w, '')} "
@@ -533,16 +579,25 @@ async def resume_mode_a(
         timeout_sec=agent_timeout_sec,
         model=final_spec.model,
     )
+    effective_model = (
+        result.effective_model
+        if result.effective_model is not None
+        else (result.model if result.model is not None else final_spec.model)
+    )
     result.agent = final_type
     result.agent_type = final_type
     result.stage = Stage.CODEX_MERGE.value
-    result.model = final_spec.model
+    result.model = effective_model
+    result.requested_model = final_spec.model
+    result.effective_model = effective_model
 
     state.handoffs.append(
         {
             "stage": Stage.CODEX_MERGE.value,
             "agent": final_type,
-            "model": final_spec.model,
+            "model": effective_model,
+            "requested_model": final_spec.model,
+            "effective_model": effective_model,
             "success": result.success,
         }
     )

@@ -22,6 +22,7 @@ from team_harness.agents import spawner
 from team_harness.agents.manager import AgentManager
 from team_harness.agents.manager import AgentState
 from team_harness.agents.process_identity import signal_group
+from team_harness.agents.registry import resolve_template
 from team_harness.config import Config
 from team_harness.protocol.checks import CheckRunner
 from team_harness.protocol.checks import evaluate_checks
@@ -93,6 +94,8 @@ class TeamHarnessAgentRunner:
         timeout_sec: int,
         model: str | None = None,
     ) -> AgentResult:
+        resolve_template(agent_type=agent_type, config=self.config)
+
         started = time.monotonic()
         agent_id = f"{agent_type}_{uuid.uuid4().hex[:8]}"
         stdout_path = self.log_dir / f"{agent_id}_stdout.log"
@@ -120,6 +123,7 @@ class TeamHarnessAgentRunner:
             stdout_log=stdout_path,
             stderr_log=stderr_path,
             pgid=spawn_result.pgid,
+            effective_model=spawn_result.effective_model,
         )
         self.manager.register(agent_state)
 
@@ -159,7 +163,9 @@ class TeamHarnessAgentRunner:
         return AgentResult(
             agent=agent_type,
             agent_type=agent_type,
-            model=model,
+            model=spawn_result.effective_model,
+            requested_model=model,
+            effective_model=spawn_result.effective_model,
             stage="",
             success=success,
             exit_code=returncode,
@@ -302,6 +308,7 @@ async def run_mode_c(
         agent=design_spec.agent_type,
         role="DESIGN",
         model=design_spec.model,
+        requested_model=design_spec.model,
     )
     design_result = await _run_stage(
         state=state,
@@ -339,7 +346,9 @@ async def run_mode_c(
         "DESIGN_DONE",
         agent=design_spec.agent_type,
         role="DESIGN",
-        model=design_spec.model,
+        model=design_result.model,
+        requested_model=design_result.requested_model,
+        effective_model=design_result.effective_model,
     )
 
     # -- IMPLEMENT --
@@ -349,6 +358,7 @@ async def run_mode_c(
         agent=implement_spec.agent_type,
         role="IMPLEMENT",
         model=implement_spec.model,
+        requested_model=implement_spec.model,
     )
     implement_result = await _run_stage(
         state=state,
@@ -382,7 +392,9 @@ async def run_mode_c(
         "IMPLEMENT_DONE",
         agent=implement_spec.agent_type,
         role="IMPLEMENT",
-        model=implement_spec.model,
+        model=implement_result.model,
+        requested_model=implement_result.requested_model,
+        effective_model=implement_result.effective_model,
     )
 
     # Record changed files from implementation
@@ -431,6 +443,7 @@ async def run_mode_c(
             agent=review_spec.agent_type,
             role="REVIEW",
             model=review_spec.model,
+            requested_model=review_spec.model,
         )
         review_result = await _run_stage(
             state=state,
@@ -482,7 +495,9 @@ async def run_mode_c(
             cycle=review_cycle,
             agent=review_spec.agent_type,
             role="REVIEW",
-            model=review_spec.model,
+            model=review_result.model,
+            requested_model=review_result.requested_model,
+            effective_model=review_result.effective_model,
         )
 
         if verdict == ReviewVerdict.BLOCKED.value:
@@ -527,6 +542,7 @@ async def run_mode_c(
                 agent=fix_spec.agent_type,
                 role="FIX",
                 model=fix_spec.model,
+                requested_model=fix_spec.model,
             )
             fix_result = await _run_stage(
                 state=state,
@@ -562,7 +578,9 @@ async def run_mode_c(
                 cycle=review_cycle,
                 agent=fix_spec.agent_type,
                 role="FIX",
-                model=fix_spec.model,
+                model=fix_result.model,
+                requested_model=fix_result.requested_model,
+                effective_model=fix_result.effective_model,
             )
 
             # -- TEST (post-fix) --
@@ -649,6 +667,7 @@ async def _run_stage(
     state.role = role_name
     state.logical_agent = spec.agent_type
     state.backend_agent = agent_type
+    state.requested_model = spec.model
     state.model = spec.model
     state.stage_statuses[stage] = StageStatus.RUNNING.value
     state_mgr.save_state(state)
@@ -659,6 +678,7 @@ async def _run_stage(
         logical_agent=spec.agent_type,
         backend_agent=agent_type,
         model=spec.model,
+        requested_model=spec.model,
     )
 
     result = await agent_runner.run_agent(
@@ -672,7 +692,19 @@ async def _run_stage(
     result.agent_type = agent_type
     result.stage = stage
     result.role = role_name
-    result.model = spec.model
+    if result.requested_model is None:
+        result.requested_model = spec.model
+    effective_model = (
+        result.effective_model
+        if result.effective_model is not None
+        else (result.model if result.model is not None else spec.model)
+    )
+    result.model = effective_model
+    result.effective_model = effective_model
+
+    state.model = effective_model
+    state.requested_model = result.requested_model
+    state.effective_model = effective_model
 
     status = StageStatus.DONE.value if result.success else StageStatus.FAILED.value
     state.stage_statuses[stage] = status
@@ -682,7 +714,9 @@ async def _run_stage(
             "role": role_name,
             "agent": spec.agent_type,
             "agent_type": agent_type,
-            "model": spec.model,
+            "model": state.model,
+            "requested_model": state.requested_model,
+            "effective_model": state.effective_model,
             "success": result.success,
             "exit_code": result.exit_code,
             "review_verdict": result.review_verdict,
@@ -695,7 +729,9 @@ async def _run_stage(
         role=role_name,
         agent=spec.agent_type,
         agent_type=agent_type,
-        model=spec.model,
+        model=state.model,
+        requested_model=state.requested_model,
+        effective_model=state.effective_model,
         success=result.success,
     )
 

@@ -6,6 +6,7 @@ from team_harness.protocol.checks import evaluate_checks
 from team_harness.protocol.config import load_protocol_config
 from team_harness.protocol.config import ProtocolAgentSpec
 from team_harness.protocol.config import ProtocolConfig
+from team_harness.protocol.config import validate_protocol_config
 from team_harness.protocol.git import git_preflight
 from team_harness.protocol.git import GitPreflight
 from team_harness.protocol.git import is_git_repo
@@ -16,6 +17,7 @@ from team_harness.protocol.mode_c import TeamHarnessAgentRunner
 from team_harness.protocol.models import AGENT_TYPE_MAP
 from team_harness.protocol.models import CheckStatus
 from team_harness.protocol.models import LogicalAgent
+from team_harness.protocol.models import normalize_agent_type
 from team_harness.protocol.models import ProtocolMode
 from team_harness.protocol.models import ProtocolState
 from team_harness.protocol.models import resolve_agent_type
@@ -66,8 +68,10 @@ __all__ = [
     "is_git_repo",
     "list_worktrees",
     "load_protocol_config",
+    "normalize_agent_type",
     "remove_worktree",
     "resolve_agent_type",
     "run_mode_c",
+    "validate_protocol_config",
     "verify_checkpoint",
 ]

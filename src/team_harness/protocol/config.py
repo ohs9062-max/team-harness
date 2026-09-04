@@ -6,10 +6,14 @@ from dataclasses import dataclass
 from dataclasses import field
 import os
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from dotenv import dotenv_values
 
-from team_harness.protocol.models import resolve_agent_type
+from team_harness.protocol.models import normalize_agent_type
+
+if TYPE_CHECKING:
+    from team_harness.config import Config
 
 
 @dataclass(frozen=True)
@@ -29,7 +33,7 @@ class ProtocolAgentSpec:
         raw_agent = self.agent_type.strip() if self.agent_type else ""
         if not raw_agent:
             raise ValueError("agent_type must not be empty")
-        resolved = resolve_agent_type(raw_agent)
+        resolved = normalize_agent_type(raw_agent)
         object.__setattr__(self, "agent_type", resolved)
 
 
@@ -212,3 +216,19 @@ def load_protocol_config(
         mode_c_implement=spec_c_impl,
         mode_c_review=spec_c_rev,
     )
+
+
+def validate_protocol_config(proto_cfg: ProtocolConfig, config: Config) -> None:
+    """Validate that all configured agents in proto_cfg are registered in config."""
+    from team_harness.agents.registry import resolve_template
+
+    for spec in [
+        proto_cfg.mode_a_worker_1,
+        proto_cfg.mode_a_worker_2,
+        proto_cfg.mode_a_final,
+        proto_cfg.mode_b_default,
+        proto_cfg.mode_c_design,
+        proto_cfg.mode_c_implement,
+        proto_cfg.mode_c_review,
+    ]:
+        resolve_template(agent_type=spec.agent_type, config=config)

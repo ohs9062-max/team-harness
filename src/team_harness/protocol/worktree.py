@@ -13,7 +13,7 @@ import re
 import subprocess
 
 _SAFE_TASK_ID = re.compile(r"^[A-Za-z0-9._-]+$")
-_VALID_LABELS = {"codex", "gemini", "pipeline"}
+_VALID_LABELS = {"codex", "gemini", "pipeline", "worker_1", "worker_2"}
 
 DEFAULT_WORKTREES_DIR = Path.home() / ".team-harness" / "worktrees"
 

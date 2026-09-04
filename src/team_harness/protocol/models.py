@@ -67,11 +67,15 @@ class ReviewVerdict(str, Enum):
 
 
 class UserSelection(str, Enum):
-    SELECT_CODEX = "SELECT_CODEX"
-    SELECT_GEMINI = "SELECT_GEMINI"
+    SELECT_WORKER_1 = "SELECT_WORKER_1"
+    SELECT_WORKER_2 = "SELECT_WORKER_2"
     SELECT_HYBRID = "SELECT_HYBRID"
     REWORK = "REWORK"
     CANCEL = "CANCEL"
+
+    # Legacy aliases
+    SELECT_CODEX = "SELECT_CODEX"
+    SELECT_GEMINI = "SELECT_GEMINI"
 
 
 class CheckStatus(str, Enum):
@@ -99,6 +103,18 @@ AGENT_TYPE_MAP: dict[str, str] = {
     "antigravity": "antigravity",
     "agy": "antigravity",
 }
+
+
+def normalize_agent_type(agent: str) -> str:
+    """Normalize agent name or alias (e.g. gemini/agy -> antigravity).
+
+    Preserves custom or unmapped agent names without premature rejection.
+    """
+    cleaned = agent.strip()
+    if not cleaned:
+        raise ValueError("agent_type must not be empty")
+    lowered = cleaned.lower()
+    return AGENT_TYPE_MAP.get(lowered, cleaned)
 
 
 def resolve_agent_type(agent: str, valid_agents: set[str] | None = None) -> str:
@@ -143,6 +159,8 @@ class AgentResult:
     success: bool
     role: str = ""
     model: str | None = None
+    requested_model: str | None = None
+    effective_model: str | None = None
     exit_code: int | None = None
     stdout_path: str = ""
     stderr_path: str = ""
@@ -181,6 +199,8 @@ class ProtocolState:
     backend_agent: str | None = None
     role: str | None = None
     model: str | None = None
+    requested_model: str | None = None
+    effective_model: str | None = None
 
     # Checkpoints: label → commit hash, and optional primary checkpoint
     checkpoints: dict[str, str] = field(default_factory=dict)

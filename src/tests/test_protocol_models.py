@@ -75,7 +75,15 @@ def test_check_status_values() -> None:
 
 
 def test_user_selection_values() -> None:
-    expected = {"SELECT_CODEX", "SELECT_GEMINI", "SELECT_HYBRID", "REWORK", "CANCEL"}
+    expected = {
+        "SELECT_WORKER_1",
+        "SELECT_WORKER_2",
+        "SELECT_CODEX",
+        "SELECT_GEMINI",
+        "SELECT_HYBRID",
+        "REWORK",
+        "CANCEL",
+    }
     actual = {s.value for s in UserSelection}
     assert actual == expected
 
