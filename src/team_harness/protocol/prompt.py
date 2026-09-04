@@ -10,7 +10,7 @@ from __future__ import annotations
 def build_design_prompt(
     *, task_id: str, user_request: str, worktree_path: str, base_commit: str
 ) -> str:
-    """Build the prompt for the Claude DESIGN stage."""
+    """Build the prompt for the DESIGN stage (default: Claude, configurable)."""
     return (
         f"MODE C — DESIGN stage.\n"
         f"TASK-ID: {task_id}\n"
@@ -34,7 +34,7 @@ def build_implement_prompt(
     worktree_path: str,
     base_commit: str,
 ) -> str:
-    """Build the prompt for the Codex IMPLEMENT stage."""
+    """Build the prompt for the IMPLEMENT stage (default: Codex, configurable)."""
     design_excerpt = design_output[:30_000] if design_output else "(no design output)"
     return (
         f"MODE C — IMPLEMENT stage.\n"
@@ -61,7 +61,7 @@ def build_review_prompt(
     base_commit: str,
     review_cycle: int = 0,
 ) -> str:
-    """Build the prompt for the Gemini/antigravity REVIEW stage."""
+    """Build the prompt for the REVIEW stage (default: Antigravity/Gemini, configurable)."""
     design_excerpt = design_output[:15_000] if design_output else "(no design)"
     diff_excerpt = diff_text[:60_000] if diff_text else "(no diff)"
     checks_excerpt = check_results[:10_000] if check_results else "(no checks)"
@@ -94,7 +94,7 @@ def build_fix_prompt(
     base_commit: str,
     review_cycle: int = 0,
 ) -> str:
-    """Build the prompt for the Codex FIX stage."""
+    """Build the prompt for the FIX stage (default: Codex, configurable)."""
     findings_excerpt = review_findings[:30_000] if review_findings else "(no findings)"
     return (
         f"MODE C — FIX stage (cycle {review_cycle}).\n"

@@ -3,6 +3,9 @@
 from team_harness.protocol.checks import CheckResult
 from team_harness.protocol.checks import CheckRunner
 from team_harness.protocol.checks import evaluate_checks
+from team_harness.protocol.config import load_protocol_config
+from team_harness.protocol.config import ProtocolAgentSpec
+from team_harness.protocol.config import ProtocolConfig
 from team_harness.protocol.git import git_preflight
 from team_harness.protocol.git import GitPreflight
 from team_harness.protocol.git import is_git_repo
@@ -41,6 +44,8 @@ __all__ = [
     "CheckStatus",
     "GitPreflight",
     "LogicalAgent",
+    "ProtocolAgentSpec",
+    "ProtocolConfig",
     "ProtocolMode",
     "ProtocolState",
     "ProtocolStateManager",
@@ -60,6 +65,7 @@ __all__ = [
     "git_preflight",
     "is_git_repo",
     "list_worktrees",
+    "load_protocol_config",
     "remove_worktree",
     "resolve_agent_type",
     "run_mode_c",

@@ -7,41 +7,46 @@ Does NOT create new worktrees — continues on the existing work branch.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
-from team_harness.protocol.git import git_preflight, relay_evidence
-from team_harness.protocol.models import (
-    ProtocolState,
-    Stage,
-    StageStatus,
-    resolve_agent_type,
-)
-from team_harness.protocol.mode_c import AgentRunner, _block
+from team_harness.protocol.config import load_protocol_config
+from team_harness.protocol.config import ProtocolConfig
+from team_harness.protocol.git import relay_evidence
+from team_harness.protocol.mode_c import _block
+from team_harness.protocol.mode_c import AgentRunner
+from team_harness.protocol.models import ProtocolState
+from team_harness.protocol.models import resolve_agent_type
+from team_harness.protocol.models import Stage
+from team_harness.protocol.models import StageStatus
 from team_harness.protocol.state import ProtocolStateManager
 
 
 async def run_mode_b(
     *,
     task_id: str,
-    next_agent: str,
+    next_agent: str | None = None,
     run_dir: str | Path,
     target_repo: str,
     agent_runner: AgentRunner,
     agent_timeout_sec: int = 600,
+    protocol_config: ProtocolConfig | None = None,
 ) -> ProtocolState:
     """Resume a task by relaying to a different agent.
 
     State machine:
         (existing task) → GIT_VERIFY → CONTINUE
     """
+    proto_cfg = protocol_config or load_protocol_config()
+    target_agent = next_agent or proto_cfg.mode_b_default.agent_type
+    try:
+        resolved_type = resolve_agent_type(target_agent)
+    except ValueError as exc:
+        raise ValueError(f"Invalid relay agent: {target_agent}") from exc
+
     run_path = Path(run_dir).resolve()
     state_mgr = ProtocolStateManager(run_path)
     state = state_mgr.load_state()
     if state is None:
         raise ValueError(f"No protocol state found in {run_path}")
-
-    if next_agent not in ("claude", "codex", "gemini"):
-        raise ValueError(f"Invalid relay agent: {next_agent}")
 
     # -- GIT_VERIFY --
     state.stage = Stage.GIT_VERIFY.value
@@ -95,27 +100,29 @@ async def run_mode_b(
     # Update relay info
     previous_agent = state.relay.get("current_agent") or state.logical_agent
     state.mode = "B"
-    state.relay.update({
-        "previous_agent": previous_agent,
-        "next_agent": next_agent,
-        "worktree": str(worktree_path),
-        "branch": evidence["branch"],
-        "checkpoint": evidence["head"],
-        "recent_log": evidence["recent_log"],
-        "diff_stat": evidence["diff_stat"],
-        "remaining_work": state.stage or "first incomplete stage",
-    })
+    state.relay.update(
+        {
+            "previous_agent": previous_agent,
+            "next_agent": target_agent,
+            "worktree": str(worktree_path),
+            "branch": evidence["branch"],
+            "checkpoint": evidence["head"],
+            "recent_log": evidence["recent_log"],
+            "diff_stat": evidence["diff_stat"],
+            "remaining_work": state.stage or "first incomplete stage",
+        }
+    )
 
     state.previous_agent = previous_agent
-    state.next_agent = next_agent
-    state.logical_agent = next_agent
-    state.backend_agent = resolve_agent_type(next_agent)
+    state.next_agent = target_agent
+    state.logical_agent = target_agent
+    state.backend_agent = resolved_type
 
     state.stage_statuses[Stage.GIT_VERIFY.value] = StageStatus.DONE.value
     state_mgr.append_event(
         "relay.verified",
         previous_agent=previous_agent,
-        next_agent=next_agent,
+        next_agent=target_agent,
         discrepancies=discrepancies,
     )
 
@@ -126,9 +133,7 @@ async def run_mode_b(
     state.blocker = None
     state_mgr.save_state(state)
     state_mgr.append_event(
-        "relay.continue",
-        agent=next_agent,
-        worktree=str(worktree_path),
+        "relay.continue", agent=target_agent, worktree=str(worktree_path)
     )
 
     # In a full implementation, this would resume the remaining pipeline stages.

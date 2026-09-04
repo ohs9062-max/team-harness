@@ -277,9 +277,9 @@ field_path = ["sessionId"]
 command = ["agy"]
 shared_flags = [
     "--dangerously-skip-permissions",
-    "--print",
     "--print-timeout", "60m",
 ]
+prompt_flag = "--print"
 resume_flags = ["--conversation", "{session_id}"]
 model_flag = "--model"
 deduplicate_flags = [

@@ -25,6 +25,9 @@ from team_harness.agents.process_identity import signal_group
 from team_harness.config import Config
 from team_harness.protocol.checks import CheckRunner
 from team_harness.protocol.checks import evaluate_checks
+from team_harness.protocol.config import load_protocol_config
+from team_harness.protocol.config import ProtocolAgentSpec
+from team_harness.protocol.config import ProtocolConfig
 from team_harness.protocol.git import git_preflight
 from team_harness.protocol.models import AgentResult
 from team_harness.protocol.models import CheckStatus
@@ -52,7 +55,13 @@ class AgentRunner(TypingProtocol):
     """
 
     async def run_agent(
-        self, *, agent_type: str, prompt: str, cwd: str, timeout_sec: int
+        self,
+        *,
+        agent_type: str,
+        prompt: str,
+        cwd: str,
+        timeout_sec: int,
+        model: str | None = None,
     ) -> AgentResult: ...
 
 
@@ -76,7 +85,13 @@ class TeamHarnessAgentRunner:
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
     async def run_agent(
-        self, *, agent_type: str, prompt: str, cwd: str, timeout_sec: int
+        self,
+        *,
+        agent_type: str,
+        prompt: str,
+        cwd: str,
+        timeout_sec: int,
+        model: str | None = None,
     ) -> AgentResult:
         started = time.monotonic()
         agent_id = f"{agent_type}_{uuid.uuid4().hex[:8]}"
@@ -90,6 +105,7 @@ class TeamHarnessAgentRunner:
             cwd=Path(cwd),
             config=self.config,
             log_dir=self.log_dir,
+            model=model,
             stdout_path=stdout_path,
             stderr_path=stderr_path,
         )
@@ -143,6 +159,7 @@ class TeamHarnessAgentRunner:
         return AgentResult(
             agent=agent_type,
             agent_type=agent_type,
+            model=model,
             stage="",
             success=success,
             exit_code=returncode,
@@ -185,6 +202,7 @@ async def run_mode_c(
     agent_timeout_sec: int = 600,
     check_timeout_sec: int = 300,
     worktrees_base_dir: str | Path | None = None,
+    protocol_config: ProtocolConfig | None = None,
 ) -> ProtocolState:
     """Execute MODE C: ROLE PIPELINE.
 
@@ -196,6 +214,7 @@ async def run_mode_c(
         → FIX_REQUIRED → FIX(codex) → TEST → CHECK → REVIEW (max cycles)
         → BLOCKED → terminate
     """
+    proto_cfg = protocol_config or load_protocol_config()
     run_path = Path(run_dir).resolve()
     state_mgr = ProtocolStateManager(run_path)
     state = ProtocolState(
@@ -276,14 +295,21 @@ async def run_mode_c(
 
     worktree_path = wt.path
 
-    # -- DESIGN (Claude) --
-    state_mgr.append_event("DESIGN_STARTED", agent="claude")
+    # -- DESIGN --
+    design_spec = proto_cfg.mode_c_design
+    state_mgr.append_event(
+        "DESIGN_STARTED",
+        agent=design_spec.agent_type,
+        role="DESIGN",
+        model=design_spec.model,
+    )
     design_result = await _run_stage(
         state=state,
         state_mgr=state_mgr,
         agent_runner=agent_runner,
         stage=Stage.DESIGN.value,
-        logical_agent="claude",
+        role="DESIGN",
+        spec=design_spec,
         prompt=build_design_prompt(
             task_id=task_id,
             user_request=user_request,
@@ -302,20 +328,35 @@ async def run_mode_c(
         )
     if not design_result.output_text or not design_result.output_text.strip():
         return _block(
-            state, state_mgr, Stage.DESIGN.value, "Claude produced no design output"
+            state,
+            state_mgr,
+            Stage.DESIGN.value,
+            f"{design_spec.agent_type} produced no design output",
         )
 
-    state_mgr.write_output("design", "claude", design_result.output_text)
-    state_mgr.append_event("DESIGN_DONE", agent="claude")
+    state_mgr.write_output("design", design_spec.agent_type, design_result.output_text)
+    state_mgr.append_event(
+        "DESIGN_DONE",
+        agent=design_spec.agent_type,
+        role="DESIGN",
+        model=design_spec.model,
+    )
 
-    # -- IMPLEMENT (Codex) --
-    state_mgr.append_event("IMPLEMENT_STARTED", agent="codex")
+    # -- IMPLEMENT --
+    implement_spec = proto_cfg.mode_c_implement
+    state_mgr.append_event(
+        "IMPLEMENT_STARTED",
+        agent=implement_spec.agent_type,
+        role="IMPLEMENT",
+        model=implement_spec.model,
+    )
     implement_result = await _run_stage(
         state=state,
         state_mgr=state_mgr,
         agent_runner=agent_runner,
         stage=Stage.IMPLEMENT.value,
-        logical_agent="codex",
+        role="IMPLEMENT",
+        spec=implement_spec,
         prompt=build_implement_prompt(
             task_id=task_id,
             user_request=user_request,
@@ -334,8 +375,15 @@ async def run_mode_c(
             implement_result.error_message or "IMPLEMENT stage failed",
         )
 
-    state_mgr.write_output("implement", "codex", implement_result.output_text)
-    state_mgr.append_event("IMPLEMENT_DONE", agent="codex")
+    state_mgr.write_output(
+        "implement", implement_spec.agent_type, implement_result.output_text
+    )
+    state_mgr.append_event(
+        "IMPLEMENT_DONE",
+        agent=implement_spec.agent_type,
+        role="IMPLEMENT",
+        model=implement_spec.model,
+    )
 
     # Record changed files from implementation
     try:
@@ -345,14 +393,17 @@ async def run_mode_c(
     except (OSError, subprocess.CalledProcessError):
         state.changed_files = []
 
-    # -- TEST (Codex self-report) --
+    # -- TEST (self-report) --
     state.stage = Stage.TEST.value
     state.stage_statuses[Stage.TEST.value] = StageStatus.DONE.value
     state_mgr.save_state(state)
-    state_mgr.append_event("TEST_DONE", agent="codex")
+    state_mgr.append_event(
+        "TEST_DONE", agent=implement_spec.agent_type, role="IMPLEMENT"
+    )
 
     # -- Review loop (CHECK → REVIEW, with FIX cycles) --
     review_cycle = 0
+    review_spec = proto_cfg.mode_c_review
     while True:
         state.review_cycle = review_cycle
 
@@ -373,14 +424,21 @@ async def run_mode_c(
         except (OSError, subprocess.CalledProcessError):
             current_diff = ""
 
-        # -- REVIEW (Gemini → antigravity/agy) --
-        state_mgr.append_event("REVIEW_STARTED", cycle=review_cycle)
+        # -- REVIEW --
+        state_mgr.append_event(
+            "REVIEW_STARTED",
+            cycle=review_cycle,
+            agent=review_spec.agent_type,
+            role="REVIEW",
+            model=review_spec.model,
+        )
         review_result = await _run_stage(
             state=state,
             state_mgr=state_mgr,
             agent_runner=agent_runner,
             stage=Stage.REVIEW.value,
-            logical_agent="gemini",
+            role="REVIEW",
+            spec=review_spec,
             prompt=build_review_prompt(
                 task_id=task_id,
                 user_request=user_request,
@@ -414,9 +472,18 @@ async def run_mode_c(
 
         state.review_verdict = verdict
         state_mgr.write_output(
-            f"review_cycle_{review_cycle}", "gemini", review_result.output_text
+            f"review_cycle_{review_cycle}",
+            review_spec.agent_type,
+            review_result.output_text,
         )
-        state_mgr.append_event("REVIEW_RESULT", verdict=verdict, cycle=review_cycle)
+        state_mgr.append_event(
+            "REVIEW_RESULT",
+            verdict=verdict,
+            cycle=review_cycle,
+            agent=review_spec.agent_type,
+            role="REVIEW",
+            model=review_spec.model,
+        )
 
         if verdict == ReviewVerdict.BLOCKED.value:
             return _block(
@@ -452,14 +519,22 @@ async def run_mode_c(
                     f"Max review cycles ({max_review_cycles}) exceeded",
                 )
 
-            # -- FIX (Codex) --
-            state_mgr.append_event("FIX_STARTED", cycle=review_cycle)
+            # -- FIX --
+            fix_spec = proto_cfg.mode_c_implement
+            state_mgr.append_event(
+                "FIX_STARTED",
+                cycle=review_cycle,
+                agent=fix_spec.agent_type,
+                role="FIX",
+                model=fix_spec.model,
+            )
             fix_result = await _run_stage(
                 state=state,
                 state_mgr=state_mgr,
                 agent_runner=agent_runner,
                 stage=Stage.FIX.value,
-                logical_agent="codex",
+                role="FIX",
+                spec=fix_spec,
                 prompt=build_fix_prompt(
                     task_id=task_id,
                     user_request=user_request,
@@ -480,16 +555,26 @@ async def run_mode_c(
                 )
 
             state_mgr.write_output(
-                f"fix_cycle_{review_cycle}", "codex", fix_result.output_text
+                f"fix_cycle_{review_cycle}", fix_spec.agent_type, fix_result.output_text
             )
-            state_mgr.append_event("FIX_DONE", cycle=review_cycle, agent="codex")
+            state_mgr.append_event(
+                "FIX_DONE",
+                cycle=review_cycle,
+                agent=fix_spec.agent_type,
+                role="FIX",
+                model=fix_spec.model,
+            )
 
-            # -- TEST (Codex post-fix) --
+            # -- TEST (post-fix) --
             state.stage = Stage.TEST.value
             state.stage_statuses[Stage.TEST.value] = StageStatus.DONE.value
             state_mgr.save_state(state)
             state_mgr.append_event(
-                "TEST_DONE", stage=Stage.TEST.value, cycle=review_cycle
+                "TEST_DONE",
+                stage=Stage.TEST.value,
+                cycle=review_cycle,
+                agent=fix_spec.agent_type,
+                role="FIX",
             )
 
             # Update changed files after fix
@@ -548,39 +633,56 @@ async def _run_stage(
     state_mgr: ProtocolStateManager,
     agent_runner: AgentRunner,
     stage: str,
-    logical_agent: str,
+    role: str = "",
+    spec: ProtocolAgentSpec | None = None,
+    logical_agent: str | None = None,
     prompt: str,
     cwd: str,
     timeout_sec: int,
 ) -> AgentResult:
     """Run a single agent stage and record the result."""
-    agent_type = resolve_agent_type(logical_agent)
+    if spec is None:
+        spec = ProtocolAgentSpec(agent_type=logical_agent or "codex")
+    role_name = role or stage
+    agent_type = resolve_agent_type(spec.agent_type)
     state.stage = stage
-    state.logical_agent = logical_agent
+    state.role = role_name
+    state.logical_agent = spec.agent_type
     state.backend_agent = agent_type
+    state.model = spec.model
     state.stage_statuses[stage] = StageStatus.RUNNING.value
     state_mgr.save_state(state)
     state_mgr.append_event(
         f"{stage}_STARTED",
         stage=stage,
-        logical_agent=logical_agent,
+        role=role_name,
+        logical_agent=spec.agent_type,
         backend_agent=agent_type,
+        model=spec.model,
     )
 
     result = await agent_runner.run_agent(
-        agent_type=agent_type, prompt=prompt, cwd=cwd, timeout_sec=timeout_sec
+        agent_type=agent_type,
+        prompt=prompt,
+        cwd=cwd,
+        timeout_sec=timeout_sec,
+        model=spec.model,
     )
-    result.agent = logical_agent
+    result.agent = spec.agent_type
     result.agent_type = agent_type
     result.stage = stage
+    result.role = role_name
+    result.model = spec.model
 
     status = StageStatus.DONE.value if result.success else StageStatus.FAILED.value
     state.stage_statuses[stage] = status
     state.handoffs.append(
         {
             "stage": stage,
-            "agent": logical_agent,
+            "role": role_name,
+            "agent": spec.agent_type,
             "agent_type": agent_type,
+            "model": spec.model,
             "success": result.success,
             "exit_code": result.exit_code,
             "review_verdict": result.review_verdict,
@@ -588,7 +690,13 @@ async def _run_stage(
     )
     state_mgr.save_state(state)
     state_mgr.append_event(
-        f"{stage}_FINISHED", stage=stage, agent=logical_agent, success=result.success
+        f"{stage}_FINISHED",
+        stage=stage,
+        role=role_name,
+        agent=spec.agent_type,
+        agent_type=agent_type,
+        model=spec.model,
+        success=result.success,
     )
 
     return result

@@ -63,10 +63,10 @@ def test_default_agent_templates_structured_shape():
     assert DEFAULT_AGENT_TEMPLATES["antigravity"].command == ("agy",)
     assert DEFAULT_AGENT_TEMPLATES["antigravity"].shared_flags == (
         "--dangerously-skip-permissions",
-        "--print",
         "--print-timeout",
         "60m",
     )
+    assert DEFAULT_AGENT_TEMPLATES["antigravity"].prompt_flag == "--print"
     assert DEFAULT_AGENT_TEMPLATES["antigravity"].model_flag == "--model"
 
 

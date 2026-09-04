@@ -96,21 +96,31 @@ AGENT_TYPE_MAP: dict[str, str] = {
     "claude": "claude",
     "codex": "codex",
     "gemini": "antigravity",  # logical gemini → agent type antigravity → CLI agy
+    "antigravity": "antigravity",
+    "agy": "antigravity",
 }
 
 
-def resolve_agent_type(logical_agent: str) -> str:
-    """Resolve a logical Harness Protocol agent name to the team-harness agent type.
+def resolve_agent_type(agent: str, valid_agents: set[str] | None = None) -> str:
+    """Resolve an agent name to the team-harness agent type.
 
-    Raises ValueError for unknown logical agents.
+    Accepts logical roles ("gemini" -> "antigravity") or registered
+    agent types ("antigravity", "claude", "codex", etc.).
+    Raises ValueError for unknown agents.
     """
-    agent_type = AGENT_TYPE_MAP.get(logical_agent.lower())
-    if agent_type is None:
-        raise ValueError(
-            f"Unknown logical agent {logical_agent!r}. "
-            f"Known agents: {sorted(AGENT_TYPE_MAP)}"
-        )
-    return agent_type
+    lowered = agent.lower()
+    if lowered in AGENT_TYPE_MAP:
+        return AGENT_TYPE_MAP[lowered]
+    if valid_agents is not None and lowered in valid_agents:
+        return lowered
+    from team_harness.agents.template import DEFAULT_AGENT_TEMPLATES
+
+    if lowered in DEFAULT_AGENT_TEMPLATES:
+        return lowered
+    known = sorted(
+        set(list(AGENT_TYPE_MAP.keys()) + list(DEFAULT_AGENT_TEMPLATES.keys()))
+    )
+    raise ValueError(f"Unknown logical agent {agent!r}. Known agents: {known}")
 
 
 @dataclass
@@ -127,10 +137,12 @@ class WorktreeInfo:
 class AgentResult:
     """Result from a single agent stage execution."""
 
-    agent: str  # logical agent name
+    agent: str  # logical agent name or spec agent
     agent_type: str  # team-harness agent type
     stage: str
     success: bool
+    role: str = ""
+    model: str | None = None
     exit_code: int | None = None
     stdout_path: str = ""
     stderr_path: str = ""
@@ -167,6 +179,8 @@ class ProtocolState:
     # Agent tracking
     logical_agent: str | None = None
     backend_agent: str | None = None
+    role: str | None = None
+    model: str | None = None
 
     # Checkpoints: label → commit hash, and optional primary checkpoint
     checkpoints: dict[str, str] = field(default_factory=dict)

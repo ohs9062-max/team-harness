@@ -84,13 +84,20 @@ class MockAgentRunner:
         )
 
     async def run_agent(
-        self, *, agent_type: str, prompt: str, cwd: str, timeout_sec: int
+        self,
+        *,
+        agent_type: str,
+        prompt: str,
+        cwd: str,
+        timeout_sec: int,
+        model: str | None = None,
     ) -> AgentResult:
         call_record = {
             "agent_type": agent_type,
             "prompt": prompt,
             "cwd": cwd,
             "timeout_sec": timeout_sec,
+            "model": model,
         }
         self.calls.append(call_record)
 

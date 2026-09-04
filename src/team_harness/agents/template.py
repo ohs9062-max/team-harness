@@ -164,12 +164,8 @@ DEFAULT_AGENT_TEMPLATES: dict[str, AgentTemplate] = {
     ),
     "antigravity": AgentTemplate(
         command=("agy",),
-        shared_flags=(
-            "--dangerously-skip-permissions",
-            "--print",
-            "--print-timeout",
-            "60m",
-        ),
+        shared_flags=("--dangerously-skip-permissions", "--print-timeout", "60m"),
+        prompt_flag="--print",
         resume_flags=("--conversation", "{session_id}"),
         # agy accepts its models list's display names verbatim, e.g.
         # --model "Gemini 3.5 Flash (High)". No default pin: without an

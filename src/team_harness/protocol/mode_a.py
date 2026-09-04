@@ -7,36 +7,34 @@ After cross-review and response, the runner waits for user selection.
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
-from typing import Any
+import re
 
 from team_harness.protocol.checks import CheckRunner
+from team_harness.protocol.config import load_protocol_config
+from team_harness.protocol.config import ProtocolAgentSpec
+from team_harness.protocol.config import ProtocolConfig
 from team_harness.protocol.git import git_preflight
-from team_harness.protocol.models import (
-    AgentResult,
-    CheckStatus,
-    ProtocolState,
-    Stage,
-    StageStatus,
-    UserSelection,
-    resolve_agent_type,
-)
-from team_harness.protocol.mode_c import AgentRunner, _block, _run_checks
-from team_harness.protocol.prompt import (
-    build_cross_review_prompt,
-    build_independent_work_prompt,
-    build_merge_prompt,
-    build_response_prompt,
-)
-from team_harness.protocol.state import ProtocolStateManager, mask_sensitive
-from team_harness.protocol.worktree import (
-    changed_files,
-    checkpoint_worktree,
-    create_worktree,
-    diff_worktree,
-    verify_checkpoint,
-)
+from team_harness.protocol.mode_c import _block
+from team_harness.protocol.mode_c import _run_checks
+from team_harness.protocol.mode_c import AgentRunner
+from team_harness.protocol.models import CheckStatus
+from team_harness.protocol.models import ProtocolState
+from team_harness.protocol.models import resolve_agent_type
+from team_harness.protocol.models import Stage
+from team_harness.protocol.models import StageStatus
+from team_harness.protocol.models import UserSelection
+from team_harness.protocol.prompt import build_cross_review_prompt
+from team_harness.protocol.prompt import build_independent_work_prompt
+from team_harness.protocol.prompt import build_merge_prompt
+from team_harness.protocol.prompt import build_response_prompt
+from team_harness.protocol.state import mask_sensitive
+from team_harness.protocol.state import ProtocolStateManager
+from team_harness.protocol.worktree import changed_files
+from team_harness.protocol.worktree import checkpoint_worktree
+from team_harness.protocol.worktree import create_worktree
+from team_harness.protocol.worktree import diff_worktree
+from team_harness.protocol.worktree import verify_checkpoint
 
 
 async def run_mode_a(
@@ -50,24 +48,30 @@ async def run_mode_a(
     check_timeout_sec: int = 300,
     check_commands: list[list[str]] | None = None,
     auto_discover_checks: bool = True,
+    protocol_config: ProtocolConfig | None = None,
 ) -> ProtocolState:
     """Execute MODE A: PARALLEL COMPETITION.
 
     State machine:
         DEFINE → GIT_PREFLIGHT → BASE_FREEZE → WORKTREE_SETUP
-        → INDEPENDENT_WORK (codex + gemini in parallel worktrees)
+        → INDEPENDENT_WORK (two workers in parallel worktrees)
         → WORKER_GATE → CROSS_REVIEW → RESPONSE (1 round)
         → COMPARE → WAITING_USER
     """
+    proto_cfg = protocol_config or load_protocol_config()
     run_path = Path(run_dir).resolve()
     state_mgr = ProtocolStateManager(run_path)
     state = ProtocolState(
-        task_id=task_id,
-        mode="A",
-        user_request=user_request,
-        target_repo=target_repo,
+        task_id=task_id, mode="A", user_request=user_request, target_repo=target_repo
     )
-    workers = ("codex", "gemini")
+    workers = (
+        proto_cfg.mode_a_worker_1.agent_type,
+        proto_cfg.mode_a_worker_2.agent_type,
+    )
+    worker_specs = {
+        proto_cfg.mode_a_worker_1.agent_type: proto_cfg.mode_a_worker_1,
+        proto_cfg.mode_a_worker_2.agent_type: proto_cfg.mode_a_worker_2,
+    }
 
     # -- DEFINE --
     state.stage = Stage.DEFINE.value
@@ -134,6 +138,7 @@ async def run_mode_a(
         state_mgr.save_state(state)
 
         agent_type = resolve_agent_type(worker)
+        worker_spec = worker_specs.get(worker, ProtocolAgentSpec(agent_type=worker))
         prompt = build_independent_work_prompt(
             task_id=task_id,
             user_request=user_request,
@@ -146,16 +151,22 @@ async def run_mode_a(
             prompt=prompt,
             cwd=wt_path,
             timeout_sec=agent_timeout_sec,
+            model=worker_spec.model,
         )
         result.agent = worker
         result.agent_type = agent_type
         result.stage = Stage.INDEPENDENT_WORK.value
+        result.model = worker_spec.model
 
-        state.handoffs.append({
-            "stage": Stage.INDEPENDENT_WORK.value,
-            "agent": worker,
-            "success": result.success,
-        })
+        state.handoffs.append(
+            {
+                "stage": Stage.INDEPENDENT_WORK.value,
+                "agent": worker,
+                "agent_type": agent_type,
+                "model": worker_spec.model,
+                "success": result.success,
+            }
+        )
 
         if not result.success:
             state.worker_status[worker] = StageStatus.FAILED.value
@@ -216,22 +227,26 @@ async def run_mode_a(
     state.stage_statuses[Stage.CROSS_REVIEW.value] = StageStatus.RUNNING.value
     state_mgr.save_state(state)
 
-    pairs = [("gemini", "codex"), ("codex", "gemini")]
+    pairs = [(workers[1], workers[0]), (workers[0], workers[1])]
     for reviewer, target in pairs:
         target_wt = state.worktrees[target]["path"]
         target_cp = state.checkpoints.get(target, "")
 
         try:
-            diff_text = diff_worktree(
-                state.base_commit, target_cp, target_wt
-            ) if target_cp else ""
+            diff_text = (
+                diff_worktree(state.base_commit, target_cp, target_wt)
+                if target_cp
+                else ""
+            )
         except Exception:
             diff_text = ""
 
         try:
-            changed = changed_files(
-                state.base_commit, target_cp, target_wt
-            ) if target_cp else []
+            changed = (
+                changed_files(state.base_commit, target_cp, target_wt)
+                if target_cp
+                else []
+            )
         except Exception:
             changed = []
 
@@ -240,6 +255,9 @@ async def run_mode_a(
         )[:20_000]
 
         reviewer_type = resolve_agent_type(reviewer)
+        reviewer_spec = worker_specs.get(
+            reviewer, ProtocolAgentSpec(agent_type=reviewer)
+        )
         prompt = build_cross_review_prompt(
             task_id=task_id,
             user_request=user_request,
@@ -258,17 +276,22 @@ async def run_mode_a(
             prompt=prompt,
             cwd=target_wt,
             timeout_sec=agent_timeout_sec,
+            model=reviewer_spec.model,
         )
         result.agent = reviewer
         result.agent_type = reviewer_type
         result.stage = Stage.CROSS_REVIEW.value
+        result.model = reviewer_spec.model
 
-        state.handoffs.append({
-            "stage": Stage.CROSS_REVIEW.value,
-            "agent": reviewer,
-            "target": target,
-            "success": result.success,
-        })
+        state.handoffs.append(
+            {
+                "stage": Stage.CROSS_REVIEW.value,
+                "agent": reviewer,
+                "target": target,
+                "model": reviewer_spec.model,
+                "success": result.success,
+            }
+        )
 
         key = f"{reviewer}_reviews_{target}"
         state.cross_reviews[key] = {
@@ -279,9 +302,7 @@ async def run_mode_a(
         }
 
         if result.output_text:
-            state_mgr.write_output(
-                f"CROSS_REVIEW_{key}", reviewer, result.output_text
-            )
+            state_mgr.write_output(f"CROSS_REVIEW_{key}", reviewer, result.output_text)
 
         if not result.success:
             return _block(
@@ -299,11 +320,12 @@ async def run_mode_a(
     state.stage_statuses[Stage.RESPONSE.value] = StageStatus.RUNNING.value
     state_mgr.save_state(state)
 
-    for worker, reviewer in [("codex", "gemini"), ("gemini", "codex")]:
+    for worker, reviewer in [(workers[0], workers[1]), (workers[1], workers[0])]:
         review_key = f"{reviewer}_reviews_{worker}"
         review_text = state.cross_reviews.get(review_key, {}).get("output_text", "")
 
         worker_type = resolve_agent_type(worker)
+        worker_spec = worker_specs.get(worker, ProtocolAgentSpec(agent_type=worker))
         prompt = build_response_prompt(
             task_id=task_id,
             worker=worker,
@@ -316,10 +338,12 @@ async def run_mode_a(
             prompt=prompt,
             cwd=state.worktrees[worker]["path"],
             timeout_sec=agent_timeout_sec,
+            model=worker_spec.model,
         )
         result.agent = worker
         result.agent_type = worker_type
         result.stage = Stage.RESPONSE.value
+        result.model = worker_spec.model
 
         dispositions = re.findall(
             r"\b(?:ACCEPT|REJECT|PARTIAL|NEEDS_TEST)\b", result.output_text
@@ -330,11 +354,14 @@ async def run_mode_a(
             "dispositions": dispositions,
             "output_text": result.output_text,
         }
-        state.handoffs.append({
-            "stage": Stage.RESPONSE.value,
-            "agent": worker,
-            "success": result.success,
-        })
+        state.handoffs.append(
+            {
+                "stage": Stage.RESPONSE.value,
+                "agent": worker,
+                "model": worker_spec.model,
+                "success": result.success,
+            }
+        )
 
         if result.output_text:
             state_mgr.write_output(f"RESPONSE_{worker}", worker, result.output_text)
@@ -376,11 +403,13 @@ async def resume_mode_a(
     check_timeout_sec: int = 300,
     check_commands: list[list[str]] | None = None,
     auto_discover_checks: bool = True,
+    protocol_config: ProtocolConfig | None = None,
 ) -> ProtocolState:
     """Resume MODE A after user selection.
 
     Valid selections: SELECT_CODEX, SELECT_GEMINI, SELECT_HYBRID, REWORK, CANCEL.
     """
+    proto_cfg = protocol_config or load_protocol_config()
     run_path = Path(run_dir).resolve()
     state_mgr = ProtocolStateManager(run_path)
     state = state_mgr.load_state()
@@ -398,10 +427,7 @@ async def resume_mode_a(
         )
     if selection not in valid:
         return _block(
-            state,
-            state_mgr,
-            Stage.USER_SELECT.value,
-            f"Invalid selection: {selection}",
+            state, state_mgr, Stage.USER_SELECT.value, f"Invalid selection: {selection}"
         )
 
     state.user_selection = selection
@@ -439,7 +465,15 @@ async def resume_mode_a(
         )
 
     # Verify checkpoints
-    for worker in ("codex", "gemini"):
+    workers = (
+        list(state.worktrees.keys())
+        if state.worktrees
+        else [
+            proto_cfg.mode_a_worker_1.agent_type,
+            proto_cfg.mode_a_worker_2.agent_type,
+        ]
+    )
+    for worker in workers:
         cp = state.checkpoints.get(worker, "")
         if not cp:
             return _block(
@@ -461,11 +495,11 @@ async def resume_mode_a(
 
     # Determine selected workers
     selected = (
-        ["codex"]
-        if selection == UserSelection.SELECT_CODEX.value
-        else ["gemini"]
-        if selection == UserSelection.SELECT_GEMINI.value
-        else ["codex", "gemini"]
+        [workers[0]]
+        if selection == UserSelection.SELECT_CODEX.value and len(workers) > 0
+        else [workers[1]]
+        if selection == UserSelection.SELECT_GEMINI.value and len(workers) > 1
+        else list(workers)
     )
 
     selected_details = "\n".join(
@@ -480,7 +514,8 @@ async def resume_mode_a(
     state.stage_statuses[Stage.CODEX_MERGE.value] = StageStatus.RUNNING.value
     state_mgr.save_state(state)
 
-    codex_type = resolve_agent_type("codex")
+    final_spec = proto_cfg.mode_a_final
+    final_type = resolve_agent_type(final_spec.agent_type)
     prompt = build_merge_prompt(
         task_id=task_id,
         selection=selection,
@@ -492,27 +527,32 @@ async def resume_mode_a(
     )
 
     result = await agent_runner.run_agent(
-        agent_type=codex_type,
+        agent_type=final_type,
         prompt=prompt,
         cwd=target_repo,
         timeout_sec=agent_timeout_sec,
+        model=final_spec.model,
     )
-    result.agent = "codex"
-    result.agent_type = codex_type
+    result.agent = final_type
+    result.agent_type = final_type
     result.stage = Stage.CODEX_MERGE.value
+    result.model = final_spec.model
 
-    state.handoffs.append({
-        "stage": Stage.CODEX_MERGE.value,
-        "agent": "codex",
-        "success": result.success,
-    })
+    state.handoffs.append(
+        {
+            "stage": Stage.CODEX_MERGE.value,
+            "agent": final_type,
+            "model": final_spec.model,
+            "success": result.success,
+        }
+    )
 
     if not result.success:
         return _block(
             state,
             state_mgr,
             Stage.CODEX_MERGE.value,
-            result.error_message or "Codex integration failed",
+            result.error_message or f"Integration agent {final_type} failed",
         )
 
     state.merge_status = "INTEGRATED"
@@ -528,9 +568,7 @@ async def resume_mode_a(
         timeout_sec=check_timeout_sec,
     )
     if check_status == CheckStatus.FAIL.value:
-        return _block(
-            state, state_mgr, Stage.CHECK.value, "Integration checks failed"
-        )
+        return _block(state, state_mgr, Stage.CHECK.value, "Integration checks failed")
 
     # -- FINAL --
     state.stage = Stage.FINAL.value
