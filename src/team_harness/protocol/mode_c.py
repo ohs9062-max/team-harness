@@ -1,6 +1,7 @@
 """MODE C — ROLE PIPELINE state machine.
 
-Drives Claude DESIGN → Codex IMPLEMENT → TEST → System CHECK → Gemini(antigravity) REVIEW
+Drives DESIGN → IMPLEMENT → TEST → System CHECK → REVIEW
+(defaults to Claude DESIGN → Codex IMPLEMENT → Gemini/antigravity REVIEW)
 on top of the existing team-harness Agent execution engine.
 """
 
@@ -33,7 +34,6 @@ from team_harness.protocol.git import git_preflight
 from team_harness.protocol.models import AgentResult
 from team_harness.protocol.models import CheckStatus
 from team_harness.protocol.models import ProtocolState
-from team_harness.protocol.models import resolve_agent_type
 from team_harness.protocol.models import ReviewVerdict
 from team_harness.protocol.models import Stage
 from team_harness.protocol.models import StageStatus
@@ -662,7 +662,7 @@ async def _run_stage(
     if spec is None:
         spec = ProtocolAgentSpec(agent_type=logical_agent or "codex")
     role_name = role or stage
-    agent_type = resolve_agent_type(spec.agent_type)
+    agent_type = spec.agent_type
     state.stage = stage
     state.role = role_name
     state.logical_agent = spec.agent_type

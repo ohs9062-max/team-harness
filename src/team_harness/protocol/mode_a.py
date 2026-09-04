@@ -1,6 +1,6 @@
 """MODE A — PARALLEL COMPETITION state machine.
 
-Two workers (Codex + Gemini/antigravity) operate in independent worktrees.
+Two workers operate in independent worktrees (defaults to Codex + Antigravity).
 After cross-review and response, the runner waits for user selection.
 """
 
@@ -19,7 +19,6 @@ from team_harness.protocol.mode_c import _run_checks
 from team_harness.protocol.mode_c import AgentRunner
 from team_harness.protocol.models import CheckStatus
 from team_harness.protocol.models import ProtocolState
-from team_harness.protocol.models import resolve_agent_type
 from team_harness.protocol.models import Stage
 from team_harness.protocol.models import StageStatus
 from team_harness.protocol.models import UserSelection
@@ -134,7 +133,7 @@ async def run_mode_a(
         state_mgr.save_state(state)
 
         worker_spec = worker_specs[worker]
-        agent_type = resolve_agent_type(worker_spec.agent_type)
+        agent_type = worker_spec.agent_type
         prompt = build_independent_work_prompt(
             task_id=task_id,
             user_request=user_request,
@@ -154,7 +153,7 @@ async def run_mode_a(
             if result.effective_model is not None
             else (result.model if result.model is not None else worker_spec.model)
         )
-        result.agent = worker
+        result.agent = agent_type
         result.agent_type = agent_type
         result.stage = Stage.INDEPENDENT_WORK.value
         result.model = effective_model
@@ -165,7 +164,7 @@ async def run_mode_a(
             {
                 "stage": Stage.INDEPENDENT_WORK.value,
                 "lane": worker,
-                "agent": worker,
+                "agent": agent_type,
                 "agent_type": agent_type,
                 "model": effective_model,
                 "requested_model": worker_spec.model,
@@ -221,7 +220,7 @@ async def run_mode_a(
         state_mgr.append_event(
             "worker.finished",
             lane=worker,
-            agent=worker,
+            agent=agent_type,
             agent_type=agent_type,
             model=effective_model,
             requested_model=worker_spec.model,
@@ -266,7 +265,7 @@ async def run_mode_a(
         )[:20_000]
 
         reviewer_spec = worker_specs[reviewer]
-        reviewer_type = resolve_agent_type(reviewer_spec.agent_type)
+        reviewer_type = reviewer_spec.agent_type
         prompt = build_cross_review_prompt(
             task_id=task_id,
             user_request=user_request,
@@ -292,7 +291,7 @@ async def run_mode_a(
             if result.effective_model is not None
             else (result.model if result.model is not None else reviewer_spec.model)
         )
-        result.agent = reviewer
+        result.agent = reviewer_type
         result.agent_type = reviewer_type
         result.stage = Stage.CROSS_REVIEW.value
         result.model = effective_model
@@ -303,7 +302,7 @@ async def run_mode_a(
             {
                 "stage": Stage.CROSS_REVIEW.value,
                 "lane": reviewer,
-                "agent": reviewer,
+                "agent": reviewer_type,
                 "agent_type": reviewer_type,
                 "target": target,
                 "model": effective_model,
@@ -349,7 +348,7 @@ async def run_mode_a(
         review_text = state.cross_reviews.get(review_key, {}).get("output_text", "")
 
         worker_spec = worker_specs[worker]
-        worker_type = resolve_agent_type(worker_spec.agent_type)
+        worker_type = worker_spec.agent_type
         prompt = build_response_prompt(
             task_id=task_id,
             worker=worker,
@@ -369,7 +368,7 @@ async def run_mode_a(
             if result.effective_model is not None
             else (result.model if result.model is not None else worker_spec.model)
         )
-        result.agent = worker
+        result.agent = worker_type
         result.agent_type = worker_type
         result.stage = Stage.RESPONSE.value
         result.model = effective_model
@@ -394,7 +393,7 @@ async def run_mode_a(
             {
                 "stage": Stage.RESPONSE.value,
                 "lane": worker,
-                "agent": worker,
+                "agent": worker_type,
                 "agent_type": worker_type,
                 "model": effective_model,
                 "requested_model": worker_spec.model,
@@ -561,7 +560,7 @@ async def resume_mode_a(
     state_mgr.save_state(state)
 
     final_spec = proto_cfg.mode_a_final
-    final_type = resolve_agent_type(final_spec.agent_type)
+    final_type = final_spec.agent_type
     prompt = build_merge_prompt(
         task_id=task_id,
         selection=selection,
@@ -595,6 +594,7 @@ async def resume_mode_a(
         {
             "stage": Stage.CODEX_MERGE.value,
             "agent": final_type,
+            "agent_type": final_type,
             "model": effective_model,
             "requested_model": final_spec.model,
             "effective_model": effective_model,

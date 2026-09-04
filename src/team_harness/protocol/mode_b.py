@@ -13,8 +13,8 @@ from team_harness.protocol.config import ProtocolConfig
 from team_harness.protocol.git import relay_evidence
 from team_harness.protocol.mode_c import _block
 from team_harness.protocol.mode_c import AgentRunner
+from team_harness.protocol.models import normalize_agent_type
 from team_harness.protocol.models import ProtocolState
-from team_harness.protocol.models import resolve_agent_type
 from team_harness.protocol.models import Stage
 from team_harness.protocol.models import StageStatus
 from team_harness.protocol.state import ProtocolStateManager
@@ -36,11 +36,9 @@ async def run_mode_b(
         (existing task) → GIT_VERIFY → CONTINUE
     """
     proto_cfg = protocol_config or load_protocol_config()
-    target_agent = next_agent or proto_cfg.mode_b_default.agent_type
-    try:
-        resolved_type = resolve_agent_type(target_agent)
-    except ValueError as exc:
-        raise ValueError(f"Invalid relay agent: {target_agent}") from exc
+    raw_target = next_agent or proto_cfg.mode_b_default.agent_type
+    target_agent = normalize_agent_type(raw_target)
+    resolved_type = target_agent
 
     run_path = Path(run_dir).resolve()
     state_mgr = ProtocolStateManager(run_path)

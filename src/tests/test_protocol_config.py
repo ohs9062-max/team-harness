@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from team_harness.agents.manager import AgentManager
 from team_harness.agents.registry import build_command
 from team_harness.agents.registry import resolve_template
 from team_harness.config import AgentTemplate
@@ -17,6 +18,7 @@ from team_harness.protocol.config import ProtocolConfig
 from team_harness.protocol.config import validate_protocol_config
 from team_harness.protocol.mode_a import resume_mode_a
 from team_harness.protocol.mode_a import run_mode_a
+from team_harness.protocol.mode_b import run_mode_b
 from team_harness.protocol.mode_c import run_mode_c
 from team_harness.protocol.mode_c import TeamHarnessAgentRunner
 from team_harness.protocol.models import AgentResult
@@ -60,6 +62,14 @@ def _init_git_repo(path: Path) -> str:
         capture_output=True,
         text=True,
     ).stdout.strip()
+
+
+@pytest.fixture
+def repo_path(tmp_path: Path) -> Path:
+    repo = tmp_path / "test_repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+    return repo
 
 
 class FakeAgentRunner:
@@ -863,3 +873,327 @@ async def test_20_16_handoff_and_events_record_requested_and_effective(tmp_path:
     impl_finished = next(e for e in events if e.get("type") == "IMPLEMENT_FINISHED")
     assert impl_finished["requested_model"] is None
     assert impl_finished["effective_model"] == "gpt-5.6-sol"
+
+
+# 17. Custom agent mode_c_design reaches runner without resolution error
+@pytest.mark.asyncio
+async def test_20_17_custom_agent_mode_c_design_reaches_runner(
+    repo_path: Path, tmp_path: Path
+):
+    run_dir = tmp_path / "mode_c_astral_design"
+    runner = FakeAgentRunner()
+    cfg = ProtocolConfig(mode_c_design=ProtocolAgentSpec("astral", "astral-arch"))
+    state = await run_mode_c(
+        task_id="task-astral-design",
+        user_request="Design new system",
+        target_repo=str(repo_path),
+        run_dir=str(run_dir),
+        agent_runner=runner,
+        auto_discover_checks=False,
+        protocol_config=cfg,
+    )
+    design_call = next(c for c in runner.calls if "MODE C — DESIGN" in c["prompt"])
+    assert design_call["agent_type"] == "astral"
+    assert design_call["model"] == "astral-arch"
+
+    design_handoff = next(h for h in state.handoffs if h["stage"] == Stage.DESIGN.value)
+    assert design_handoff["agent"] == "astral"
+    assert design_handoff["agent_type"] == "astral"
+    assert design_handoff["model"] == "astral-arch"
+    assert design_handoff["requested_model"] == "astral-arch"
+
+
+# 18. Custom agent mode_c_implement reaches runner without resolution error
+@pytest.mark.asyncio
+async def test_20_18_custom_agent_mode_c_implement_reaches_runner(
+    repo_path: Path, tmp_path: Path
+):
+    run_dir = tmp_path / "mode_c_astral_impl"
+    runner = FakeAgentRunner()
+    cfg = ProtocolConfig(mode_c_implement=ProtocolAgentSpec("astral", "astral-coder"))
+    state = await run_mode_c(
+        task_id="task-astral-impl",
+        user_request="Implement new feature",
+        target_repo=str(repo_path),
+        run_dir=str(run_dir),
+        agent_runner=runner,
+        auto_discover_checks=False,
+        protocol_config=cfg,
+    )
+    impl_call = next(c for c in runner.calls if "MODE C — IMPLEMENT" in c["prompt"])
+    assert impl_call["agent_type"] == "astral"
+    assert impl_call["model"] == "astral-coder"
+
+    impl_handoff = next(
+        h for h in state.handoffs if h["stage"] == Stage.IMPLEMENT.value
+    )
+    assert impl_handoff["agent"] == "astral"
+    assert impl_handoff["agent_type"] == "astral"
+    assert impl_handoff["model"] == "astral-coder"
+    assert impl_handoff["requested_model"] == "astral-coder"
+
+
+# 19. Custom agent mode_c_review reaches runner without resolution error
+@pytest.mark.asyncio
+async def test_20_19_custom_agent_mode_c_review_reaches_runner(
+    repo_path: Path, tmp_path: Path
+):
+    run_dir = tmp_path / "mode_c_astral_review"
+    runner = FakeAgentRunner()
+    cfg = ProtocolConfig(mode_c_review=ProtocolAgentSpec("astral", "astral-reviewer"))
+    state = await run_mode_c(
+        task_id="task-astral-review",
+        user_request="Review implementation",
+        target_repo=str(repo_path),
+        run_dir=str(run_dir),
+        agent_runner=runner,
+        auto_discover_checks=False,
+        protocol_config=cfg,
+    )
+    review_call = next(c for c in runner.calls if "MODE C — REVIEW" in c["prompt"])
+    assert review_call["agent_type"] == "astral"
+    assert review_call["model"] == "astral-reviewer"
+
+    review_handoff = next(h for h in state.handoffs if h["stage"] == Stage.REVIEW.value)
+    assert review_handoff["agent"] == "astral"
+    assert review_handoff["agent_type"] == "astral"
+    assert review_handoff["model"] == "astral-reviewer"
+    assert review_handoff["requested_model"] == "astral-reviewer"
+
+
+# 20. Custom agent mode_a_worker_1 reaches runner without resolution error
+@pytest.mark.asyncio
+async def test_20_20_custom_agent_mode_a_worker_1_reaches_runner(
+    mode_a_repo: Path, tmp_path: Path
+):
+    run_dir = tmp_path / "mode_a_astral_w1"
+    runner = FakeAgentRunner()
+    cfg = ProtocolConfig(mode_a_worker_1=ProtocolAgentSpec("astral", "astral-w1"))
+    state = await run_mode_a(
+        task_id="task-astral-w1",
+        user_request="Worker 1 test",
+        target_repo=str(mode_a_repo),
+        run_dir=str(run_dir),
+        agent_runner=runner,
+        auto_discover_checks=False,
+        protocol_config=cfg,
+    )
+    w1_call = runner.calls[0]
+    assert w1_call["agent_type"] == "astral"
+    assert w1_call["model"] == "astral-w1"
+
+    w1_handoff = next(
+        h
+        for h in state.handoffs
+        if h["stage"] == Stage.INDEPENDENT_WORK.value and h["lane"] == "worker_1"
+    )
+    assert w1_handoff["lane"] == "worker_1"
+    assert w1_handoff["agent"] == "astral"
+    assert w1_handoff["agent_type"] == "astral"
+    assert w1_handoff["model"] == "astral-w1"
+
+
+# 21. Custom agent mode_a_worker_2 reaches runner (including cross review)
+@pytest.mark.asyncio
+async def test_20_21_custom_agent_mode_a_worker_2_reaches_runner(
+    mode_a_repo: Path, tmp_path: Path
+):
+    run_dir = tmp_path / "mode_a_astral_w2"
+    runner = FakeAgentRunner()
+    cfg = ProtocolConfig(mode_a_worker_2=ProtocolAgentSpec("astral", "astral-w2"))
+    state = await run_mode_a(
+        task_id="task-astral-w2",
+        user_request="Worker 2 test",
+        target_repo=str(mode_a_repo),
+        run_dir=str(run_dir),
+        agent_runner=runner,
+        auto_discover_checks=False,
+        protocol_config=cfg,
+    )
+    astral_calls = [c for c in runner.calls if c["agent_type"] == "astral"]
+    assert len(astral_calls) >= 2  # INDEPENDENT_WORK and CROSS_REVIEW
+
+    w2_handoff = next(
+        h
+        for h in state.handoffs
+        if h["stage"] == Stage.INDEPENDENT_WORK.value and h["lane"] == "worker_2"
+    )
+    assert w2_handoff["lane"] == "worker_2"
+    assert w2_handoff["agent"] == "astral"
+    assert w2_handoff["agent_type"] == "astral"
+
+    cr_handoff = next(
+        h
+        for h in state.handoffs
+        if h["stage"] == Stage.CROSS_REVIEW.value and h["lane"] == "worker_2"
+    )
+    assert cr_handoff["lane"] == "worker_2"
+    assert cr_handoff["agent"] == "astral"
+    assert cr_handoff["agent_type"] == "astral"
+
+
+# 22. Custom agent mode_a_final reaches runner on resume
+@pytest.mark.asyncio
+async def test_20_22_custom_agent_mode_a_final_reaches_runner_on_resume(
+    mode_a_repo: Path, tmp_path: Path
+):
+    run_dir = tmp_path / "mode_a_astral_final"
+    runner = FakeAgentRunner()
+    cfg = ProtocolConfig(mode_a_final=ProtocolAgentSpec("astral", "astral-final"))
+    await run_mode_a(
+        task_id="task-astral-final",
+        user_request="Final merge test",
+        target_repo=str(mode_a_repo),
+        run_dir=str(run_dir),
+        agent_runner=runner,
+        auto_discover_checks=False,
+        protocol_config=cfg,
+    )
+    resumed = await resume_mode_a(
+        task_id="task-astral-final",
+        selection="SELECT_WORKER_1",
+        user_instruction="proceed",
+        run_dir=str(run_dir),
+        target_repo=str(mode_a_repo),
+        agent_runner=runner,
+        auto_discover_checks=False,
+        protocol_config=cfg,
+    )
+    merge_call = next(c for c in runner.calls if "MODE A — CODEX_MERGE" in c["prompt"])
+    assert merge_call["agent_type"] == "astral"
+    assert merge_call["model"] == "astral-final"
+
+    merge_handoff = next(
+        h for h in resumed.handoffs if h["stage"] == Stage.CODEX_MERGE.value
+    )
+    assert merge_handoff["agent"] == "astral"
+    assert merge_handoff["agent_type"] == "astral"
+    assert merge_handoff["model"] == "astral-final"
+
+
+# 23. MODE B default with astral accepted without protocol strict resolution error
+@pytest.mark.asyncio
+async def test_20_23_custom_agent_mode_b_default_accepted(
+    repo_path: Path, tmp_path: Path
+):
+    run_dir = tmp_path / "mode_b_astral_run"
+    runner = FakeAgentRunner()
+    # First create task and worktree via run_mode_c
+    await run_mode_c(
+        task_id="task-astral-relay",
+        user_request="Initial task",
+        target_repo=str(repo_path),
+        run_dir=str(run_dir),
+        agent_runner=runner,
+        auto_discover_checks=False,
+    )
+    # Relay to custom agent astral via mode_b_default
+    cfg_b = ProtocolConfig(mode_b_default=ProtocolAgentSpec("astral", "astral-relay"))
+    state_b = await run_mode_b(
+        task_id="task-astral-relay",
+        run_dir=str(run_dir),
+        target_repo=str(repo_path),
+        agent_runner=runner,
+        protocol_config=cfg_b,
+    )
+    assert state_b.next_agent == "astral"
+    assert state_b.logical_agent == "astral"
+    assert state_b.backend_agent == "astral"
+
+
+# 24. Bogus unregistered agent fails in TeamHarnessAgentRunner.run_agent
+@pytest.mark.asyncio
+async def test_20_24_unregistered_bogus_agent_fails_in_runner(tmp_path: Path):
+    runner = TeamHarnessAgentRunner(
+        config=Config(), manager=AgentManager(), log_dir=tmp_path / "logs"
+    )
+    with pytest.raises(ValueError, match="Unknown agent type 'bogus_agent_xyz'"):
+        await runner.run_agent(
+            agent_type="bogus_agent_xyz",
+            prompt="test",
+            cwd=str(tmp_path),
+            timeout_sec=10,
+        )
+
+
+# 25. MODE A handoff verifies lane and agent are separated cleanly
+@pytest.mark.asyncio
+async def test_20_25_mode_a_handoff_separates_lane_and_agent(
+    mode_a_repo: Path, tmp_path: Path
+):
+    run_dir = tmp_path / "mode_a_lane_agent_separation"
+    runner = FakeAgentRunner()
+    cfg = ProtocolConfig(
+        mode_a_worker_1=ProtocolAgentSpec("astral", "astral-model"),
+        mode_a_worker_2=ProtocolAgentSpec("codex", "codex-model"),
+    )
+    state = await run_mode_a(
+        task_id="task-lane-agent-sep",
+        user_request="Parallel work",
+        target_repo=str(mode_a_repo),
+        run_dir=str(run_dir),
+        agent_runner=runner,
+        auto_discover_checks=False,
+        protocol_config=cfg,
+    )
+
+    # Worker 1 independent work handoff
+    w1_h = next(
+        h
+        for h in state.handoffs
+        if h["stage"] == Stage.INDEPENDENT_WORK.value and h["lane"] == "worker_1"
+    )
+    assert w1_h["lane"] == "worker_1"
+    assert w1_h["agent"] == "astral"
+    assert w1_h["agent_type"] == "astral"
+
+    # Worker 2 independent work handoff
+    w2_h = next(
+        h
+        for h in state.handoffs
+        if h["stage"] == Stage.INDEPENDENT_WORK.value and h["lane"] == "worker_2"
+    )
+    assert w2_h["lane"] == "worker_2"
+    assert w2_h["agent"] == "codex"
+    assert w2_h["agent_type"] == "codex"
+
+    # Worker 1 cross review handoff (reviews worker 2)
+    w1_cr = next(
+        h
+        for h in state.handoffs
+        if h["stage"] == Stage.CROSS_REVIEW.value and h["lane"] == "worker_1"
+    )
+    assert w1_cr["lane"] == "worker_1"
+    assert w1_cr["agent"] == "astral"
+    assert w1_cr["agent_type"] == "astral"
+    assert w1_cr["target"] == "worker_2"
+
+    # Worker 2 cross review handoff (reviews worker 1)
+    w2_cr = next(
+        h
+        for h in state.handoffs
+        if h["stage"] == Stage.CROSS_REVIEW.value and h["lane"] == "worker_2"
+    )
+    assert w2_cr["lane"] == "worker_2"
+    assert w2_cr["agent"] == "codex"
+    assert w2_cr["agent_type"] == "codex"
+    assert w2_cr["target"] == "worker_1"
+
+    # Response handoffs
+    w1_resp = next(
+        h
+        for h in state.handoffs
+        if h["stage"] == Stage.RESPONSE.value and h["lane"] == "worker_1"
+    )
+    assert w1_resp["lane"] == "worker_1"
+    assert w1_resp["agent"] == "astral"
+    assert w1_resp["agent_type"] == "astral"
+
+    w2_resp = next(
+        h
+        for h in state.handoffs
+        if h["stage"] == Stage.RESPONSE.value and h["lane"] == "worker_2"
+    )
+    assert w2_resp["lane"] == "worker_2"
+    assert w2_resp["agent"] == "codex"
+    assert w2_resp["agent_type"] == "codex"
