@@ -1,70 +1,175 @@
 """MODE C — ROLE PIPELINE state machine.
 
-Drives Claude DESIGN → Codex IMPLEMENT → System CHECK → Gemini(antigravity) REVIEW
+Drives Claude DESIGN → Codex IMPLEMENT → TEST → System CHECK → Gemini(antigravity) REVIEW
 on top of the existing team-harness Agent execution engine.
 """
 
 from __future__ import annotations
 
 import asyncio
-import re
-import time
+from datetime import datetime
+from datetime import UTC
 from pathlib import Path
-from typing import Any, Protocol as TypingProtocol
+import re
+import signal
+import subprocess
+import time
+from typing import Any
+from typing import Protocol as TypingProtocol
+import uuid
 
-from team_harness.protocol.checks import CheckRunner, CheckResult
+from team_harness.agents import spawner
+from team_harness.agents.manager import AgentManager
+from team_harness.agents.manager import AgentState
+from team_harness.agents.process_identity import signal_group
+from team_harness.config import Config
+from team_harness.protocol.checks import CheckRunner
+from team_harness.protocol.checks import evaluate_checks
 from team_harness.protocol.git import git_preflight
-from team_harness.protocol.models import (
-    AGENT_TYPE_MAP,
-    AgentResult,
-    CheckStatus,
-    ProtocolState,
-    ReviewVerdict,
-    Stage,
-    StageStatus,
-    resolve_agent_type,
-)
-from team_harness.protocol.prompt import (
-    build_design_prompt,
-    build_fix_prompt,
-    build_implement_prompt,
-    build_review_prompt,
-)
+from team_harness.protocol.models import AgentResult
+from team_harness.protocol.models import CheckStatus
+from team_harness.protocol.models import ProtocolState
+from team_harness.protocol.models import resolve_agent_type
+from team_harness.protocol.models import ReviewVerdict
+from team_harness.protocol.models import Stage
+from team_harness.protocol.models import StageStatus
+from team_harness.protocol.prompt import build_design_prompt
+from team_harness.protocol.prompt import build_fix_prompt
+from team_harness.protocol.prompt import build_implement_prompt
+from team_harness.protocol.prompt import build_review_prompt
 from team_harness.protocol.state import ProtocolStateManager
-from team_harness.protocol.worktree import (
-    WorktreeRef,
-    changed_files,
-    checkpoint_worktree,
-    create_worktree,
-    diff_worktree,
-)
+from team_harness.protocol.worktree import changed_files
+from team_harness.protocol.worktree import checkpoint_worktree
+from team_harness.protocol.worktree import create_worktree
+from team_harness.protocol.worktree import diff_worktree
 
 
 class AgentRunner(TypingProtocol):
     """Interface for running an agent (real or mock).
 
-    Implementations must return an ``AgentResult``.  The real implementation
-    uses ``team_harness.agents.spawner.spawn()``.
+    Implementations must return an ``AgentResult``. The real implementation
+    delegates to ``team_harness.agents.spawner.spawn()``.
     """
 
     async def run_agent(
-        self,
-        *,
-        agent_type: str,
-        prompt: str,
-        cwd: str,
-        timeout_sec: int,
+        self, *, agent_type: str, prompt: str, cwd: str, timeout_sec: int
     ) -> AgentResult: ...
 
 
-def _extract_verdict(output: str) -> str:
-    """Extract the VERDICT line from reviewer output."""
+class TeamHarnessAgentRunner:
+    """AgentRunner implementation that delegates to team_harness execution engine."""
+
+    def __init__(
+        self,
+        *,
+        config: Config | None = None,
+        manager: AgentManager | None = None,
+        log_dir: str | Path | None = None,
+    ) -> None:
+        self.config = config or Config()
+        self.manager = manager or AgentManager()
+        self.log_dir = (
+            Path(log_dir).resolve()
+            if log_dir
+            else Path(self.config.output_dir).resolve()
+        )
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+
+    async def run_agent(
+        self, *, agent_type: str, prompt: str, cwd: str, timeout_sec: int
+    ) -> AgentResult:
+        started = time.monotonic()
+        agent_id = f"{agent_type}_{uuid.uuid4().hex[:8]}"
+        stdout_path = self.log_dir / f"{agent_id}_stdout.log"
+        stderr_path = self.log_dir / f"{agent_id}_stderr.log"
+
+        spawn_result = await spawner.spawn(
+            agent_id=agent_id,
+            agent_type=agent_type,
+            prompt=prompt,
+            cwd=Path(cwd),
+            config=self.config,
+            log_dir=self.log_dir,
+            stdout_path=stdout_path,
+            stderr_path=stderr_path,
+        )
+
+        agent_state = AgentState(
+            id=agent_id,
+            agent_type=agent_type,
+            prompt=prompt,
+            cwd=cwd,
+            proc=spawn_result.proc,
+            spawn_time=datetime.now(UTC),
+            stdout_log=stdout_path,
+            stderr_log=stderr_path,
+            pgid=spawn_result.pgid,
+        )
+        self.manager.register(agent_state)
+
+        timed_out = False
+        try:
+            await asyncio.wait_for(spawn_result.proc.wait(), timeout=timeout_sec)
+        except TimeoutError:
+            timed_out = True
+            if spawn_result.pgid:
+                signal_group(spawn_result.pgid, signal.SIGKILL)
+            elif spawn_result.proc.returncode is None:
+                spawn_result.proc.kill()
+            await spawn_result.proc.wait()
+
+        duration = time.monotonic() - started
+        returncode = spawn_result.proc.returncode or 0
+
+        stdout_text = (
+            stdout_path.read_text(encoding="utf-8", errors="replace")
+            if stdout_path.exists()
+            else ""
+        )
+        stderr_text = (
+            stderr_path.read_text(encoding="utf-8", errors="replace")
+            if stderr_path.exists()
+            else ""
+        )
+
+        success = (returncode == 0) and not timed_out
+        error_msg: str | None = None
+        if timed_out:
+            error_msg = f"Agent timed out after {timeout_sec}s"
+        elif returncode != 0:
+            suffix = f": {stderr_text[:500]}" if stderr_text else ""
+            error_msg = f"Agent process exited with code {returncode}{suffix}"
+
+        return AgentResult(
+            agent=agent_type,
+            agent_type=agent_type,
+            stage="",
+            success=success,
+            exit_code=returncode,
+            stdout_path=str(stdout_path),
+            stderr_path=str(stderr_path),
+            output_text=stdout_text,
+            duration_sec=duration,
+            error_message=error_msg,
+        )
+
+
+def _extract_verdict(output: str) -> str | None:
+    """Extract the VERDICT line from reviewer output.
+
+    Must return exactly PASS, FIX_REQUIRED, or BLOCKED.
+    Returns None if no unambiguous verdict is found.
+    """
+    if not output:
+        return None
     for line in reversed(output.splitlines()):
         line = line.strip()
-        match = re.match(r"VERDICT:\s*(PASS|FIX_REQUIRED|BLOCKED)", line, re.IGNORECASE)
+        match = re.match(
+            r"^VERDICT:\s*(PASS|FIX_REQUIRED|BLOCKED)\b", line, re.IGNORECASE
+        )
         if match:
             return match.group(1).upper()
-    return ReviewVerdict.BLOCKED.value
+    return None
 
 
 async def run_mode_c(
@@ -79,6 +184,7 @@ async def run_mode_c(
     auto_discover_checks: bool = True,
     agent_timeout_sec: int = 600,
     check_timeout_sec: int = 300,
+    worktrees_base_dir: str | Path | None = None,
 ) -> ProtocolState:
     """Execute MODE C: ROLE PIPELINE.
 
@@ -86,7 +192,7 @@ async def run_mode_c(
         DEFINE → GIT_PREFLIGHT → WORKTREE_SETUP → DESIGN(claude)
         → IMPLEMENT(codex) → TEST(codex) → CHECK(system)
         → REVIEW(antigravity/agy)
-        → PASS → FINAL
+        → PASS → CHECKPOINT → FINAL
         → FIX_REQUIRED → FIX(codex) → TEST → CHECK → REVIEW (max cycles)
         → BLOCKED → terminate
     """
@@ -98,6 +204,7 @@ async def run_mode_c(
         user_request=user_request,
         target_repo=target_repo,
         max_review_cycles=max_review_cycles,
+        run_id=run_path.name,
     )
 
     # -- DEFINE --
@@ -105,7 +212,7 @@ async def run_mode_c(
     state.status = StageStatus.RUNNING.value
     state.stage_statuses[Stage.DEFINE.value] = StageStatus.DONE.value
     state_mgr.save_state(state)
-    state_mgr.append_event("stage.done", stage="DEFINE")
+    state_mgr.append_event("DEFINE", stage=Stage.DEFINE.value)
 
     # -- GIT_PREFLIGHT --
     state.stage = Stage.GIT_PREFLIGHT.value
@@ -113,8 +220,10 @@ async def run_mode_c(
     state_mgr.save_state(state)
     try:
         preflight = git_preflight(target_repo)
-    except (ValueError, Exception) as exc:
-        return _block(state, state_mgr, Stage.GIT_PREFLIGHT.value, str(exc))
+    except (ValueError, OSError, subprocess.CalledProcessError) as exc:
+        return _block(
+            state, state_mgr, Stage.GIT_PREFLIGHT.value, f"Git preflight failed: {exc}"
+        )
 
     state.base_branch = preflight.branch
     state.base_commit = preflight.head
@@ -128,10 +237,7 @@ async def run_mode_c(
     state.stage_statuses[Stage.GIT_PREFLIGHT.value] = StageStatus.DONE.value
     state_mgr.save_state(state)
     state_mgr.append_event(
-        "stage.done",
-        stage="GIT_PREFLIGHT",
-        branch=preflight.branch,
-        head=preflight.head,
+        "GIT_PREFLIGHT", branch=preflight.branch, head=preflight.head
     )
 
     # -- WORKTREE_SETUP --
@@ -139,9 +245,20 @@ async def run_mode_c(
     state.stage_statuses[Stage.WORKTREE_SETUP.value] = StageStatus.RUNNING.value
     state_mgr.save_state(state)
     try:
-        wt = create_worktree(target_repo, task_id, "pipeline", state.base_commit)
-    except Exception as exc:
-        return _block(state, state_mgr, Stage.WORKTREE_SETUP.value, str(exc))
+        wt = create_worktree(
+            target_repo,
+            task_id,
+            "pipeline",
+            state.base_commit,
+            worktrees_base_dir=worktrees_base_dir,
+        )
+    except (OSError, subprocess.CalledProcessError, ValueError, RuntimeError) as exc:
+        return _block(
+            state,
+            state_mgr,
+            Stage.WORKTREE_SETUP.value,
+            f"Worktree creation failed: {exc}",
+        )
 
     state.worktrees["pipeline"] = {
         "label": wt.label,
@@ -154,15 +271,13 @@ async def run_mode_c(
     state.stage_statuses[Stage.WORKTREE_SETUP.value] = StageStatus.DONE.value
     state_mgr.save_state(state)
     state_mgr.append_event(
-        "worktree.created",
-        label="pipeline",
-        path=wt.path,
-        branch=wt.branch,
+        "WORKTREE_CREATED", label="pipeline", path=wt.path, branch=wt.branch
     )
 
     worktree_path = wt.path
 
     # -- DESIGN (Claude) --
+    state_mgr.append_event("DESIGN_STARTED", agent="claude")
     design_result = await _run_stage(
         state=state,
         state_mgr=state_mgr,
@@ -185,8 +300,16 @@ async def run_mode_c(
             Stage.DESIGN.value,
             design_result.error_message or "DESIGN stage failed",
         )
+    if not design_result.output_text or not design_result.output_text.strip():
+        return _block(
+            state, state_mgr, Stage.DESIGN.value, "Claude produced no design output"
+        )
+
+    state_mgr.write_output("design", "claude", design_result.output_text)
+    state_mgr.append_event("DESIGN_DONE", agent="claude")
 
     # -- IMPLEMENT (Codex) --
+    state_mgr.append_event("IMPLEMENT_STARTED", agent="codex")
     implement_result = await _run_stage(
         state=state,
         state_mgr=state_mgr,
@@ -211,12 +334,29 @@ async def run_mode_c(
             implement_result.error_message or "IMPLEMENT stage failed",
         )
 
+    state_mgr.write_output("implement", "codex", implement_result.output_text)
+    state_mgr.append_event("IMPLEMENT_DONE", agent="codex")
+
+    # Record changed files from implementation
+    try:
+        current_head = _get_head(worktree_path)
+        current_changed = changed_files(state.base_commit, current_head, worktree_path)
+        state.changed_files = current_changed
+    except (OSError, subprocess.CalledProcessError):
+        state.changed_files = []
+
+    # -- TEST (Codex self-report) --
+    state.stage = Stage.TEST.value
+    state.stage_statuses[Stage.TEST.value] = StageStatus.DONE.value
+    state_mgr.save_state(state)
+    state_mgr.append_event("TEST_DONE", agent="codex")
+
     # -- Review loop (CHECK → REVIEW, with FIX cycles) --
     review_cycle = 0
-    while review_cycle <= max_review_cycles:
+    while True:
         state.review_cycle = review_cycle
 
-        # -- CHECK (System) --
+        # -- CHECK (System deterministic) --
         check_status = _run_checks(
             state=state,
             state_mgr=state_mgr,
@@ -225,22 +365,16 @@ async def run_mode_c(
             auto_discover=auto_discover_checks,
             timeout_sec=check_timeout_sec,
         )
-        if check_status == CheckStatus.FAIL.value:
-            return _block(
-                state, state_mgr, Stage.CHECK.value, "Deterministic checks failed"
-            )
 
         # Get diff for review
         try:
-            current_diff = diff_worktree(
-                state.base_commit,
-                _get_head(worktree_path),
-                worktree_path,
-            )
-        except Exception:
+            current_head = _get_head(worktree_path)
+            current_diff = diff_worktree(state.base_commit, current_head, worktree_path)
+        except (OSError, subprocess.CalledProcessError):
             current_diff = ""
 
         # -- REVIEW (Gemini → antigravity/agy) --
+        state_mgr.append_event("REVIEW_STARTED", cycle=review_cycle)
         review_result = await _run_stage(
             state=state,
             state_mgr=state_mgr,
@@ -261,21 +395,54 @@ async def run_mode_c(
             timeout_sec=agent_timeout_sec,
         )
 
-        verdict = _extract_verdict(review_result.output_text)
-        state.review_verdict = verdict
-        state_mgr.append_event(
-            "review.verdict",
-            verdict=verdict,
-            cycle=review_cycle,
-        )
+        if not review_result.success:
+            return _block(
+                state,
+                state_mgr,
+                Stage.REVIEW.value,
+                review_result.error_message or "REVIEW stage execution failed",
+            )
 
-        if verdict == ReviewVerdict.PASS.value:
-            break
-        elif verdict == ReviewVerdict.BLOCKED.value:
+        verdict = _extract_verdict(review_result.output_text)
+        if verdict is None:
+            return _block(
+                state,
+                state_mgr,
+                Stage.REVIEW.value,
+                "Reviewer produced unclear verdict (missing VERDICT: PASS|FIX_REQUIRED|BLOCKED)",
+            )
+
+        state.review_verdict = verdict
+        state_mgr.write_output(
+            f"review_cycle_{review_cycle}", "gemini", review_result.output_text
+        )
+        state_mgr.append_event("REVIEW_RESULT", verdict=verdict, cycle=review_cycle)
+
+        if verdict == ReviewVerdict.BLOCKED.value:
             return _block(
                 state, state_mgr, Stage.REVIEW.value, "Reviewer returned BLOCKED"
             )
-        elif verdict == ReviewVerdict.FIX_REQUIRED.value:
+
+        # CHECK FAIL인데 agy PASS인 경우 → FINAL 금지
+        if (
+            verdict == ReviewVerdict.PASS.value
+            and check_status == CheckStatus.FAIL.value
+        ):
+            if review_cycle < max_review_cycles:
+                # FIX loop 기회 부여
+                verdict = ReviewVerdict.FIX_REQUIRED.value
+            else:
+                return _block(
+                    state,
+                    state_mgr,
+                    Stage.CHECK.value,
+                    "System CHECK failed despite REVIEW PASS (cannot proceed to FINAL)",
+                )
+
+        if verdict == ReviewVerdict.PASS.value:
+            break
+
+        if verdict == ReviewVerdict.FIX_REQUIRED.value:
             review_cycle += 1
             if review_cycle > max_review_cycles:
                 return _block(
@@ -286,6 +453,7 @@ async def run_mode_c(
                 )
 
             # -- FIX (Codex) --
+            state_mgr.append_event("FIX_STARTED", cycle=review_cycle)
             fix_result = await _run_stage(
                 state=state,
                 state_mgr=state_mgr,
@@ -310,6 +478,28 @@ async def run_mode_c(
                     Stage.FIX.value,
                     fix_result.error_message or "FIX stage failed",
                 )
+
+            state_mgr.write_output(
+                f"fix_cycle_{review_cycle}", "codex", fix_result.output_text
+            )
+            state_mgr.append_event("FIX_DONE", cycle=review_cycle, agent="codex")
+
+            # -- TEST (Codex post-fix) --
+            state.stage = Stage.TEST.value
+            state.stage_statuses[Stage.TEST.value] = StageStatus.DONE.value
+            state_mgr.save_state(state)
+            state_mgr.append_event(
+                "TEST_DONE", stage=Stage.TEST.value, cycle=review_cycle
+            )
+
+            # Update changed files after fix
+            try:
+                current_head = _get_head(worktree_path)
+                state.changed_files = changed_files(
+                    state.base_commit, current_head, worktree_path
+                )
+            except (OSError, subprocess.CalledProcessError):
+                state.changed_files = []
         else:
             return _block(
                 state,
@@ -318,13 +508,23 @@ async def run_mode_c(
                 f"Unknown review verdict: {verdict}",
             )
 
-    # -- Checkpoint --
+    # Final CHECK verification before checkpoint
+    if state.test_status == CheckStatus.FAIL.value:
+        return _block(
+            state,
+            state_mgr,
+            Stage.CHECK.value,
+            "Cannot proceed to FINAL: System CHECK is FAIL",
+        )
+
+    # -- Checkpoint (최종 PASS 이후에만 생성) --
     try:
         cp = checkpoint_worktree(worktree_path, task_id, "pipeline")
+        state.checkpoint = cp
         state.checkpoints["pipeline"] = cp
-        state_mgr.append_event("checkpoint.created", label="pipeline", commit=cp)
+        state_mgr.append_event("CHECKPOINT_CREATED", label="pipeline", commit=cp)
     except RuntimeError:
-        # No changes to checkpoint (e.g. mock agents didn't write files)
+        # Mock tests or environments where worktree had no uncommitted/new files
         pass
 
     # -- FINAL --
@@ -332,7 +532,7 @@ async def run_mode_c(
     state.stage_statuses[Stage.FINAL.value] = StageStatus.DONE.value
     state.status = StageStatus.DONE.value
     state_mgr.save_state(state)
-    state_mgr.append_event("run.finished", status="DONE")
+    state_mgr.append_event("FINAL", status="DONE")
 
     return state
 
@@ -361,17 +561,14 @@ async def _run_stage(
     state.stage_statuses[stage] = StageStatus.RUNNING.value
     state_mgr.save_state(state)
     state_mgr.append_event(
-        "stage.started",
+        f"{stage}_STARTED",
         stage=stage,
         logical_agent=logical_agent,
         backend_agent=agent_type,
     )
 
     result = await agent_runner.run_agent(
-        agent_type=agent_type,
-        prompt=prompt,
-        cwd=cwd,
-        timeout_sec=timeout_sec,
+        agent_type=agent_type, prompt=prompt, cwd=cwd, timeout_sec=timeout_sec
     )
     result.agent = logical_agent
     result.agent_type = agent_type
@@ -379,25 +576,20 @@ async def _run_stage(
 
     status = StageStatus.DONE.value if result.success else StageStatus.FAILED.value
     state.stage_statuses[stage] = status
-    state.handoffs.append({
-        "stage": stage,
-        "agent": logical_agent,
-        "agent_type": agent_type,
-        "success": result.success,
-        "exit_code": result.exit_code,
-        "review_verdict": result.review_verdict,
-    })
+    state.handoffs.append(
+        {
+            "stage": stage,
+            "agent": logical_agent,
+            "agent_type": agent_type,
+            "success": result.success,
+            "exit_code": result.exit_code,
+            "review_verdict": result.review_verdict,
+        }
+    )
     state_mgr.save_state(state)
     state_mgr.append_event(
-        "stage.finished",
-        stage=stage,
-        agent=logical_agent,
-        success=result.success,
+        f"{stage}_FINISHED", stage=stage, agent=logical_agent, success=result.success
     )
-
-    # Save output
-    if result.output_text:
-        state_mgr.write_output(stage, logical_agent, result.output_text)
 
     return result
 
@@ -428,21 +620,21 @@ def _run_checks(
             unique.append(cmd)
 
     if not unique:
-        state.test_status = CheckStatus.WAIVED.value
+        waived_status = CheckStatus.WAIVED.value
+        state.test_status = waived_status
         state.stage_statuses[Stage.CHECK.value] = StageStatus.DONE.value
         state_mgr.save_state(state)
-        state_mgr.append_event("check.waived", reason="no check commands found")
-        return CheckStatus.WAIVED.value
+        state_mgr.append_event("CHECK_RESULT", status=waived_status, count=0)
+        return waived_status
 
     results = runner.run_all(unique)
     state.checks = [r.to_dict() for r in results]
 
-    all_pass = all(r.success for r in results)
-    status = CheckStatus.PASS.value if all_pass else CheckStatus.FAIL.value
+    status = evaluate_checks(results).value
     state.test_status = status
     state.stage_statuses[Stage.CHECK.value] = StageStatus.DONE.value
     state_mgr.save_state(state)
-    state_mgr.append_event("check.finished", status=status, count=len(results))
+    state_mgr.append_event("CHECK_RESULT", status=status, count=len(results))
     return status
 
 
@@ -463,8 +655,6 @@ def _format_checks(checks: list[dict[str, Any]]) -> str:
 
 def _get_head(worktree_path: str) -> str:
     """Get the current HEAD commit of a worktree."""
-    import subprocess
-
     result = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=worktree_path,
@@ -476,10 +666,7 @@ def _get_head(worktree_path: str) -> str:
 
 
 def _block(
-    state: ProtocolState,
-    state_mgr: ProtocolStateManager,
-    stage: str,
-    reason: str,
+    state: ProtocolState, state_mgr: ProtocolStateManager, stage: str, reason: str
 ) -> ProtocolState:
     """Move the state to BLOCKED and persist."""
     state.stage = stage
@@ -487,5 +674,5 @@ def _block(
     state.stage_statuses[stage] = StageStatus.BLOCKED.value
     state.blocker = reason
     state_mgr.save_state(state)
-    state_mgr.append_event("run.blocked", stage=stage, reason=reason)
+    state_mgr.append_event("BLOCKED", stage=stage, reason=reason)
     return state

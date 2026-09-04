@@ -7,6 +7,9 @@ from team_harness.protocol.git import git_preflight
 from team_harness.protocol.git import GitPreflight
 from team_harness.protocol.git import is_git_repo
 from team_harness.protocol.git import list_worktrees
+from team_harness.protocol.mode_c import AgentRunner
+from team_harness.protocol.mode_c import run_mode_c
+from team_harness.protocol.mode_c import TeamHarnessAgentRunner
 from team_harness.protocol.models import AGENT_TYPE_MAP
 from team_harness.protocol.models import CheckStatus
 from team_harness.protocol.models import LogicalAgent
@@ -32,6 +35,7 @@ from team_harness.protocol.worktree import WorktreeRef
 __all__ = [
     "AGENT_TYPE_MAP",
     "DEFAULT_WORKTREES_DIR",
+    "AgentRunner",
     "CheckResult",
     "CheckRunner",
     "CheckStatus",
@@ -43,6 +47,7 @@ __all__ = [
     "ReviewVerdict",
     "Stage",
     "StageStatus",
+    "TeamHarnessAgentRunner",
     "UserSelection",
     "WorktreeInfo",
     "WorktreeRef",
@@ -57,5 +62,6 @@ __all__ = [
     "list_worktrees",
     "remove_worktree",
     "resolve_agent_type",
+    "run_mode_c",
     "verify_checkpoint",
 ]
