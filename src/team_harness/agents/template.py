@@ -166,16 +166,23 @@ DEFAULT_AGENT_TEMPLATES: dict[str, AgentTemplate] = {
         command=("agy",),
         shared_flags=(
             "--dangerously-skip-permissions",
-            "--print",
             "--print-timeout",
             "60m",
         ),
+        # agy's --print takes the prompt as its own value (`--print <text>` or
+        # `--print=<text>`), not a bare boolean toggle. Route it through
+        # prompt_flag so the prompt is always the token immediately after
+        # --print; putting a bare "--print" in shared_flags with the prompt
+        # left as an unflagged tail argument makes agy's parser swallow the
+        # next shared_flag (e.g. --print-timeout) as the prompt instead and
+        # exit 0 having done nothing.
+        prompt_flag="--print",
         resume_flags=("--conversation", "{session_id}"),
         # agy accepts its models list's display names verbatim, e.g.
         # --model "Gemini 3.5 Flash (High)". No default pin: without an
         # explicit model the account default applies.
         model_flag="--model",
-        deduplicate_flags=("--dangerously-skip-permissions", "--print"),
+        deduplicate_flags=("--dangerously-skip-permissions",),
         session_capture=None,
     ),
     "openhands": AgentTemplate(

@@ -397,9 +397,9 @@ def test_build_command_default_antigravity_fresh():
     assert command == [
         "agy",
         "--dangerously-skip-permissions",
-        "--print",
         "--print-timeout",
         "60m",
+        "--print",
         "do thing",
     ]
 
@@ -417,13 +417,13 @@ def test_build_command_default_antigravity_resume_and_model_override():
     assert command == [
         "agy",
         "--dangerously-skip-permissions",
-        "--print",
         "--print-timeout",
         "60m",
         "--model",
         "Gemini 3.5 Flash (High)",
         "--conversation",
         "conversation-123",
+        "--print",
         "continue",
     ]
 

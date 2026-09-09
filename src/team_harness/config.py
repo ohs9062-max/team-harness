@@ -266,7 +266,11 @@ field_path = ["sessionId"]
 # -----------------------------------------------------------------------
 
 # Antigravity CLI worker. `--print` runs a single prompt non-interactively,
-# which is the mode team-harness needs for worker subprocesses. Antigravity
+# which is the mode team-harness needs for worker subprocesses. `--print`
+# takes the prompt as its own value (`--print <text>`), not a bare boolean
+# toggle, so it is wired through prompt_flag rather than shared_flags -
+# putting it in shared_flags with an unflagged tail prompt makes agy's
+# parser swallow the next shared flag as the prompt instead. Antigravity
 # accepts its models list's display names verbatim via --model (e.g.
 # --model "Gemini 3.5 Flash (High)"; run `agy models` for the list). No
 # default pin: without an explicit model the account default applies.
@@ -277,14 +281,13 @@ field_path = ["sessionId"]
 command = ["agy"]
 shared_flags = [
     "--dangerously-skip-permissions",
-    "--print",
     "--print-timeout", "60m",
 ]
+prompt_flag = "--print"
 resume_flags = ["--conversation", "{session_id}"]
 model_flag = "--model"
 deduplicate_flags = [
     "--dangerously-skip-permissions",
-    "--print",
 ]
 
 # OpenHands worker. `--override-with-envs` is required or `LLM_MODEL`
