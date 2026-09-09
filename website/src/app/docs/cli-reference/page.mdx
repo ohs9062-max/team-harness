@@ -28,7 +28,7 @@ Options:
   --api-base TEXT             Override coordinator base URL
   --api-key TEXT              Override coordinator API key for openai_compat
   --codex-auth-path TEXT      Override Codex auth.json location
-  --agents TEXT               Comma-separated allowlist (e.g. "codex,gemini")
+  --agents TEXT               Comma-separated allowlist (e.g. "codex,antigravity")
   --max-retries INT           API retry budget for 429/5xx errors (default: 5)
   --max-depth INT             Nested harness depth limit (default: 3)
   --system-prompt TEXT        Extra text appended to the system prompt
@@ -93,7 +93,7 @@ The rich console mode (the default when stdout is a TTY) adds several visual enh
 - **Spinner animation** — an animated braille spinner in the status bar while the coordinator is thinking (before tokens stream).
 - **iTerm2 tab progress** — an indeterminate progress indicator in the terminal tab during processing (iTerm2 only, disabled inside tmux).
 - **User prompt styling** — submitted prompts render with a dark background and white text to distinguish them from assistant output.
-- **Agent emojis** — each agent type shows a per-type emoji (e.g. 🔷 codex, ♊ gemini, 🟣 claude) in the agent panel and event log.
+- **Agent emojis** — each agent type shows a per-type emoji (e.g. 🔷 codex, 🚀 antigravity, 🟣 claude) in the agent panel and event log.
 - **Path coloring** — file paths in tool arguments and results are highlighted in cyan.
 - **Bold consistency** — agent types, turn numbers, and running status use bold for emphasis.
 

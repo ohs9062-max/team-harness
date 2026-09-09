@@ -1,6 +1,6 @@
 # Team Harness
 
-다른 코딩 하네스(Codex, Gemini, Claude Code, Grok Build, Antigravity, OpenCode, pi, OpenHands)를 위한 조율(Coordination) 계층.
+다른 코딩 하네스(Codex, Claude Code, Grok Build, Antigravity, OpenCode, pi, OpenHands)를 위한 조율(Coordination) 계층.
 
 <br>
 
@@ -18,13 +18,13 @@ MVP 달성을 위해 아직 누락된 주요 구성 요소가 무엇인지 알�
 이를 위해 에이전트 팀을 구성해줘.
 
 다음 작업을 담당할 에이전트 팀을 만들어:
-- CODEX, CLAUDE, GEMINI를 사용하여 분석 수행
+- CODEX, CLAUDE, ANTIGRAVITY를 사용하여 분석 수행
     - 분석을 최대한 철저히 수행하고 그 결과를 전용 디렉터리 내의 새 파일에 출력할 것
 - 최종 보고서 작성
     - 이전 에이전트들의 모든 분석을 읽고, 최종 결과와 의견을 SUMMARY.md에 정리할 것
 ```
 
-Team Harness는 Codex, Claude Code, Gemini CLI 간의 협업을 조율합니다.
+Team Harness는 Codex, Claude Code, Antigravity CLI 간의 협업을 조율합니다.
 
 Claude Code의 에이전트 팀 기능으로도 유사한 결과를 얻을 수 있습니다.
 하지만 Team Harness를 사용하면 **원하는 어떤 모델이든 연결**할 수 있으며, 기본 시스템 프롬프트도 훨씬 쉽게 미세 조정할 수 있습니다.
@@ -47,13 +47,12 @@ uv tool install --upgrade team-harness
 
 ## 사전 준비 사항 (Prerequisites)
 
-작업자(Worker) CLI는 별도로 설치하고 인증해야 합니다. 모든 작업자를 설치할 필요는 없으며, 보유하고 있는 작업자만 사용하도록 `--agents codex,gemini` 옵션으로 실행을 제한할 수 있습니다.
+작업자(Worker) CLI는 별도로 설치하고 인증해야 합니다. 모든 작업자를 설치할 필요는 없으며, 보유하고 있는 작업자만 사용하도록 `--agents codex,antigravity` 옵션으로 실행을 제한할 수 있습니다.
 OpenHands는 `pip install openhands`로 설치합니다(PyPI 배포 패키지 이름은 OpenHands-CLI 저장소에서 제공하는 `openhands`임).
 
 | 작업자 | 설치 안내 문서 |
 |---|---|
 | `codex` | [Codex CLI](https://github.com/openai/codex) |
-| `gemini` | [Gemini CLI](https://github.com/google-gemini/gemini-cli) |
 | `claude` | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) |
 | `grok` | [Grok Build CLI](https://docs.x.ai/build/cli/headless-scripting) (`XAI_API_KEY` 또는 `grok login`) |
 | `antigravity` | [Antigravity CLI](https://antigravity.google/docs/cli-overview) |
@@ -118,7 +117,7 @@ async def main():
     harness = TeamHarness(
         api_key="sk-or-...",
         model="anthropic/claude-sonnet-4",
-        agents=["codex", "gemini"],
+        agents=["codex", "antigravity"],
         # 선택적 임베딩 계약: 전체 실행을 호출자 소유의 루트 아래에 유지하고
         # 에이전트에게 외부 세션 식별자를 제공합니다.
         caller_context=CallerContext(
@@ -150,7 +149,7 @@ harness = TeamHarness(
     api_base="https://openrouter.ai/api/v1",
     api_key="sk-or-...",
     codex_auth_path="~/.codex/auth.json",
-    agents=["codex", "gemini"], # 또는 "codex,gemini"
+    agents=["codex", "antigravity"], # 또는 "codex,antigravity"
     max_retries=5,
     retry_base_delay_s=1.0,
     retry_max_delay_s=30.0,
@@ -264,18 +263,6 @@ strategy = "stream_json_event"
 match = { type = "thread.started" }
 field_path = ["thread_id"]
 
-[agents.gemini]
-command = ["gemini"]
-shared_flags = ["--approval-mode", "yolo", "--output-format", "stream-json"]
-resume_flags = ["--resume", "{session_id}"]
-prompt_flag = "-p"
-model_flag = "--model"
-
-[agents.gemini.session_capture]
-strategy = "stream_json_event"
-match = { type = "init" }
-field_path = ["session_id"]
-
 [agents.claude]
 command = ["claude"]
 shared_flags = [
@@ -334,14 +321,13 @@ field_path = ["sessionId"]
 command = ["agy"]
 shared_flags = [
     "--dangerously-skip-permissions",
-    "--print",
     "--print-timeout", "60m",
 ]
+prompt_flag = "--print"
 resume_flags = ["--conversation", "{session_id}"]
 model_flag = false
 deduplicate_flags = [
     "--dangerously-skip-permissions",
-    "--print",
 ]
 
 [agents.openhands]
@@ -469,7 +455,7 @@ model_flag = "--model"   # CLI에 모델 플래그가 없으면 `false`로 설�
 | codex | `["-c", "model_reasoning_effort={effort}"]` | `low`, `medium`, `high`, `xhigh` |
 | claude | `["--effort", "{effort}"]` | `low`, `medium`, `high`, `max` |
 | grok | `["--reasoning-effort", "{effort}"]` | `low`, `medium`, `high` |
-| gemini | (업스트림 미지원) | — |
+| antigravity | (업스트림 미지원) | — |
 
 조율자는 `spawn_agent(effort="…")`로 생성별 수준을 오버라이드할 수 있습니다.
 
@@ -539,7 +525,7 @@ th run [OPTIONS] [TASK]
   --api-base TEXT            조율자 API 기본 URL 오버라이드
   --api-key TEXT             openai_compat 조율자 API 키 오버라이드
   --codex-auth-path TEXT     Codex auth.json 위치 오버라이드
-  --agents TEXT              쉼표로 구분된 허용 에이전트 목록 (예: "codex,gemini")
+  --agents TEXT              쉼표로 구분된 허용 에이전트 목록 (예: "codex,antigravity")
   --max-retries INT          429/5xx 오류 API 재시도 예산 (기본값: 5)
   --max-depth INT            중첩 하네스 깊이 제한 (기본값: 3)
   --system-prompt TEXT       시스템 프롬프트에 추가할 텍스트
@@ -575,7 +561,7 @@ Rich 콘솔 모드(stdout이 TTY일 때 기본 활성화)의 시각 기능:
 - **스피너 애니메이션** — 조율자가 생각하는 동안(토큰 스트리밍 전) 상태 표시줄에 애니메이션 점자 스피너 표시.
 - **iTerm2 탭 진행률** — iTerm2에서 실행 시 터미널 탭에 진행 표시기 노출.
 - **사용자 프롬프트 스타일링** — 제출된 사용자 프롬프트를 어두운 배경색과 흰색 글씨로 표시하여 모델 출력과 시각적 구분.
-- **에이전트 이모지** — 에이전트 유형별 이모지 표시 (예: 🔷 codex, ♊ gemini, 🟣 claude).
+- **에이전트 이모지** — 에이전트 유형별 이모지 표시 (예: 🔷 codex, 🚀 antigravity, 🟣 claude).
 - **경로 하이라이트** — 도구 호출 인자 및 결과의 파일 경로를 시안(cyan) 색상으로 강조.
 
 ## REPL 키 조작 (REPL editing keys)

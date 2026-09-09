@@ -114,6 +114,6 @@ ANTHROPIC_API_KEY = ""   # must be empty — prevents fallback to native auth
 
 The `{env:OPENROUTER_API_KEY}` placeholder is resolved from `os.environ` at spawn time. If the variable is missing, the harness warns once and substitutes an empty string (the child then fails its own auth with a clear message). The three `ANTHROPIC_DEFAULT_*_MODEL` env vars still layer on top — setting `default_model` above populates all three automatically.
 
-### Gemini via OpenRouter
+### Antigravity via OpenRouter
 
-Not supported by the upstream `gemini` CLI — it authenticates directly against Google APIs with no OpenAI-compatible base-URL mode. The harness ships no recipe.
+Not supported by the upstream `agy` CLI — it authenticates directly against its own account with no OpenAI-compatible base-URL mode. The harness ships no recipe.

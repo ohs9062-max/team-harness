@@ -13,7 +13,7 @@ team-harness is a multi-agent orchestration harness. This page explains the movi
 There are two roles, and keeping them straight is the key to using team-harness well.
 
 - The **coordinator** is an LLM. It receives your task, plans, and delegates. It talks to an OpenAI-compatible API or a Codex subscription. **The coordinator never implements — it orchestrates.**
-- **Workers** are external CLI processes — `codex`, `gemini`, `claude`, `agy`, and the others — that do the actual work. The coordinator spawns them as subprocesses and reads their output.
+- **Workers** are external CLI processes — `codex`, `claude`, `agy`, and the others — that do the actual work. The coordinator spawns them as subprocesses and reads their output.
 
 `[coordinator].model` controls the coordinator's **own** model. It does **not** flow through to workers; each worker's model comes from its own template (see [Workers](/docs/workers)).
 

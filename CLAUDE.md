@@ -25,7 +25,7 @@ CI는 Python 3.12/3.13/3.14 환경에서 ruff lint, ruff format 검사, pyright,
 
 ## 아키텍처 (Architecture)
 
-team-harness는 다중 에이전트 조율(multi-agent orchestration) 하네스입니다. **조율자(Coordinator) LLM**(OpenAI 호환 API 또는 Codex 구독과 통신)이 사용자 작업을 받아 작업 단위로 분할하고, 서브프로세스로 실행되는 **작업자(Worker) CLI**(Codex, Gemini, Claude Code, opencode, pi, OpenHands)에 실행을 위임합니다.
+team-harness는 다중 에이전트 조율(multi-agent orchestration) 하네스입니다. **조율자(Coordinator) LLM**(OpenAI 호환 API 또는 Codex 구독과 통신)이 사용자 작업을 받아 작업 단위로 분할하고, 서브프로세스로 실행되는 **작업자(Worker) CLI**(Codex, Antigravity, Claude Code, opencode, pi, OpenHands)에 실행을 위임합니다.
 
 ### 요청 흐름 (Request Flow)
 
@@ -46,7 +46,7 @@ team-harness는 다중 에이전트 조율(multi-agent orchestration) 하네스�
 
 ### 핵심 아키텍처 개념
 
-**조율자(Coordinator) vs 작업자(Workers)**: 조율자는 계획을 세우고 작업을 위임하는 LLM입니다. 작업자는 실제 작업을 수행하는 외부 CLI 프로세스(codex, gemini, claude 등)입니다. 조율자는 직접 코드를 작성/수정하지 않고 오케스트레이션(조율)만 담당합니다.
+**조율자(Coordinator) vs 작업자(Workers)**: 조율자는 계획을 세우고 작업을 위임하는 LLM입니다. 작업자는 실제 작업을 수행하는 외부 CLI 프로세스(codex, antigravity, claude 등)입니다. 조율자는 직접 코드를 작성/수정하지 않고 오케스트레이션(조율)만 담당합니다.
 
 **도구 레지스트리 (Tool Registry)**: `tools/registry.py`는 도구 이름 → (스키마, 비동기 함수)를 매핑합니다. 조율자 루프는 모든 스키마를 LLM에 전달한 후 도구 호출 이름에 따라 디스패치합니다. 도구 바인딩은 실행 시점의 클로저(manager, run_log, config)를 캡처하기 위해 `build_*_tool_bindings()` 팩토리 함수를 통해 실행(run)마다 생성됩니다.
 

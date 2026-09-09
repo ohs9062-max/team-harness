@@ -8,7 +8,7 @@ export const metadata = {
 
 ## A worker fails to start or authenticate
 
-Workers are separate CLIs with their own installation and auth. Confirm the binary is installed and that you can run it standalone (e.g. `codex`, `gemini`, `claude`, `grok`, `agy`). Each worker uses its **own native auth** — the harness does not forward the coordinator's API key to workers unless you explicitly configure `provider_env` (see [Providers & Auth](/docs/providers#routing-workers-through-openrouter)). Restrict a run to only the workers you have with `--agents codex,gemini`. For Grok, set `XAI_API_KEY` or run `grok login`.
+Workers are separate CLIs with their own installation and auth. Confirm the binary is installed and that you can run it standalone (e.g. `codex`, `claude`, `grok`, `agy`). Each worker uses its **own native auth** — the harness does not forward the coordinator's API key to workers unless you explicitly configure `provider_env` (see [Providers & Auth](/docs/providers#routing-workers-through-openrouter)). Restrict a run to only the workers you have with `--agents codex,antigravity`. For Grok, set `XAI_API_KEY` or run `grok login`.
 
 ## "Codex model … is not in the built-in known model list"
 

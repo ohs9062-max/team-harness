@@ -1,6 +1,6 @@
 # AGENTS.md — 이 저장소의 작업 협약 (Working Agreement)
 
-`team-harness`는 다른 코딩 하네스를 위한 조율(coordination) 계층입니다. **조율자(Coordinator) LLM**이 작업을 수신하여 하위 단위 작업으로 분할하고, 서브프로세스로 실행되는 **작업자(Worker) CLI**(Codex, Gemini, Claude Code, opencode, pi, OpenHands 등)에 실행을 위임합니다. 이는 라이브러리이자 CLI이며, **다른 프로젝트들이 이에 의존합니다**(특히 `loopy-loop`).
+`team-harness`는 다른 코딩 하네스를 위한 조율(coordination) 계층입니다. **조율자(Coordinator) LLM**이 작업을 수신하여 하위 단위 작업으로 분할하고, 서브프로세스로 실행되는 **작업자(Worker) CLI**(Codex, Antigravity, Claude Code, opencode, pi, OpenHands 등)에 실행을 위임합니다. 이는 라이브러리이자 CLI이며, **다른 프로젝트들이 이에 의존합니다**(특히 `loopy-loop`).
 
 `CLAUDE.md`는 개발자 참고서(명령어, 아키텍처, 릴리스 프로세스)입니다. **본 문서는 작업 협약서**로서 여기서 변경 작업을 수행하는 방식을 다룹니다. `design/decisions.md`는 *시스템이 왜 현재와 같이 설계되었는지*에 대한 정본(canonical) 기록입니다. 아래 세 가지 원칙은 반드시 준수해야 합니다.
 

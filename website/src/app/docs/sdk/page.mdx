@@ -18,7 +18,7 @@ async def main():
     harness = TeamHarness(
         api_key="sk-or-...",
         model="anthropic/claude-sonnet-4",
-        agents=["codex", "gemini"],
+        agents=["codex", "antigravity"],
     )
     result: TeamHarnessResult = await harness.run(
         "Write unit tests for src/utils.py using pytest"
@@ -41,7 +41,7 @@ harness = TeamHarness(
     api_base="https://openrouter.ai/api/v1",
     api_key="sk-or-...",
     codex_auth_path="~/.codex/auth.json",
-    agents=["codex", "gemini"], # or "codex,gemini"
+    agents=["codex", "antigravity"], # or "codex,antigravity"
     max_retries=5,
     retry_base_delay_s=1.0,
     retry_max_delay_s=30.0,
