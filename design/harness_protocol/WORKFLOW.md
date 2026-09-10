@@ -5,6 +5,42 @@ MODE별 실행 계약은 `MODES.md`, 공통 규칙은 `AGENTS.md`, 코드 원칙
 
 ---
 
+## 0. CLI로 실행하기
+
+아래 절차는 `th protocol` CLI가 자동으로 수행한다(코드: `src/team_harness/cli.py`,
+`src/team_harness/protocol/mode_{a,b,c}.py`). 사람은 명령을 실행하고 tmux 창으로
+지켜보다가 필요하면 개입하면 된다 — 상태 기계를 손으로 따라갈 필요는 없다.
+
+```bash
+# MODE A — PARALLEL COMPETITION: 새 작업을 두 worker에게 동시에 맡긴다
+th protocol run --mode a "TASK 설명" --repo .
+
+# MODE C — ROLE PIPELINE: DESIGN → IMPLEMENT → CHECK → REVIEW
+th protocol run --mode c "TASK 설명" --repo .
+
+# MODE A가 WAITING_USER에서 멈추면(사용자 선택 대기), 위 명령이 출력해준
+# task-id/run-dir을 그대로 넣어 선택을 완료한다
+th protocol resume --task-id <ID> --run-dir <DIR> --repo . \
+  --selection SELECT_WORKER_1  # 또는 SELECT_WORKER_2 / SELECT_HYBRID / REWORK / CANCEL
+
+# MODE B — RELAY: 기존 작업(브랜치/worktree/state 그대로)을 다른 agent에게 넘긴다
+th protocol relay --task-id <ID> --run-dir <DIR> --repo . --next-agent codex
+```
+
+**tmux로 실시간 관찰 (기본값 켜짐, `--no-visible`로 끄기).** 위 명령은 기본적으로
+worker마다 tmux 창을 하나씩 열어 그 worker의 로그를 실시간으로 `tail`한다(TH-D12).
+명령 실행 시 출력되는 `tmux attach -t <session>`을 별도 터미널에서 실행하면 보이고,
+`Ctrl+b` + 숫자로 worker 사이를 전환한다. tmux가 없으면 자동으로 headless로 전환되고
+그 사실을 안내한다. 이 창은 worker의 표준 출력을 읽기만 할 뿐 표준 입력에는 전혀
+연결되지 않는다 — worker는 여전히 TH-D2가 말하는 1회성 배치 서브프로세스다.
+
+**사람이 직접 worker를 끊기.** `th repl`에서 실행 중인 worker가 이상해 보이면
+`/kill <agent_id>`로 즉시 종료할 수 있다(`/agents`로 id 확인). 이건 coordinator LLM이
+쓰는 `kill_agent` 도구와 달리 사람이 직접 트리거하는 것이라 "너무 성급하게 끄지 말라"는
+휴리스틱을 거치지 않는다.
+
+---
+
 ## 1. 공통: TASK 시작
 
 ### DEFINE — 사용자 요청을 TASK로 변환

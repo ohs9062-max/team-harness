@@ -24,6 +24,8 @@ from team_harness.agents.manager import AgentManager
 from team_harness.agents.manager import AgentState
 from team_harness.agents.process_identity import signal_group
 from team_harness.agents.registry import resolve_template
+from team_harness.agents.tmux_view import tmux_available
+from team_harness.agents.tmux_view import TmuxViewer
 from team_harness.config import Config
 from team_harness.protocol.checks import CheckRunner
 from team_harness.protocol.checks import evaluate_checks
@@ -75,6 +77,7 @@ class TeamHarnessAgentRunner:
         config: Config | None = None,
         manager: AgentManager | None = None,
         log_dir: str | Path | None = None,
+        tmux_session: str | None = None,
     ) -> None:
         self.config = config or Config()
         self.manager = manager or AgentManager()
@@ -84,6 +87,16 @@ class TeamHarnessAgentRunner:
             else Path(self.config.output_dir).resolve()
         )
         self.log_dir.mkdir(parents=True, exist_ok=True)
+        # Optional live view (TH-D12): when set, every spawned worker also
+        # gets a tmux window tailing its stdout log. Purely observational —
+        # never wired to the worker's stdin, never required for correctness.
+        # A caller that asks for it but has no `tmux` on PATH silently gets
+        # no window rather than a broken run.
+        self.tmux_viewer = (
+            TmuxViewer(tmux_session)
+            if tmux_session is not None and tmux_available()
+            else None
+        )
 
     async def run_agent(
         self,
@@ -126,6 +139,10 @@ class TeamHarnessAgentRunner:
             effective_model=spawn_result.effective_model,
         )
         self.manager.register(agent_state)
+        if self.tmux_viewer is not None:
+            await self.tmux_viewer.open_log_window(
+                window_name=agent_id, log_path=stdout_path
+            )
 
         timed_out = False
         try:

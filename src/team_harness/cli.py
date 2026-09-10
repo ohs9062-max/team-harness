@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from team_harness.agents.manager import AgentManager
 from team_harness.agents.registry import get_allowed_types
 from team_harness.agents.registry import validate_templates
+from team_harness.agents.tmux_view import tmux_available
 from team_harness.config import _default_config_text
 from team_harness.config import _local_config_text
 from team_harness.config import CONFIG_PATH
@@ -310,6 +311,44 @@ def _prepare_task(task: str | None, task_file: str | None) -> str:
     return task
 
 
+def _handle_kill_command(*, arg: str, manager: AgentManager, ui: ConsoleBase) -> None:
+    """Let a human interrupt one running worker directly from the REPL.
+
+    Unlike the coordinator-facing `kill_agent` tool, this bypasses the
+    "don't kill too eagerly" heuristics entirely: a person watching the
+    worker's live output (e.g. in a tmux window) asked for it explicitly, so
+    there is nothing left to second-guess.
+    """
+
+    if not arg:
+        running = [state for state in manager.list_all() if state.status == "running"]
+        if not running:
+            ui.print("실행 중인 worker가 없습니다.")
+        else:
+            ids = ", ".join(state.id for state in running)
+            ui.print(f"사용법: /kill <agent_id>. 실행 중: {ids}")
+        return
+    matches = [
+        state
+        for state in manager.list_all()
+        if state.id == arg or state.id.startswith(arg)
+    ]
+    if not matches:
+        ui.print(f"'{arg}'에 해당하는 worker를 찾을 수 없습니다.")
+        return
+    if len(matches) > 1:
+        ids = ", ".join(state.id for state in matches)
+        ui.print(f"'{arg}'가 여러 worker와 일치합니다: {ids}")
+        return
+    target = matches[0]
+    if target.status != "running":
+        ui.print(f"{target.id}는 이미 '{target.status}' 상태입니다.")
+        return
+    manager.kill(target.id)
+    ui.agent_event(event="killed", state=target)
+    ui.print(f"{target.id} ({target.agent_type})를 종료했습니다.")
+
+
 async def _run(task: str | None, task_file: str | None, **kwargs: Any) -> None:
     resolved_task = _prepare_task(task=task, task_file=task_file)
     allowed_agents = kwargs.pop("allowed_agents", None)
@@ -423,6 +462,10 @@ async def _repl(**kwargs: Any) -> None:
                         ui.print_agent_panel_inline()
                     case "/log":
                         ui.print(str(run_log.path))
+                    case _ if raw == "/kill" or raw.startswith("/kill "):
+                        _handle_kill_command(
+                            arg=raw[len("/kill") :].strip(), manager=manager, ui=ui
+                        )
                     case _ if raw == "/compact" or raw.startswith("/compact "):
                         focus_text = raw[len("/compact") :].strip() or None
                         compacted = await _perform_manual_compaction(
@@ -463,3 +506,262 @@ async def _repl(**kwargs: Any) -> None:
             ui.stop()
     finally:
         await client.aclose()
+
+
+@main.group()
+def protocol() -> None:
+    """Harness Protocol: MODE A/B/C multi-agent workflows.
+
+    Canonical reference: design/harness_protocol/MODES.md,
+    WORKFLOW.md, ENGINEERING_POLICY.md, HARNESS_AGENTS.md.
+
+    \b
+    MODE A — PARALLEL COMPETITION: two workers do the same task
+             independently, then you pick a winner (`th protocol run --mode a`,
+             then `th protocol resume`).
+    MODE B — RELAY: hand an in-progress task to a different agent, keeping
+             its git branch/worktree/state (`th protocol relay`).
+    MODE C — ROLE PIPELINE: one agent designs, another implements, a third
+             reviews (`th protocol run --mode c`).
+    """
+
+
+def _protocol_visible_option() -> Any:
+    return click.option(
+        "--visible/--no-visible",
+        default=True,
+        show_default=True,
+        help="Open one tmux window per worker so you can watch it live "
+        "(falls back to headless with a notice if tmux isn't installed).",
+    )
+
+
+def _resolve_visibility(
+    *, visible: bool, tmux_session: str | None, task_id: str
+) -> str | None:
+    """Return the tmux session name to use, or None for headless."""
+
+    if not visible:
+        return None
+    if not tmux_available():
+        click.echo(
+            "[protocol] tmux이 설치되어 있지 않아 화면 표시 없이(headless) 실행합니다."
+        )
+        return None
+    return tmux_session or f"team-harness-{task_id}"
+
+
+def _print_protocol_state(state: Any, *, run_dir: Path) -> None:
+    click.echo(f"[protocol] stage={state.stage} status={state.status}")
+    if state.blocker:
+        click.echo(f"[protocol] blocker: {state.blocker}")
+    if state.user_selection:
+        click.echo(f"[protocol] user_selection={state.user_selection}")
+    if state.merge_status and state.merge_status != "PENDING":
+        click.echo(f"[protocol] merge_status={state.merge_status}")
+    click.echo(f"[protocol] run_dir={run_dir}")
+
+
+@protocol.command("run")
+@click.argument("task")
+@click.option(
+    "--mode",
+    type=click.Choice(["a", "c"]),
+    required=True,
+    help="a=PARALLEL COMPETITION, c=ROLE PIPELINE. "
+    "For MODE B (RELAY) use `th protocol relay` on an existing task-id.",
+)
+@click.option("--repo", default=".", show_default=True, help="Target git repository.")
+@_protocol_visible_option()
+@click.option(
+    "--tmux-session",
+    default=None,
+    help="tmux session name (default: team-harness-<task-id>).",
+)
+def protocol_run(
+    task: str, mode: str, repo: str, visible: bool, tmux_session: str | None
+) -> None:
+    """Start a fresh MODE A or MODE C task with the given TASK description."""
+
+    asyncio.run(
+        _protocol_run(
+            task=task, mode=mode, repo=repo, visible=visible, tmux_session=tmux_session
+        )
+    )
+
+
+async def _protocol_run(
+    *, task: str, mode: str, repo: str, visible: bool, tmux_session: str | None
+) -> None:
+    from team_harness.protocol.mode_a import run_mode_a
+    from team_harness.protocol.mode_c import run_mode_c
+    from team_harness.protocol.mode_c import TeamHarnessAgentRunner
+
+    task_id = _make_run_id()
+    run_dir = RUNS_DIR / f"protocol-{task_id}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    target_repo = str(Path(repo).resolve())
+    session_name = _resolve_visibility(
+        visible=visible, tmux_session=tmux_session, task_id=task_id
+    )
+
+    click.echo(f"[protocol] task_id={task_id} mode={mode.upper()} run_dir={run_dir}")
+    if session_name is not None:
+        click.echo(f"[protocol] 실시간으로 보려면: tmux attach -t {session_name}")
+
+    runner = TeamHarnessAgentRunner(log_dir=run_dir, tmux_session=session_name)
+    mode_fn = run_mode_a if mode == "a" else run_mode_c
+    state = await mode_fn(
+        task_id=task_id,
+        user_request=task,
+        target_repo=target_repo,
+        run_dir=run_dir,
+        agent_runner=runner,
+    )
+    _print_protocol_state(state, run_dir=run_dir)
+    if mode == "a" and state.status == "WAITING_USER":
+        click.echo(
+            "[protocol] MODE A는 사용자 선택이 필요합니다:\n"
+            f"  th protocol resume --task-id {task_id} --run-dir {run_dir} "
+            f"--repo {target_repo} --selection SELECT_WORKER_1|SELECT_WORKER_2"
+            "|SELECT_HYBRID|REWORK|CANCEL"
+        )
+
+
+@protocol.command("resume")
+@click.option("--task-id", required=True)
+@click.option(
+    "--run-dir", required=True, type=click.Path(), help="run_dir from `protocol run`."
+)
+@click.option("--repo", default=".", show_default=True)
+@click.option(
+    "--selection",
+    required=True,
+    type=click.Choice(
+        [
+            "SELECT_WORKER_1",
+            "SELECT_WORKER_2",
+            "SELECT_HYBRID",
+            "REWORK",
+            "CANCEL",
+            "SELECT_CODEX",
+            "SELECT_GEMINI",
+        ]
+    ),
+)
+@click.option("--note", default="", help="Optional instruction accompanying REWORK.")
+@_protocol_visible_option()
+@click.option("--tmux-session", default=None)
+def protocol_resume(
+    task_id: str,
+    run_dir: str,
+    repo: str,
+    selection: str,
+    note: str,
+    visible: bool,
+    tmux_session: str | None,
+) -> None:
+    """Complete a MODE A run that is WAITING_USER with your selection."""
+
+    asyncio.run(
+        _protocol_resume(
+            task_id=task_id,
+            run_dir=run_dir,
+            repo=repo,
+            selection=selection,
+            note=note,
+            visible=visible,
+            tmux_session=tmux_session,
+        )
+    )
+
+
+async def _protocol_resume(
+    *,
+    task_id: str,
+    run_dir: str,
+    repo: str,
+    selection: str,
+    note: str,
+    visible: bool,
+    tmux_session: str | None,
+) -> None:
+    from team_harness.protocol.mode_a import resume_mode_a
+    from team_harness.protocol.mode_c import TeamHarnessAgentRunner
+
+    resolved_run_dir = Path(run_dir).resolve()
+    session_name = _resolve_visibility(
+        visible=visible, tmux_session=tmux_session, task_id=task_id
+    )
+    runner = TeamHarnessAgentRunner(log_dir=resolved_run_dir, tmux_session=session_name)
+    state = await resume_mode_a(
+        task_id=task_id,
+        selection=selection,
+        user_instruction=note,
+        run_dir=resolved_run_dir,
+        target_repo=str(Path(repo).resolve()),
+        agent_runner=runner,
+    )
+    _print_protocol_state(state, run_dir=resolved_run_dir)
+
+
+@protocol.command("relay")
+@click.option("--task-id", required=True)
+@click.option(
+    "--run-dir", required=True, type=click.Path(), help="run_dir from `protocol run`."
+)
+@click.option("--repo", default=".", show_default=True)
+@click.option(
+    "--next-agent",
+    default=None,
+    help="Agent type to relay to (default: the protocol config's mode_b_default).",
+)
+@_protocol_visible_option()
+@click.option("--tmux-session", default=None)
+def protocol_relay(
+    task_id: str,
+    run_dir: str,
+    repo: str,
+    next_agent: str | None,
+    visible: bool,
+    tmux_session: str | None,
+) -> None:
+    """MODE B — hand an existing task to a different agent, state intact."""
+
+    asyncio.run(
+        _protocol_relay(
+            task_id=task_id,
+            run_dir=run_dir,
+            repo=repo,
+            next_agent=next_agent,
+            visible=visible,
+            tmux_session=tmux_session,
+        )
+    )
+
+
+async def _protocol_relay(
+    *,
+    task_id: str,
+    run_dir: str,
+    repo: str,
+    next_agent: str | None,
+    visible: bool,
+    tmux_session: str | None,
+) -> None:
+    from team_harness.protocol.mode_b import run_mode_b
+    from team_harness.protocol.mode_c import TeamHarnessAgentRunner
+
+    resolved_run_dir = Path(run_dir).resolve()
+    session_name = _resolve_visibility(
+        visible=visible, tmux_session=tmux_session, task_id=task_id
+    )
+    runner = TeamHarnessAgentRunner(log_dir=resolved_run_dir, tmux_session=session_name)
+    state = await run_mode_b(
+        task_id=task_id,
+        next_agent=next_agent,
+        run_dir=resolved_run_dir,
+        target_repo=str(Path(repo).resolve()),
+        agent_runner=runner,
+    )
+    _print_protocol_state(state, run_dir=resolved_run_dir)

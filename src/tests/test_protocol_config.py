@@ -565,6 +565,78 @@ async def test_20_3_unregistered_bogus_agent_validation_fail(tmp_path: Path):
         )
 
 
+# TH-D12: TeamHarnessAgentRunner's optional tmux visibility layer.
+def test_team_harness_agent_runner_has_no_viewer_without_tmux_session(tmp_path: Path):
+    runner = TeamHarnessAgentRunner(config=Config(), log_dir=tmp_path)
+
+    assert runner.tmux_viewer is None
+
+
+def test_team_harness_agent_runner_has_no_viewer_when_tmux_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr("team_harness.protocol.mode_c.tmux_available", lambda: False)
+
+    runner = TeamHarnessAgentRunner(
+        config=Config(), log_dir=tmp_path, tmux_session="demo"
+    )
+
+    assert runner.tmux_viewer is None
+
+
+def test_team_harness_agent_runner_builds_viewer_when_tmux_available(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr("team_harness.protocol.mode_c.tmux_available", lambda: True)
+
+    runner = TeamHarnessAgentRunner(
+        config=Config(), log_dir=tmp_path, tmux_session="demo"
+    )
+
+    assert runner.tmux_viewer is not None
+    assert runner.tmux_viewer.session_name == "demo"
+
+
+@pytest.mark.asyncio
+async def test_team_harness_agent_runner_opens_a_window_per_spawned_agent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The viewer is asked to tail exactly the worker's own stdout log —
+
+    never the worker's stdin, which stays DEVNULL either way (TH-D2).
+    """
+
+    monkeypatch.setattr("team_harness.protocol.mode_c.tmux_available", lambda: True)
+    opened: list[tuple[str, Path]] = []
+
+    async def fake_open_log_window(
+        self: object, *, window_name: str, log_path: Path
+    ) -> None:
+        opened.append((window_name, log_path))
+
+    monkeypatch.setattr(
+        "team_harness.agents.tmux_view.TmuxViewer.open_log_window", fake_open_log_window
+    )
+
+    config = Config()
+    config.agent_templates = {
+        "codex": AgentTemplate(command=("sh", "-lc", "echo hi"), model_flag=None)
+    }
+    runner = TeamHarnessAgentRunner(
+        config=config, log_dir=tmp_path, tmux_session="demo"
+    )
+
+    result = await runner.run_agent(
+        agent_type="codex", prompt="hi", cwd=str(tmp_path), timeout_sec=10
+    )
+
+    assert result.success is True
+    assert len(opened) == 1
+    window_name, log_path = opened[0]
+    assert log_path == tmp_path / f"{window_name}_stdout.log"
+    assert window_name.startswith("codex_")
+
+
 # 4~9. MODE A Lane Architecture Tests
 @pytest.fixture
 def mode_a_repo(tmp_path: Path) -> Path:
