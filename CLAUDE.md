@@ -8,6 +8,7 @@
 - **[`design/decisions.md`](./design/decisions.md)**는 정본 아키텍처 결정 로그(Architecture Decision Log: TH-D1, TH-D2 등)이며, 시스템이 *왜* 이렇게 설계되었는지를 다룹니다. **새로운 아키텍처 결정은 여기에 기록**해야 하며, 의도된 결정(특히 **TH-D2** 1회성 작업자 및 **TH-D3** 정상 반환 ≠ 성공)을 해당 항목을 읽지 않고 임의로 "수정"하지 마십시오.
 - **`design/designs/`**는 구속력 있는 공식 설계 문서이며, **`design/analysis/`**는 작업 메모입니다. 설계 및 결정 문서는 미래의 에이전트나 비전문가 인간도 사전 맥락 없이 이해할 수 있어야 합니다(AGENTS.md 규칙 2).
 - team-harness는 **다른 프로젝트들이 의존하는 라이브러리**입니다(예: `loopy-loop`). `TeamHarnessResult`, 작업자 실행/라이프사이클 동작, 설정/템플릿 계약을 공개 API로 취급하십시오(AGENTS.md 규칙 3).
+- **Harness Protocol**(여러 AI 에이전트가 MODE A/B/C로 조율되는 상위 워크플로)을 사용하는 경우, 정본 문서는 [`design/harness_protocol/MODES.md`](./design/harness_protocol/MODES.md), [`design/harness_protocol/WORKFLOW.md`](./design/harness_protocol/WORKFLOW.md), [`design/harness_protocol/ENGINEERING_POLICY.md`](./design/harness_protocol/ENGINEERING_POLICY.md), [`design/harness_protocol/HARNESS_AGENTS.md`](./design/harness_protocol/HARNESS_AGENTS.md)입니다. MODE A/B/C의 정의는 대화 기억이 아니라 이 문서들을 정본으로 삼으십시오.
 
 ## 개발 명령어 (Development Commands)
 

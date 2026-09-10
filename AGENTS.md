@@ -4,6 +4,8 @@
 
 `CLAUDE.md`는 개발자 참고서(명령어, 아키텍처, 릴리스 프로세스)입니다. **본 문서는 작업 협약서**로서 여기서 변경 작업을 수행하는 방식을 다룹니다. `design/decisions.md`는 *시스템이 왜 현재와 같이 설계되었는지*에 대한 정본(canonical) 기록입니다. 아래 세 가지 원칙은 반드시 준수해야 합니다.
 
+여러 AI 에이전트를 MODE A(병렬 경쟁)/B(릴레이)/C(역할 파이프라인)로 조율하는 **Harness Protocol**을 다루는 경우, 정본 문서는 `design/harness_protocol/MODES.md`, `WORKFLOW.md`, `ENGINEERING_POLICY.md`, `HARNESS_AGENTS.md`이며 구현은 `src/team_harness/protocol/`에 있습니다. MODE 정의를 대화 기억이나 추측으로 재구성하지 말고 이 문서들을 확인하십시오.
+
 ## 규칙 1 — 결정을 기록하고, 의도된 결정을 존중하라
 
 `design/decisions.md`는 아키텍처 결정 로그(Architecture Decision Log: TH-D1, TH-D2 등)입니다. 직관적이지 않은 아키텍처적 선택을 하거나, 기존 결정을 뒤집거나 수정할 때에는 **반드시 항목을 추가하거나 갱신하십시오**(결정 / 맥락 / 결과). 이전 세션의 기억이 없는 미래의 에이전트나, 회의에 참여하지 않은 사람도 그 이유를 이해할 수 있어야 합니다.
