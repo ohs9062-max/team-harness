@@ -134,20 +134,22 @@ class CheckRunner:
                 duration_sec=time.monotonic() - started,
             )
         except subprocess.TimeoutExpired as error:
+            timeout_stdout: str = (
+                (error.stdout or "")[: self.max_output_chars]
+                if isinstance(error.stdout, str)
+                else ""
+            )
+            timeout_stderr: str = (
+                (error.stderr or "")[: self.max_output_chars]
+                if isinstance(error.stderr, str)
+                else ""
+            )
             return CheckResult(
                 command=command,
                 success=False,
                 exit_code=-2,
-                stdout=(
-                    (error.stdout or "")[: self.max_output_chars]
-                    if isinstance(error.stdout, str)
-                    else ""
-                ),
-                stderr=(
-                    (error.stderr or "")[: self.max_output_chars]
-                    if isinstance(error.stderr, str)
-                    else ""
-                ),
+                stdout=timeout_stdout,
+                stderr=timeout_stderr,
                 duration_sec=time.monotonic() - started,
                 timed_out=True,
             )

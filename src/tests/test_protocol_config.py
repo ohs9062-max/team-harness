@@ -765,7 +765,14 @@ async def test_20_12_mode_a_legacy_selection_aliases(mode_a_repo: Path, tmp_path
 def test_20_13_effective_model_explicit_requested():
     template = resolve_template("codex", Config())
     requested = "gpt-custom-model"
-    effective = requested if requested is not None else template.default_model
+    # requested is a literal here only because this test hardcodes an
+    # explicit override; the ternary mirrors the real requested/effective
+    # resolution used at runtime, where requested is `str | None`.
+    effective = (
+        requested
+        if requested is not None  # pyright: ignore[reportUnnecessaryComparison]
+        else template.default_model
+    )
     assert requested == "gpt-custom-model"
     assert effective == "gpt-custom-model"
     assert requested == effective

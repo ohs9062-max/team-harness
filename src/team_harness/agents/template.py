@@ -164,11 +164,7 @@ DEFAULT_AGENT_TEMPLATES: dict[str, AgentTemplate] = {
     ),
     "antigravity": AgentTemplate(
         command=("agy",),
-        shared_flags=(
-            "--dangerously-skip-permissions",
-            "--print-timeout",
-            "60m",
-        ),
+        shared_flags=("--dangerously-skip-permissions", "--print-timeout", "60m"),
         # agy's --print takes the prompt as its own value (`--print <text>` or
         # `--print=<text>`), not a bare boolean toggle. Route it through
         # prompt_flag so the prompt is always the token immediately after
