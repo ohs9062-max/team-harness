@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 import subprocess
+import time
 from typing import Any
 
 import pytest
@@ -86,6 +88,7 @@ class FakeAgentRunner:
         cwd: str,
         timeout_sec: int,
         model: str | None = None,
+        label: str | None = None,
     ) -> AgentResult:
         self.calls.append(
             {
@@ -94,6 +97,7 @@ class FakeAgentRunner:
                 "cwd": cwd,
                 "timeout_sec": timeout_sec,
                 "model": model,
+                "label": label,
             }
         )
         if "MODE C — DESIGN" in prompt:
@@ -833,6 +837,150 @@ async def test_20_12_mode_a_legacy_selection_aliases(mode_a_repo: Path, tmp_path
     assert resumed_gemini.merge_status == "INTEGRATED"
 
 
+# MODE A COMPARE report: written to disk, populated from state, fed to merge.
+@pytest.mark.asyncio
+async def test_mode_a_compare_report_written_and_populated(
+    mode_a_repo: Path, tmp_path: Path
+):
+    run_dir = tmp_path / "mode_a_compare"
+    runner = FakeAgentRunner()
+    cfg = ProtocolConfig(
+        mode_a_worker_1=ProtocolAgentSpec("codex"),
+        mode_a_worker_2=ProtocolAgentSpec("codex"),
+    )
+    state = await run_mode_a(
+        task_id="task-compare-1",
+        user_request="add a greeting file",
+        target_repo=str(mode_a_repo),
+        run_dir=str(run_dir),
+        agent_runner=runner,
+        auto_discover_checks=False,
+        protocol_config=cfg,
+    )
+
+    assert state.status == "WAITING_USER"
+    assert state.compare_path
+    report = Path(state.compare_path).read_text(encoding="utf-8")
+    # File list, cross-review verdicts and response dispositions all come
+    # from state that FakeAgentRunner's canned MODE A responses populate.
+    assert "worker_1" in report
+    assert "worker_2" in report
+    assert "solution.py" in report  # FakeAgentRunner writes this in INDEPENDENT_WORK
+    assert "Review: looks solid" in report  # FakeAgentRunner's cross-review text
+    assert "ACCEPT" in report
+    assert "SELECT_WORKER_1" in report and "CANCEL" in report
+
+
+@pytest.mark.asyncio
+async def test_mode_a_resume_feeds_compare_report_into_merge_prompt(
+    mode_a_repo: Path, tmp_path: Path
+):
+    run_dir = tmp_path / "mode_a_compare_merge"
+    runner = FakeAgentRunner()
+    cfg = ProtocolConfig(
+        mode_a_worker_1=ProtocolAgentSpec("codex"),
+        mode_a_worker_2=ProtocolAgentSpec("codex"),
+    )
+    await run_mode_a(
+        task_id="task-compare-2",
+        user_request="add a greeting file",
+        target_repo=str(mode_a_repo),
+        run_dir=str(run_dir),
+        agent_runner=runner,
+        auto_discover_checks=False,
+        protocol_config=cfg,
+    )
+    resumed = await resume_mode_a(
+        task_id="task-compare-2",
+        selection="SELECT_WORKER_1",
+        user_instruction="go with worker 1",
+        run_dir=str(run_dir),
+        target_repo=str(mode_a_repo),
+        agent_runner=runner,
+        auto_discover_checks=False,
+        protocol_config=cfg,
+    )
+
+    assert resumed.merge_status == "INTEGRATED"
+    merge_call = next(c for c in runner.calls if "MODE A — CODEX_MERGE" in c["prompt"])
+    # build_merge_prompt renders "(no compare)" when compare_text is empty
+    # (see prompt.py) — its absence here proves the real report was read.
+    assert "(no compare)" not in merge_call["prompt"]
+    assert "Review: looks solid" in merge_call["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_mode_a_independent_work_runs_workers_concurrently(
+    mode_a_repo: Path, tmp_path: Path
+):
+    """INDEPENDENT_WORK is the "PARALLEL" in PARALLEL COMPETITION: both
+
+    workers' agent calls must overlap in time, not run back-to-back.
+    """
+
+    call_windows: list[tuple[str, float, float]] = []
+
+    class TimingAgentRunner:
+        async def run_agent(
+            self,
+            *,
+            agent_type: str,
+            prompt: str,
+            cwd: str,
+            timeout_sec: int,
+            model: str | None = None,
+            label: str | None = None,
+        ) -> AgentResult:
+            started = time.monotonic()
+            await asyncio.sleep(0.05)
+            finished = time.monotonic()
+            call_windows.append((label or agent_type, started, finished))
+            success = True
+            output_text = "ok"
+            if "MODE A — CROSS_REVIEW" in prompt:
+                output_text = "Review: fine.\nVERDICT: PASS"
+            elif "MODE A — RESPONSE" in prompt:
+                output_text = "ACCEPT"
+            elif "MODE A — INDEPENDENT_WORK" in prompt:
+                (Path(cwd) / "solution.py").write_text("print(1)\n", encoding="utf-8")
+            return AgentResult(
+                agent=agent_type,
+                agent_type=agent_type,
+                stage="",
+                success=success,
+                output_text=output_text,
+                model=model,
+                requested_model=model,
+                effective_model=model,
+            )
+
+    runner = TimingAgentRunner()
+    cfg = ProtocolConfig(
+        mode_a_worker_1=ProtocolAgentSpec("codex"),
+        mode_a_worker_2=ProtocolAgentSpec("codex"),
+    )
+    await run_mode_a(
+        task_id="task-parallel-1",
+        user_request="req",
+        target_repo=str(mode_a_repo),
+        run_dir=str(tmp_path / "mode_a_parallel"),
+        agent_runner=runner,
+        auto_discover_checks=False,
+        protocol_config=cfg,
+    )
+
+    independent_work = [c for c in call_windows if "independent_work" in c[0]]
+    assert len(independent_work) == 2
+    (_, w1_start, w1_end), (_, w2_start, w2_end) = independent_work
+    # Overlap, not just "both happened": each call's window intersects the
+    # other's — impossible if they ran sequentially with a 0.05s sleep each.
+    overlap = min(w1_end, w2_end) - max(w1_start, w2_start)
+    assert overlap > 0, (
+        f"expected overlapping INDEPENDENT_WORK calls, got windows "
+        f"{(w1_start, w1_end)} and {(w2_start, w2_end)}"
+    )
+
+
 # 13. requested model 명시: requested == effective
 def test_20_13_effective_model_explicit_requested():
     template = resolve_template("codex", Config())
@@ -888,6 +1036,7 @@ async def test_20_16_handoff_and_events_record_requested_and_effective(tmp_path:
             cwd: str,
             timeout_sec: int,
             model: str | None = None,
+            label: str | None = None,
         ) -> AgentResult:
             eff = model or ("gpt-5.6-sol" if agent_type == "codex" else None)
             if "MODE C — IMPLEMENT" in prompt:

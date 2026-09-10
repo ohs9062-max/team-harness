@@ -6,6 +6,7 @@ After cross-review and response, the runner waits for user selection.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 import re
@@ -33,6 +34,98 @@ from team_harness.protocol.worktree import checkpoint_worktree
 from team_harness.protocol.worktree import create_worktree
 from team_harness.protocol.worktree import diff_worktree
 from team_harness.protocol.worktree import verify_checkpoint
+
+
+def _build_compare_report(state: ProtocolState) -> str:
+    """Render everything gathered so far into one skimmable Markdown report.
+
+    Every piece of content here already lives somewhere in `state` (worktree
+    diffs, cross-review verdicts, response dispositions) — this only
+    assembles it into the single document a person reads right before
+    choosing SELECT_WORKER_1/SELECT_WORKER_2/SELECT_HYBRID/REWORK/CANCEL, so
+    they don't have to open state.json to find it.
+    """
+    workers = tuple(state.worktrees.keys()) or ("worker_1", "worker_2")
+    # state.handoffs already records agent_type per (stage, lane); reuse it
+    # rather than threading worker_specs through as a separate parameter.
+    agent_types = {
+        h["lane"]: h.get("agent_type", "?")
+        for h in state.handoffs
+        if h.get("stage") == Stage.INDEPENDENT_WORK.value and "lane" in h
+    }
+    lines: list[str] = [
+        f"# MODE A 비교 리포트 — {state.task_id}",
+        "",
+        f"**작업 요청:** {state.user_request}",
+        "",
+    ]
+
+    for worker in workers:
+        wt_info = state.worktrees.get(worker, {})
+        wt_path = wt_info.get("path", "")
+        checkpoint = state.checkpoints.get(worker, "")
+        agent_type = agent_types.get(worker, "?")
+
+        lines.append(f"## {worker} ({agent_type})")
+        lines.append("")
+        lines.append(f"- 브랜치: `{state.worker_branches.get(worker, '(없음)')}`")
+        lines.append(f"- 체크포인트: `{checkpoint or '(변경 없음)'}`")
+
+        if checkpoint and wt_path:
+            try:
+                files = changed_files(state.base_commit, checkpoint, wt_path)
+            except Exception:
+                files = []
+        else:
+            files = []
+        if files:
+            lines.append(f"- 변경 파일 ({len(files)}개): " + ", ".join(files))
+        else:
+            lines.append("- 변경 파일: (없음)")
+
+        checks = state.worker_tests.get(worker, [])
+        if checks:
+            failed = [c for c in checks if not c.get("success")]
+            lines.append(
+                f"- 체크: {len(checks) - len(failed)}/{len(checks)} 통과"
+                + (f" ({len(failed)}개 실패)" if failed else "")
+            )
+
+        response = state.responses.get(worker, {})
+        if response:
+            dispositions = ", ".join(response.get("dispositions", [])) or "(없음)"
+            lines.append(f"- 리뷰에 대한 응답: {dispositions}")
+
+        lines.append("")
+
+    lines.append("## 교차 리뷰 (Cross Review)")
+    lines.append("")
+    for review in state.cross_reviews.values():
+        reviewer = review.get("reviewer", "?")
+        target = review.get("target", "?")
+        lines.append(f"### {reviewer} → {target}")
+        lines.append("")
+        lines.append(review.get("output_text", "").strip() or "(내용 없음)")
+        lines.append("")
+
+    lines.append("## 응답 전문 (Response)")
+    lines.append("")
+    for worker in workers:
+        response = state.responses.get(worker)
+        if not response:
+            continue
+        lines.append(f"### {worker}")
+        lines.append("")
+        lines.append(response.get("output_text", "").strip() or "(내용 없음)")
+        lines.append("")
+
+    lines.append("## 선택지")
+    lines.append("")
+    lines.append(
+        "`SELECT_WORKER_1` / `SELECT_WORKER_2` / `SELECT_HYBRID` / `REWORK` / `CANCEL`"
+    )
+
+    return "\n".join(lines)
 
 
 async def run_mode_a(
@@ -125,15 +218,19 @@ async def run_mode_a(
     state_mgr.save_state(state)
 
     # -- INDEPENDENT_WORK --
+    # Both workers operate in their own worktree (disjoint files, disjoint
+    # branches), so their agent calls launch concurrently — this is the
+    # "PARALLEL" in PARALLEL COMPETITION. State mutation stays sequential and
+    # happens only after both calls return, so there's no shared-state race:
+    # each worker's coroutine only reads shared locals, never writes state.
     state.stage = Stage.INDEPENDENT_WORK.value
     for worker in workers:
-        wt_info = state.worktrees[worker]
-        wt_path = wt_info["path"]
         state.worker_status[worker] = StageStatus.RUNNING.value
-        state_mgr.save_state(state)
+    state_mgr.save_state(state)
 
+    async def _independent_work(worker: str):
+        wt_path = state.worktrees[worker]["path"]
         worker_spec = worker_specs[worker]
-        agent_type = worker_spec.agent_type
         prompt = build_independent_work_prompt(
             task_id=task_id,
             user_request=user_request,
@@ -141,13 +238,25 @@ async def run_mode_a(
             worktree_path=wt_path,
             base_commit=state.base_commit,
         )
-        result = await agent_runner.run_agent(
-            agent_type=agent_type,
+        return await agent_runner.run_agent(
+            agent_type=worker_spec.agent_type,
             prompt=prompt,
             cwd=wt_path,
             timeout_sec=agent_timeout_sec,
             model=worker_spec.model,
+            label=f"{worker}-independent_work",
         )
+
+    independent_results = await asyncio.gather(
+        *(_independent_work(worker) for worker in workers)
+    )
+
+    for worker, result in zip(workers, independent_results, strict=True):
+        wt_info = state.worktrees[worker]
+        wt_path = wt_info["path"]
+
+        worker_spec = worker_specs[worker]
+        agent_type = worker_spec.agent_type
         effective_model = (
             result.effective_model
             if result.effective_model is not None
@@ -237,8 +346,13 @@ async def run_mode_a(
     state.stage_statuses[Stage.CROSS_REVIEW.value] = StageStatus.RUNNING.value
     state_mgr.save_state(state)
 
+    # Both reviews read already-completed INDEPENDENT_WORK checkpoints and
+    # target disjoint worktrees, so — same reasoning as INDEPENDENT_WORK —
+    # the two agent calls launch concurrently; only result processing (and
+    # its early-block-on-failure behavior) stays sequential, in pair order.
     pairs = [(workers[1], workers[0]), (workers[0], workers[1])]
-    for reviewer, target in pairs:
+
+    async def _cross_review(reviewer: str, target: str):
         target_wt = state.worktrees[target]["path"]
         target_cp = state.checkpoints.get(target, "")
 
@@ -265,7 +379,6 @@ async def run_mode_a(
         )[:20_000]
 
         reviewer_spec = worker_specs[reviewer]
-        reviewer_type = reviewer_spec.agent_type
         prompt = build_cross_review_prompt(
             task_id=task_id,
             user_request=user_request,
@@ -279,13 +392,22 @@ async def run_mode_a(
             target_checkpoint=target_cp,
         )
 
-        result = await agent_runner.run_agent(
-            agent_type=reviewer_type,
+        return await agent_runner.run_agent(
+            agent_type=reviewer_spec.agent_type,
             prompt=prompt,
             cwd=target_wt,
             timeout_sec=agent_timeout_sec,
             model=reviewer_spec.model,
+            label=f"{reviewer}-cross_review",
         )
+
+    review_results = await asyncio.gather(
+        *(_cross_review(reviewer, target) for reviewer, target in pairs)
+    )
+
+    for (reviewer, target), result in zip(pairs, review_results, strict=True):
+        reviewer_spec = worker_specs[reviewer]
+        reviewer_type = reviewer_spec.agent_type
         effective_model = (
             result.effective_model
             if result.effective_model is not None
@@ -343,12 +465,16 @@ async def run_mode_a(
     state.stage_statuses[Stage.RESPONSE.value] = StageStatus.RUNNING.value
     state_mgr.save_state(state)
 
-    for worker, reviewer in [(workers[0], workers[1]), (workers[1], workers[0])]:
+    # Each worker responds to a review of its own already-completed work, so
+    # (same reasoning as the two stages above) both responses launch
+    # concurrently; result processing stays sequential in worker order.
+    response_pairs = [(workers[0], workers[1]), (workers[1], workers[0])]
+
+    async def _response(worker: str, reviewer: str):
         review_key = f"{reviewer}_reviews_{worker}"
         review_text = state.cross_reviews.get(review_key, {}).get("output_text", "")
 
         worker_spec = worker_specs[worker]
-        worker_type = worker_spec.agent_type
         prompt = build_response_prompt(
             task_id=task_id,
             worker=worker,
@@ -356,13 +482,24 @@ async def run_mode_a(
             review_findings=review_text,
         )
 
-        result = await agent_runner.run_agent(
-            agent_type=worker_type,
+        return await agent_runner.run_agent(
+            agent_type=worker_spec.agent_type,
             prompt=prompt,
             cwd=state.worktrees[worker]["path"],
             timeout_sec=agent_timeout_sec,
             model=worker_spec.model,
+            label=f"{worker}-response",
         )
+
+    response_results = await asyncio.gather(
+        *(_response(worker, reviewer) for worker, reviewer in response_pairs)
+    )
+
+    for (worker, _reviewer), result in zip(
+        response_pairs, response_results, strict=True
+    ):
+        worker_spec = worker_specs[worker]
+        worker_type = worker_spec.agent_type
         effective_model = (
             result.effective_model
             if result.effective_model is not None
@@ -416,9 +553,18 @@ async def run_mode_a(
     state.stage_statuses[Stage.RESPONSE.value] = StageStatus.DONE.value
     state_mgr.save_state(state)
 
-    # -- COMPARE & WAITING_USER --
+    # -- COMPARE --
+    # Everything below is already in `state` from earlier stages; this only
+    # renders it into one document a person can act on in under a minute,
+    # instead of making them dig through the raw state.json / cross_reviews
+    # dict. resume_mode_a later feeds this same text to the merge agent.
     state.stage = Stage.COMPARE.value
+    compare_report = _build_compare_report(state)
+    compare_report_path = state_mgr.write_output("COMPARE", "report", compare_report)
+    state.compare_path = str(compare_report_path)
     state.stage_statuses[Stage.COMPARE.value] = StageStatus.DONE.value
+
+    # -- WAITING_USER --
     state.stage = Stage.WAITING_USER.value
     state.status = "WAITING_USER"
     state_mgr.save_state(state)
@@ -559,6 +705,19 @@ async def resume_mode_a(
     state.stage_statuses[Stage.CODEX_MERGE.value] = StageStatus.RUNNING.value
     state_mgr.save_state(state)
 
+    # The COMPARE stage (run_mode_a) writes a human-readable comparison
+    # report and records its path on state.compare_path. Feed that same
+    # report to the merge agent so its integration choice is grounded in the
+    # same evidence the human based their selection on. An older run_dir
+    # from before compare_path existed (or a compare file since removed)
+    # falls back to an empty string rather than failing the resume.
+    compare_text = ""
+    if state.compare_path:
+        try:
+            compare_text = Path(state.compare_path).read_text(encoding="utf-8")
+        except OSError:
+            compare_text = ""
+
     final_spec = proto_cfg.mode_a_final
     final_type = final_spec.agent_type
     prompt = build_merge_prompt(
@@ -568,7 +727,7 @@ async def resume_mode_a(
         base_branch=state.base_branch,
         base_head=preflight.head,
         selected_details=selected_details,
-        compare_text="",  # Compare report would be loaded from file in production
+        compare_text=compare_text,
     )
 
     result = await agent_runner.run_agent(
@@ -577,6 +736,7 @@ async def resume_mode_a(
         cwd=target_repo,
         timeout_sec=agent_timeout_sec,
         model=final_spec.model,
+        label=f"{final_type}-merge",
     )
     effective_model = (
         result.effective_model

@@ -65,6 +65,7 @@ class AgentRunner(TypingProtocol):
         cwd: str,
         timeout_sec: int,
         model: str | None = None,
+        label: str | None = None,
     ) -> AgentResult: ...
 
 
@@ -106,6 +107,7 @@ class TeamHarnessAgentRunner:
         cwd: str,
         timeout_sec: int,
         model: str | None = None,
+        label: str | None = None,
     ) -> AgentResult:
         resolve_template(agent_type=agent_type, config=self.config)
 
@@ -141,7 +143,7 @@ class TeamHarnessAgentRunner:
         self.manager.register(agent_state)
         if self.tmux_viewer is not None:
             await self.tmux_viewer.open_log_window(
-                window_name=agent_id, log_path=stdout_path
+                window_name=label or agent_id, log_path=stdout_path
             )
 
         timed_out = False
@@ -704,6 +706,7 @@ async def _run_stage(
         cwd=cwd,
         timeout_sec=timeout_sec,
         model=spec.model,
+        label=f"{role_name}-{stage}",
     )
     result.agent = spec.agent_type
     result.agent_type = agent_type

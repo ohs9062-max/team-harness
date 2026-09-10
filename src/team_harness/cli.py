@@ -551,15 +551,42 @@ def _resolve_visibility(
     return tmux_session or f"team-harness-{task_id}"
 
 
+_COMPARE_REPORT_PRINT_LIMIT = 4000
+
+
 def _print_protocol_state(state: Any, *, run_dir: Path) -> None:
     click.echo(f"[protocol] stage={state.stage} status={state.status}")
     if state.blocker:
         click.echo(f"[protocol] blocker: {state.blocker}")
+    if state.status == "WAITING_USER" and getattr(state, "compare_path", None):
+        _print_compare_report(state.compare_path)
     if state.user_selection:
         click.echo(f"[protocol] user_selection={state.user_selection}")
     if state.merge_status and state.merge_status != "PENDING":
         click.echo(f"[protocol] merge_status={state.merge_status}")
     click.echo(f"[protocol] run_dir={run_dir}")
+
+
+def _print_compare_report(compare_path: str) -> None:
+    """Print the MODE A comparison report so a decision needs no other file.
+
+    Capped, not because the content doesn't matter, but because this prints
+    to a plain terminal — a truncation note always points back at the full
+    file for anyone who wants the complete cross-review/response text.
+    """
+
+    try:
+        text = Path(compare_path).read_text(encoding="utf-8")
+    except OSError as exc:
+        click.echo(f"[protocol] (비교 리포트를 읽을 수 없습니다: {exc})")
+        return
+    click.echo("[protocol] ----- 비교 리포트 -----")
+    if len(text) > _COMPARE_REPORT_PRINT_LIMIT:
+        click.echo(text[:_COMPARE_REPORT_PRINT_LIMIT])
+        click.echo(f"[protocol] (리포트가 길어 잘렸습니다 — 전체 내용: {compare_path})")
+    else:
+        click.echo(text)
+    click.echo("[protocol] ----- 비교 리포트 끝 -----")
 
 
 @protocol.command("run")
