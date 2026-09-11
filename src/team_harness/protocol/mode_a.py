@@ -599,6 +599,13 @@ async def resume_mode_a(
     """Resume MODE A after user selection.
 
     Valid selections: SELECT_CODEX, SELECT_GEMINI, SELECT_HYBRID, REWORK, CANCEL.
+
+    On SELECT_WORKER_1/2/HYBRID, records the selected worker's worktree/branch
+    as state.active_worktree/active_branch so a subsequent `run_mode_b` relay
+    has something to continue (see TH-D15) — without this, MODE B's
+    GIT_VERIFY stage always blocks with "No active worktree in state" for any
+    task that started as MODE A, since only MODE C previously set these
+    fields.
     """
     proto_cfg = protocol_config or load_protocol_config()
     run_path = Path(run_dir).resolve()
@@ -699,6 +706,32 @@ async def resume_mode_a(
         f"worktree={state.worktrees.get(w, {}).get('path', '')}"
         for w in selected
     )
+
+    # Record the chosen line of work as the "active" worktree/branch so a
+    # later MODE B relay has something to continue on (see TH-D15). For
+    # SELECT_HYBRID, MODE B can only continue one branch at a time, so the
+    # first selected worker becomes primary — the merge prompt above already
+    # told the integration agent to draw on both checkpoints regardless.
+    if selected:
+        primary_worker = selected[0]
+        state.active_worktree = state.worktrees.get(primary_worker, {}).get("path")
+        state.active_branch = state.worker_branches.get(primary_worker)
+        # logical_agent/backend_agent: state.handoffs already recorded the
+        # primary worker's agent_type during INDEPENDENT_WORK (see
+        # _build_compare_report for the same lookup) — mode_a.py otherwise
+        # never sets these, which left MODE B's relay prompt citing "unknown
+        # agent" as the previous_agent for any task that started as MODE A.
+        primary_agent_type = next(
+            (
+                h.get("agent_type")
+                for h in state.handoffs
+                if h.get("stage") == Stage.INDEPENDENT_WORK.value
+                and h.get("lane") == primary_worker
+            ),
+            None,
+        )
+        state.logical_agent = primary_agent_type
+        state.backend_agent = primary_agent_type
 
     # -- CODEX_MERGE --
     state.stage = Stage.CODEX_MERGE.value

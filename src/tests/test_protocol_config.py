@@ -746,6 +746,92 @@ async def test_20_10_mode_a_select_worker_1(mode_a_repo: Path, tmp_path: Path):
     assert resumed.merge_status == "INTEGRATED"
 
 
+# TH-D15: resume_mode_a must set active_worktree/active_branch so a later
+# MODE B relay has something to continue — previously only MODE C set these.
+@pytest.mark.asyncio
+async def test_mode_a_resume_sets_active_worktree_on_selection(
+    mode_a_repo: Path, tmp_path: Path
+):
+    run_dir = tmp_path / "mode_a_active_worktree_run"
+    runner = FakeAgentRunner()
+    cfg = ProtocolConfig(
+        mode_a_worker_1=ProtocolAgentSpec("codex"),
+        mode_a_worker_2=ProtocolAgentSpec("codex"),
+    )
+    await run_mode_a(
+        task_id="task-active-wt",
+        user_request="req",
+        target_repo=str(mode_a_repo),
+        run_dir=str(run_dir),
+        agent_runner=runner,
+        auto_discover_checks=False,
+        protocol_config=cfg,
+    )
+    resumed = await resume_mode_a(
+        task_id="task-active-wt",
+        selection="SELECT_WORKER_1",
+        user_instruction="",
+        run_dir=str(run_dir),
+        target_repo=str(mode_a_repo),
+        agent_runner=runner,
+        auto_discover_checks=False,
+        protocol_config=cfg,
+    )
+
+    assert resumed.active_worktree == resumed.worktrees["worker_1"]["path"]
+    assert resumed.active_branch == resumed.worker_branches["worker_1"]
+
+
+@pytest.mark.asyncio
+async def test_mode_a_then_mode_b_relay_reaches_final(
+    mode_a_repo: Path, tmp_path: Path
+):
+    """The exact chain that used to block with "No active worktree in
+
+    state" — MODE A never set active_worktree, so any MODE B relay of a
+    MODE A task failed at GIT_VERIFY regardless of what MODE B itself did.
+    """
+
+    run_dir = tmp_path / "mode_a_to_b_run"
+    runner = FakeAgentRunner()
+    cfg = ProtocolConfig(
+        mode_a_worker_1=ProtocolAgentSpec("codex"),
+        mode_a_worker_2=ProtocolAgentSpec("codex"),
+    )
+    await run_mode_a(
+        task_id="task-a-to-b",
+        user_request="req",
+        target_repo=str(mode_a_repo),
+        run_dir=str(run_dir),
+        agent_runner=runner,
+        auto_discover_checks=False,
+        protocol_config=cfg,
+    )
+    await resume_mode_a(
+        task_id="task-a-to-b",
+        selection="SELECT_WORKER_1",
+        user_instruction="",
+        run_dir=str(run_dir),
+        target_repo=str(mode_a_repo),
+        agent_runner=runner,
+        auto_discover_checks=False,
+        protocol_config=cfg,
+    )
+
+    relayed = await run_mode_b(
+        task_id="task-a-to-b",
+        next_agent="codex",
+        run_dir=str(run_dir),
+        target_repo=str(mode_a_repo),
+        agent_runner=runner,
+        auto_discover_checks=False,
+    )
+
+    assert relayed.status != "BLOCKED", relayed.blocker
+    assert relayed.stage == Stage.FINAL.value
+    assert relayed.previous_agent == "codex"  # mode_a_worker_1's agent_type
+
+
 # 11. SELECT_WORKER_2 -> worker_2 선택
 @pytest.mark.asyncio
 async def test_20_11_mode_a_select_worker_2(mode_a_repo: Path, tmp_path: Path):
