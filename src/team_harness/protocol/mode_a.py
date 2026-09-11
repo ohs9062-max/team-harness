@@ -244,7 +244,7 @@ async def run_mode_a(
             cwd=wt_path,
             timeout_sec=agent_timeout_sec,
             model=worker_spec.model,
-            label=f"{worker}-independent_work",
+            label=f"worker_{worker_spec.agent_type}-independent_work",
         )
 
     independent_results = await asyncio.gather(
@@ -398,7 +398,7 @@ async def run_mode_a(
             cwd=target_wt,
             timeout_sec=agent_timeout_sec,
             model=reviewer_spec.model,
-            label=f"{reviewer}-cross_review",
+            label=f"worker_{reviewer_spec.agent_type}-cross_review",
         )
 
     review_results = await asyncio.gather(
@@ -488,7 +488,7 @@ async def run_mode_a(
             cwd=state.worktrees[worker]["path"],
             timeout_sec=agent_timeout_sec,
             model=worker_spec.model,
-            label=f"{worker}-response",
+            label=f"worker_{worker_spec.agent_type}-response",
         )
 
     response_results = await asyncio.gather(

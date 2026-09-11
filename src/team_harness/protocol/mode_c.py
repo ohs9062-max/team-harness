@@ -706,7 +706,11 @@ async def _run_stage(
         cwd=cwd,
         timeout_sec=timeout_sec,
         model=spec.model,
-        label=f"{role_name}-{stage}",
+        # agent_type (codex/claude/antigravity), not role_name — role_name is
+        # nearly always identical to stage (see callers), which made this
+        # window name redundant ("DESIGN-DESIGN") without ever showing which
+        # actual AI backend is running.
+        label=f"{agent_type}-{stage}",
     )
     result.agent = spec.agent_type
     result.agent_type = agent_type
