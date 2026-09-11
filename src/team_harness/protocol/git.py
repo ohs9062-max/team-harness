@@ -22,6 +22,18 @@ class GitPreflight:
     worktrees: list[dict[str, str]]
 
 
+@dataclass(frozen=True)
+class RelayEvidence:
+    """The real Git facts a MODE B receiver must inspect (see `relay_evidence`)."""
+
+    branch: str
+    head: str
+    status: list[str]
+    recent_log: list[str]
+    diff_stat: list[str]
+    changed_files: list[str]
+
+
 def _git(
     *args: str, cwd: str | Path, check: bool = True
 ) -> subprocess.CompletedProcess[str]:
@@ -100,7 +112,7 @@ def list_worktrees(repo_path: str | Path) -> list[dict[str, str]]:
     return records
 
 
-def relay_evidence(worktree_path: str | Path) -> dict[str, object]:
+def relay_evidence(worktree_path: str | Path) -> RelayEvidence:
     """Return the real Git facts a MODE B receiver must inspect.
 
     This is read-only — it never modifies the repository.
@@ -111,11 +123,11 @@ def relay_evidence(worktree_path: str | Path) -> dict[str, object]:
     changed = _git(
         "diff", "--name-only", "HEAD", cwd=worktree_path, check=False
     ).stdout.splitlines()
-    return {
-        "branch": pf.branch,
-        "head": pf.head,
-        "status": pf.status_lines,
-        "recent_log": recent_log,
-        "diff_stat": diff_stat,
-        "changed_files": [f for f in changed if f],
-    }
+    return RelayEvidence(
+        branch=pf.branch,
+        head=pf.head,
+        status=pf.status_lines,
+        recent_log=recent_log,
+        diff_stat=diff_stat,
+        changed_files=[f for f in changed if f],
+    )

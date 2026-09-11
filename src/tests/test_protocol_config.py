@@ -1329,6 +1329,100 @@ async def test_20_23_custom_agent_mode_b_default_accepted(
     assert state_b.backend_agent == "astral"
 
 
+# MODE B CONTINUE: the receiving agent must actually be invoked (previously
+# a no-op — see TH-D14) and the run must reach FINAL/DONE.
+@pytest.mark.asyncio
+async def test_mode_b_continue_invokes_the_relay_agent_and_reaches_final(
+    repo_path: Path, tmp_path: Path
+):
+    run_dir = tmp_path / "mode_b_continue_run"
+    runner = FakeAgentRunner()
+    await run_mode_c(
+        task_id="task-relay-continue",
+        user_request="Initial task",
+        target_repo=str(repo_path),
+        run_dir=str(run_dir),
+        agent_runner=runner,
+        auto_discover_checks=False,
+    )
+    calls_before_relay = len(runner.calls)
+
+    state_b = await run_mode_b(
+        task_id="task-relay-continue",
+        next_agent="codex",
+        run_dir=str(run_dir),
+        target_repo=str(repo_path),
+        agent_runner=runner,
+        auto_discover_checks=False,
+    )
+
+    # The whole point of this fix: CONTINUE must call run_agent(), not just
+    # update bookkeeping and mark itself DONE.
+    assert len(runner.calls) > calls_before_relay
+    relay_call = runner.calls[-1]
+    assert "MODE B — RELAY" in relay_call["prompt"]
+    assert relay_call["label"] == "codex-relay"
+
+    assert state_b.stage == Stage.FINAL.value
+    assert state_b.status == StageStatus.DONE.value
+    # Captured before GIT_VERIFY overwrote state.stage — run_mode_c leaves
+    # the loaded state at FINAL, so that's what the relay prompt should cite
+    # as "where the previous agent stopped", never "GIT_VERIFY" (MODE B's
+    # own bookkeeping stage clobbering the value it was supposed to record).
+    assert state_b.relay["remaining_work"] == Stage.FINAL.value
+    assert "FINAL" in relay_call["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_mode_b_continue_blocks_when_relay_agent_fails(
+    repo_path: Path, tmp_path: Path
+):
+    class SetupThenFailRunner:
+        """MODE C's default FakeAgentRunner for setup, but fails any RELAY call."""
+
+        def __init__(self) -> None:
+            self.setup = FakeAgentRunner()
+            self.calls: list[dict[str, Any]] = []
+
+        async def run_agent(self, *, prompt: str, **kwargs: Any) -> AgentResult:
+            if "MODE B — RELAY" in prompt:
+                self.calls.append({"prompt": prompt, **kwargs})
+                return AgentResult(
+                    agent=kwargs["agent_type"],
+                    agent_type=kwargs["agent_type"],
+                    stage="",
+                    success=False,
+                    error_message="relay agent crashed",
+                )
+            result = await self.setup.run_agent(prompt=prompt, **kwargs)
+            self.calls = self.setup.calls
+            return result
+
+    run_dir = tmp_path / "mode_b_continue_fail_run"
+    runner = SetupThenFailRunner()
+    await run_mode_c(
+        task_id="task-relay-fail",
+        user_request="Initial task",
+        target_repo=str(repo_path),
+        run_dir=str(run_dir),
+        agent_runner=runner,
+        auto_discover_checks=False,
+    )
+
+    state_b = await run_mode_b(
+        task_id="task-relay-fail",
+        next_agent="codex",
+        run_dir=str(run_dir),
+        target_repo=str(repo_path),
+        agent_runner=runner,
+        auto_discover_checks=False,
+    )
+
+    assert state_b.status == "BLOCKED"
+    assert state_b.blocker
+    assert "relay agent crashed" in state_b.blocker
+
+
 # 24. Bogus unregistered agent fails in TeamHarnessAgentRunner.run_agent
 @pytest.mark.asyncio
 async def test_20_24_unregistered_bogus_agent_fails_in_runner(tmp_path: Path):

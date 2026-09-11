@@ -177,6 +177,38 @@ def build_response_prompt(
     )
 
 
+def build_relay_prompt(
+    *,
+    task_id: str,
+    previous_agent: str | None,
+    remaining_work: str,
+    branch: str,
+    checkpoint: str,
+    recent_log: list[str],
+    diff_stat: list[str],
+    changed_files: list[str],
+) -> str:
+    """Build the prompt for MODE B's receiving agent (CONTINUE stage)."""
+    log_excerpt = "\n".join(recent_log) if recent_log else "(no commits yet)"
+    diff_excerpt = "\n".join(diff_stat) if diff_stat else "(no uncommitted changes)"
+    files_excerpt = ", ".join(changed_files) if changed_files else "(none)"
+    return (
+        f"MODE B — RELAY. You are picking up an in-progress task handed off "
+        f"from {previous_agent or '(unknown agent)'}.\n"
+        f"TASK-ID: {task_id}\n"
+        f"BRANCH: {branch}\n"
+        f"HEAD: {checkpoint}\n"
+        f"STAGE WHERE THE PREVIOUS AGENT STOPPED: {remaining_work}\n\n"
+        "You are already in the correct worktree/branch — do not create a new "
+        "one, do not start over. Review what already exists below, then finish "
+        "whatever is incomplete.\n\n"
+        f"RECENT COMMITS:\n{log_excerpt}\n\n"
+        f"UNCOMMITTED DIFF STAT:\n{diff_excerpt}\n\n"
+        f"UNCOMMITTED FILES: {files_excerpt}\n\n"
+        "Report what you changed and why."
+    )
+
+
 def build_merge_prompt(
     *,
     task_id: str,

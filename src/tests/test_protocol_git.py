@@ -143,7 +143,7 @@ def test_relay_evidence(tmp_path: Path) -> None:
     head = _init_repo(repo)
 
     evidence = relay_evidence(repo)
-    assert evidence["branch"] == "main"
-    assert evidence["head"] == head
-    assert isinstance(evidence["recent_log"], list)
-    assert len(evidence["recent_log"]) >= 1
+    assert evidence.branch == "main"
+    assert evidence.head == head
+    assert isinstance(evidence.recent_log, list)
+    assert len(evidence.recent_log) >= 1
