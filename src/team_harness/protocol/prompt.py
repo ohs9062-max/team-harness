@@ -172,7 +172,10 @@ def build_response_prompt(
         f"CHECKPOINT: {checkpoint}\n\n"
         "Do not edit files. For every finding use exactly one disposition:\n"
         "ACCEPT, REJECT, PARTIAL, or NEEDS_TEST.\n"
-        "There is no second automatic round.\n\n"
+        "There is no second automatic round.\n"
+        "You MUST output at least one of those four words, even if the review "
+        "below is a clean pass with no concrete findings to accept or reject — "
+        "in that case output exactly: ACCEPT (no findings raised in review).\n\n"
         f"FINDINGS:\n{findings_excerpt}"
     )
 
