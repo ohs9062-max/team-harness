@@ -654,6 +654,75 @@ async def test_team_harness_agent_runner_opens_a_window_per_spawned_agent(
     assert window_name.startswith("codex_")
 
 
+@pytest.mark.asyncio
+async def test_team_harness_agent_runner_prints_a_completion_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config = Config()
+    # model_flag set (unlike the other TeamHarnessAgentRunner tests in this
+    # file) so spawner's honest-audit-trail logic (TH-D6) actually records
+    # effective_model instead of None — there's a real injection surface here.
+    config.agent_templates = {
+        "codex": AgentTemplate(command=("sh", "-lc", "echo hi"), model_flag="--model")
+    }
+    runner = TeamHarnessAgentRunner(config=config, log_dir=tmp_path)
+
+    result = await runner.run_agent(
+        agent_type="codex",
+        prompt="hi",
+        cwd=str(tmp_path),
+        timeout_sec=10,
+        model="gpt-5.6-terra",
+        effort="high",
+        label="worker_1-independent_work",
+    )
+
+    assert result.success is True
+    out = capsys.readouterr().out
+    assert "worker_1-independent_work 완료" in out
+    assert "codex terra-high" in out
+
+
+@pytest.mark.asyncio
+async def test_team_harness_agent_runner_verbose_false_suppresses_output(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config = Config()
+    config.agent_templates = {
+        "codex": AgentTemplate(command=("sh", "-lc", "echo hi"), model_flag=None)
+    }
+    runner = TeamHarnessAgentRunner(config=config, log_dir=tmp_path, verbose=False)
+
+    await runner.run_agent(
+        agent_type="codex", prompt="hi", cwd=str(tmp_path), timeout_sec=10
+    )
+
+    assert capsys.readouterr().out == ""
+
+
+@pytest.mark.asyncio
+async def test_team_harness_agent_runner_prints_failure_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config = Config()
+    config.agent_templates = {
+        "codex": AgentTemplate(command=("sh", "-lc", "exit 1"), model_flag=None)
+    }
+    runner = TeamHarnessAgentRunner(config=config, log_dir=tmp_path)
+
+    result = await runner.run_agent(
+        agent_type="codex",
+        prompt="hi",
+        cwd=str(tmp_path),
+        timeout_sec=10,
+        label="codex-implement",
+    )
+
+    assert result.success is False
+    out = capsys.readouterr().out
+    assert "codex-implement 실패" in out
+
+
 # 4~9. MODE A Lane Architecture Tests
 @pytest.fixture
 def mode_a_repo(tmp_path: Path) -> Path:

@@ -81,9 +81,15 @@ class TeamHarnessAgentRunner:
         manager: AgentManager | None = None,
         log_dir: str | Path | None = None,
         tmux_session: str | None = None,
+        verbose: bool = True,
     ) -> None:
         self.config = config or Config()
         self.manager = manager or AgentManager()
+        # Print one line per worker completion (agent + effective model/effort)
+        # so a person watching `th protocol` output always knows who actually
+        # did each piece of work, not just the final stage/status summary.
+        # Set False for library/SDK use where stdout output is unwanted.
+        self.verbose = verbose
         self.log_dir = (
             Path(log_dir).resolve()
             if log_dir
@@ -183,6 +189,17 @@ class TeamHarnessAgentRunner:
             suffix = f": {stderr_text[:500]}" if stderr_text else ""
             error_msg = f"Agent process exited with code {returncode}{suffix}"
 
+        if self.verbose:
+            print(
+                _completion_line(
+                    label=label or agent_id,
+                    agent_type=agent_type,
+                    effective_model=spawn_result.effective_model,
+                    effort=effort,
+                    success=success,
+                )
+            )
+
         return AgentResult(
             agent=agent_type,
             agent_type=agent_type,
@@ -198,6 +215,33 @@ class TeamHarnessAgentRunner:
             duration_sec=duration,
             error_message=error_msg,
         )
+
+
+def _short_model_label(model: str | None, effort: str | None) -> str:
+    """Compact model+effort label, e.g. "gpt-5.6-terra"/"high" -> "terra-high".
+
+    Only strips the "gpt-5.6-" prefix (codex's naming scheme, where the
+    tier name alone is unambiguous); other agents' model strings (claude,
+    antigravity) are shown as-is since they aren't in that family.
+    """
+
+    if model is None:
+        return "default"
+    short = model.removeprefix("gpt-5.6-")
+    return f"{short}-{effort}" if effort else short
+
+
+def _completion_line(
+    *,
+    label: str,
+    agent_type: str,
+    effective_model: str | None,
+    effort: str | None,
+    success: bool,
+) -> str:
+    status_word = "완료" if success else "실패"
+    model_label = _short_model_label(effective_model, effort)
+    return f"[protocol] {label} {status_word} — {agent_type} {model_label}"
 
 
 def _extract_verdict(output: str) -> str | None:
