@@ -59,9 +59,10 @@ team-harness는 다중 에이전트 조율(multi-agent orchestration) 하네스�
 
 **에이전트 스킬 (Agent Skills)**: `skills/loader.py`는 `.agents/skills/` 디렉터리(상위 디렉터리를 순회하는 프로젝트 로컬 경로 및 `~/.agents/skills/` 전역 경로)에서 `SKILL.md` 파일을 탐색합니다. YAML 프론트매터를 파싱하여 이름과 설명을 가져옵니다. 스킬은 실행 가능한 코드가 아니라 조율자가 `read_file`을 통해 읽는 지침 문서입니다.
 
-### 두 가지 진입점 (Entry Points)
+### 진입점 (Entry Points)
 
-- **CLI** (`cli.py`): `th run` (1회성 실행) 및 `th repl` (슬래시 명령어를 지원하는 대화형 루프). REPL은 `/clear`, `/compact`, `/agents`, `/log`, `/quit`을 지원합니다.
+- **CLI** (`cli.py`): `th run` (1회성 실행) 및 `th repl` (슬래시 명령어를 지원하는 대화형 루프). REPL은 `/clear`, `/compact`, `/agents`, `/log`, `/kill <agent_id>`(사람이 직접 worker 1개 종료), `/quit`을 지원합니다.
+- **Harness Protocol CLI** (`cli.py`의 `protocol` 그룹 → `protocol/mode_{a,b,c}.py`): `th protocol run [--mode a|c]`(기본 c), `th protocol resume`(MODE A 사용자 선택), `th protocol relay`(MODE B). 기본적으로 worker마다 tmux 창을 열어 로그를 보여주고(TH-D12, `--no-visible`로 끔), 결과는 `task/<TASK-ID>/...` 브랜치에 커밋될 뿐 base 작업 트리는 건드리지 않습니다(TH-D16). 사용법은 `design/harness_protocol/WORKFLOW.md` 0장.
 - **SDK** (`harness.py`): `TeamHarness(...).run(task)`가 `TeamHarnessResult`를 반환합니다. 기본적으로 `SilentConsole`을 사용합니다.
 
 ### 설정 우선순위 (Configuration Resolution)

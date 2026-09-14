@@ -605,8 +605,10 @@ def _print_compare_report(compare_path: str) -> None:
 @click.option(
     "--mode",
     type=click.Choice(["a", "c"]),
-    required=True,
-    help="a=PARALLEL COMPETITION, c=ROLE PIPELINE. "
+    default="c",
+    show_default=True,
+    help="a=PARALLEL COMPETITION, c=ROLE PIPELINE (the default when no mode is "
+    "given, per design/harness_protocol/WORKFLOW.md). "
     "For MODE B (RELAY) use `th protocol relay` on an existing task-id.",
 )
 @click.option("--repo", default=".", show_default=True, help="Target git repository.")

@@ -15,7 +15,7 @@ MODE별 실행 계약은 `MODES.md`, 공통 규칙은 `AGENTS.md`, 코드 원칙
 # MODE A — PARALLEL COMPETITION: 새 작업을 두 worker에게 동시에 맡긴다
 th protocol run --mode a "TASK 설명" --repo .
 
-# MODE C — ROLE PIPELINE: DESIGN → IMPLEMENT → CHECK → REVIEW
+# MODE C — ROLE PIPELINE: DESIGN → IMPLEMENT → CHECK → REVIEW (--mode 생략 시 기본값)
 th protocol run --mode c "TASK 설명" --repo .
 
 # MODE A가 WAITING_USER에서 멈추면(사용자 선택 대기), 위 명령이 출력해준
@@ -180,11 +180,11 @@ DEFINE (Entry AI)
   5. 인계된 Stage와 역할을 유지하고 남은 작업부터 계속
 ```
 
-자동 재개:
+자동 재개 (MODE A/C로 시작한 작업의 `task-id`/`run-dir`을 그대로 사용):
 
 ```bash
-python3 -m demo.orchestrator --repo /path/to/repo --mode B \
-  --resume TASK-ID --relay-agent gemini --execute
+th protocol relay --task-id <TASK-ID> --run-dir <RUN-DIR> --repo /path/to/repo \
+  --next-agent antigravity
 ```
 
 Runner는 새 worktree를 만들지 않고 state의 기존 worktree에서 `git status`, `git log`,
@@ -211,14 +211,13 @@ DEFINE (Entry AI)
 ### 자동 Runner
 
 ```bash
-python3 -m demo.orchestrator --doctor
-python3 -m demo.orchestrator "사용자 작업 목표" --execute
+th protocol run --mode c "사용자 작업 목표" --repo /path/to/repo
 ```
 
 Runner는 다음 Gate를 추가로 강제한다.
 
 1. 설계/검수는 read-only, 구현/FIX만 write 권한을 부여한다.
-2. 각 Agent의 출력은 `.harness/runs/<TASK-ID>/outputs/`에 저장하고 `handoff.json`과 inline excerpt로 다음 Stage에 전달한다.
+2. 각 Agent의 최종 답변은 `~/.team-harness/runs/protocol-<TASK-ID>/protocol_outputs/<STAGE>/<agent>.md`에 저장하고, 인계 기록은 `protocol_state.json`의 `handoffs`에, 다음 Stage에는 inline excerpt로 전달한다. (원본 stdout 스트림은 같은 run 디렉터리의 `<agent_id>_stdout.log`에 남는다.)
 3. 테스트·lint·typecheck·build를 안전하게 발견해 REVIEW보다 먼저 실행한다. 검사 없음은 PASS가 아니라 `WAIVED`로 기록한다.
 4. REVIEW는 명시적인 `VERDICT: PASS | FIX_REQUIRED | BLOCKED`만 인정한다.
 5. FIX_REQUIRED면 구현 Agent가 수정하고 TEST, CHECK와 독립 REVIEW를 새로 실행한다.

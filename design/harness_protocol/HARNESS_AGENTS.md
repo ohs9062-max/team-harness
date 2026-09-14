@@ -28,7 +28,7 @@ MODE별 실행 계약은 `MODES.md`, 실행 흐름은 `WORKFLOW.md`, 코드 원�
 어떤 AI에게 처음 명령하든 동일한 실행 계약이 적용된다.
 AI가 MODE를 임의로 변경하거나 생략하지 않는다.
 
-사용자가 MODE를 지정하지 않고 한 번의 목표로 자동 완성을 요청하면 `demo/orchestrator`는 MODE C를 기본값으로 사용한다. 이 기본값은 Runner에만 적용되며, MODE A의 사용자 선택 Gate나 MODE B 인계 계약을 우회하지 않는다.
+사용자가 MODE를 지정하지 않고 한 번의 목표로 자동 완성을 요청하면 자동 Runner(`th protocol run`)는 MODE C를 기본값으로 사용한다. 이 기본값은 Runner에만 적용되며, MODE A의 사용자 선택 Gate나 MODE B 인계 계약을 우회하지 않는다.
 
 ### 자동 Runner 공통 규칙
 
@@ -37,9 +37,9 @@ AI가 MODE를 임의로 변경하거나 생략하지 않는다.
 - 결정론적 CHECK를 LLM REVIEW보다 먼저 수행한다.
 - 명시적인 REVIEW 판정이 없거나 서로 모순되면 `BLOCKED`다.
 - CLI 장애 fallback과 병렬 quorum은 계획에 명시된 범위에서만 허용한다.
-- 런타임 정본은 `.harness/runs/<TASK-ID>/state.json`, 인계는 `handoff.json`, 감사 기록은 `events.jsonl`이다.
+- 런타임 정본은 `~/.team-harness/runs/protocol-<TASK-ID>/protocol_state.json`(인계 기록은 그 안의 `handoffs`), 감사 기록은 같은 디렉터리의 `protocol_events.jsonl`이다.
 - Runner는 task worktree 안의 local checkpoint commit만 자동 생성할 수 있다.
-- MODE A의 base 통합은 `WAITING_USER` 이후 사용자 선택을 받은 Codex만 수행하며 push는 하지 않는다.
+- MODE A의 통합은 `WAITING_USER` 이후 사용자 선택을 받은 최종 통합 Agent(기본 Codex, `mode_a_final`로 변경 가능)가 `task/<TASK-ID>/integration` 브랜치에서만 수행한다. base 작업 트리 수정·base 브랜치 merge·push는 하지 않으며, base 반영은 사람이 `git merge`로 결정한다(`design/decisions.md` TH-D16).
 
 ## 3. 작업 시작 절차
 
@@ -57,6 +57,8 @@ AI가 MODE를 임의로 변경하거나 생략하지 않는다.
 이전 에이전트의 설명만 믿지 말고 실제 파일을 직접 확인한다.
 
 ## 4. 작업 범위
+
+> **주의:** 아래 디렉터리 구성(`claude/`, `codex/`, `gemini/`, `shared/`, `artifacts/`, `demo/`)은 사람이 직접 운영하는 Harness Lab 작업공간의 관례이며, team-harness 저장소에는 이 디렉터리들이 없다. team-harness의 자동 Runner(`th protocol`)는 대상 저장소(`--repo`)에 `task/<TASK-ID>/...` git worktree를 만들어 작업하고, 실행 기록은 `~/.team-harness/runs/protocol-<TASK-ID>/`에 남긴다.
 
 실제 코드 작성 및 수정 실험은 기본적으로 `demo/` 디렉토리에서 수행한다.
 
