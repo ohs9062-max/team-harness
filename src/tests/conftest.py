@@ -101,6 +101,21 @@ class DummyUI:
         self.inline_count += 1
 
 
+@pytest.fixture(autouse=True)
+def isolate_protocol_worktrees(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Keep protocol worktrees out of the real ~/.team-harness/worktrees.
+
+    Most MODE A/C tests don't pass worktrees_base_dir, so without this they
+    create real worktrees under the user's home directory and never clean them
+    up. That accumulation caused spurious FileExistsError collisions between
+    runs, and makes any blanket cleanup of that directory dangerous to live
+    protocol runs that share it.
+    """
+    base = tmp_path / "th-worktrees"
+    monkeypatch.setattr("team_harness.protocol.worktree.DEFAULT_WORKTREES_DIR", base)
+    return base
+
+
 @pytest.fixture
 def config(tmp_path: Path) -> Config:
     run_dir = tmp_path / "run"
