@@ -46,9 +46,11 @@ async def run_mode_b(
     if next_agent is not None:
         target_agent = normalize_agent_type(next_agent)
         target_model = None
+        target_effort = None
     else:
         target_agent = normalize_agent_type(proto_cfg.mode_b_default.agent_type)
         target_model = proto_cfg.mode_b_default.model
+        target_effort = proto_cfg.mode_b_default.effort
     resolved_type = target_agent
 
     run_path = Path(run_dir).resolve()
@@ -167,6 +169,7 @@ async def run_mode_b(
         cwd=str(worktree_path),
         timeout_sec=agent_timeout_sec,
         model=target_model,
+        effort=target_effort,
         label=f"{target_agent}-relay",
     )
     effective_model = (

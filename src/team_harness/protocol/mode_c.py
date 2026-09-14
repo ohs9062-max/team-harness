@@ -66,6 +66,7 @@ class AgentRunner(TypingProtocol):
         cwd: str,
         timeout_sec: int,
         model: str | None = None,
+        effort: str | None = None,
         label: str | None = None,
     ) -> AgentResult: ...
 
@@ -108,6 +109,7 @@ class TeamHarnessAgentRunner:
         cwd: str,
         timeout_sec: int,
         model: str | None = None,
+        effort: str | None = None,
         label: str | None = None,
     ) -> AgentResult:
         resolve_template(agent_type=agent_type, config=self.config)
@@ -125,6 +127,7 @@ class TeamHarnessAgentRunner:
             config=self.config,
             log_dir=self.log_dir,
             model=model,
+            effort=effort,
             stdout_path=stdout_path,
             stderr_path=stderr_path,
         )
@@ -707,6 +710,7 @@ async def _run_stage(
         cwd=cwd,
         timeout_sec=timeout_sec,
         model=spec.model,
+        effort=spec.effort,
         # agent_type (codex/claude/antigravity), not role_name — role_name is
         # nearly always identical to stage (see callers), which made this
         # window name redundant ("DESIGN-DESIGN") without ever showing which

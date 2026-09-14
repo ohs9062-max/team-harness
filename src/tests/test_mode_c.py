@@ -91,6 +91,7 @@ class MockAgentRunner:
         cwd: str,
         timeout_sec: int,
         model: str | None = None,
+        effort: str | None = None,
         label: str | None = None,
     ) -> AgentResult:
         call_record = {
@@ -99,6 +100,7 @@ class MockAgentRunner:
             "cwd": cwd,
             "timeout_sec": timeout_sec,
             "model": model,
+            "effort": effort,
             "label": label,
         }
         self.calls.append(call_record)

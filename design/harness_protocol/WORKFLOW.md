@@ -34,6 +34,23 @@ worker마다 tmux 창을 하나씩 열어 그 worker의 로그를 실시간으�
 그 사실을 안내한다. 이 창은 worker의 표준 출력을 읽기만 할 뿐 표준 입력에는 전혀
 연결되지 않는다 — worker는 여전히 TH-D2가 말하는 1회성 배치 서브프로세스다.
 
+**모델/effort 오버라이드 (TH-D17).** Protocol의 codex 역할(worker_1, mode_a_final,
+mode_b_default, mode_c_implement)은 기본값이 값싼 티어(`gpt-5.6-terra`, `effort=high`)입니다
+— 난이도를 판단하는 로직이 없으니, 애매하면 저렴한 쪽이 안전하다는 원칙입니다. 실제로
+복잡한 작업이면 환경변수로 올리세요:
+
+```bash
+HARNESS_MODE_C_IMPLEMENT_MODEL=gpt-5.6-sol HARNESS_MODE_C_IMPLEMENT_EFFORT=medium \
+  th protocol run --mode c "복잡한 작업" --repo .
+```
+
+역할별 `HARNESS_MODE_A_WORKER_1_MODEL`/`_EFFORT`, `HARNESS_MODE_A_WORKER_2_MODEL`,
+`HARNESS_MODE_A_FINAL_MODEL`/`_EFFORT`, `HARNESS_MODE_B_DEFAULT_MODEL`/`_EFFORT`,
+`HARNESS_MODE_C_DESIGN_MODEL`, `HARNESS_MODE_C_REVIEW_MODEL`이 같은 패턴입니다
+(`_AGENT` 접미사로 에이전트 종류 자체도 바꿀 수 있습니다). antigravity 역할에는
+`_EFFORT`를 주지 마세요 — antigravity 템플릿엔 reasoning-effort 플래그가 없어서
+오류로 거부됩니다.
+
 **결과를 base 브랜치에 반영하기 (TH-D16).** protocol 실행은 `--repo`로 지정한 저장소의
 작업 트리를 절대 수정하지 않습니다. 결과는 `task/<task-id>/...` 브랜치에 커밋되고, 실행이
 끝나면 CLI가 결과 브랜치와 반영 명령을 출력합니다:

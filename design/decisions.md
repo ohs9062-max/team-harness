@@ -165,3 +165,11 @@ team-harness를 구축하고 검토하는 과정에서 내린 결정들을 기�
 
 **결과.** base 저장소는 protocol 실행 전후로 항상 깨끗하게 유지되므로 연속 실행이 막히지 않습니다. 결과를 base 브랜치에 반영할지, 언제 반영할지는 사람이 `git merge`로 결정합니다 — protocol은 자동 병합하지 않습니다. MODE A의 worker worktree와 통합 worktree는 서로 다른 브랜치이므로, 통합 에이전트는 공유된 git 객체 DB를 통해 선택된 worker의 체크포인트를 가져옵니다(프롬프트에 브랜치·체크포인트·worktree 경로가 모두 제공됨).
 
+
+## TH-D17. Protocol의 role별 기본 모델은 값싼(simple) 티어를 쓰며, effort를 실제로 worker에 전달한다
+
+**결정.** `ProtocolConfig`의 7개 role(`mode_a_worker_1`, `mode_a_worker_2`, `mode_a_final`, `mode_b_default`, `mode_c_design`, `mode_c_implement`, `mode_c_review`) 기본값이 이제 명시적인 모델(과 codex 역할은 `effort`)을 가집니다: codex 역할은 `gpt-5.6-terra`/`effort="high"`, antigravity 역할은 `Gemini 3.8 Flash (High)`(effort 없음), claude 역할(mode_c_design)은 `claude-sonnet-5`. `ProtocolAgentSpec`에 `effort` 필드가 추가됐고, `AgentRunner.run_agent()`(및 `TeamHarnessAgentRunner`, `spawner.spawn()` 호출)가 이제 `effort`를 실제로 worker에 전달합니다 — 지금까지 Protocol 코드는 `effort`를 어디에도 넘긴 적이 없었습니다. 각 role은 기존 `HARNESS_MODE_*_MODEL`과 대칭인 `HARNESS_MODE_*_EFFORT` 환경변수로, 또는 런타임 `ProtocolAgentSpec(model=..., effort=...)`로 여전히 오버라이드할 수 있습니다.
+
+**맥락.** 사용자가 실제로 codex 토큰 할당량을 단순 작업에서 소진한 사례를 보고했습니다. 원인을 추적해보니: `ProtocolAgentSpec`의 기본 `model`이 `None`이었고, `run_agent()`가 `model=None`으로 worker를 spawn하면 `agents/template.py`의 codex 템플릿 자체 기본값인 `gpt-5.6-sol`(사용자 자신이 정의한 티어링 정책에서 "복잡한 작업용" 티어)이 조용히 적용됐습니다 — Protocol이 작업의 난이도를 판단하는 로직을 전혀 갖고 있지 않은데도, "판단하지 않음"의 결과가 항상 "비싼 쪽"으로 떨어졌던 것입니다. 사용자는 이미 `~/.team-harness/config.toml`의 코디네이터 시스템 프롬프트에 "애매하면 단순(저렴한) 티어를 기본값으로 하라"는 정책을 직접 적어두었지만, 이는 일반 코디네이터(LLM)의 자체 판단에만 적용되고 Protocol의 정적 설정에는 전혀 관여하지 않았습니다.
+
+**결과.** 이 변경은 `design/harness_protocol/`이 아직 이 저장소 전용의 비교적 새 기능이고(AGENTS.md 규칙 3이 우려하는 `DEFAULT_AGENT_TEMPLATES`나 `Config.model` 같은 오래 정착된 공개 계약과는 다름), 사용자 자신이 이 저장소의 소유자로서 명시적으로 요청한 방향이라는 점에서 `ProtocolConfig`의 기본값만 바꾸는 선택을 했습니다. **`agents/template.py`의 `DEFAULT_AGENT_TEMPLATES["codex"].default_model`이나 `Config.model`(코디네이터 자신의 모델) 자체는 건드리지 않았습니다** — 이들은 team-harness 전체와 다른 소비자(`loopy-loop` 등)에 영향을 미치는 훨씬 넓은 범위의 계약이라, 이번 변경 범위 밖으로 뒀습니다. 정말로 복잡한 작업에는 여전히 `HARNESS_MODE_*_MODEL`/`_EFFORT` 환경변수나 CLI 오버라이드로 `gpt-5.6-sol`/`effort=medium` 등을 명시적으로 선택할 수 있습니다 — 실패 모드가 "판단 안 된 쉬운 작업에 비싼 티어를 쓴다"에서 "판단 안 된 어려운 작업에 조금 약한 티어를 쓴다"로 바뀌었을 뿐입니다.

@@ -244,6 +244,7 @@ async def run_mode_a(
             cwd=wt_path,
             timeout_sec=agent_timeout_sec,
             model=worker_spec.model,
+            effort=worker_spec.effort,
             label=f"worker_{worker_spec.agent_type}-independent_work",
         )
 
@@ -398,6 +399,7 @@ async def run_mode_a(
             cwd=target_wt,
             timeout_sec=agent_timeout_sec,
             model=reviewer_spec.model,
+            effort=reviewer_spec.effort,
             label=f"worker_{reviewer_spec.agent_type}-cross_review",
         )
 
@@ -488,6 +490,7 @@ async def run_mode_a(
             cwd=state.worktrees[worker]["path"],
             timeout_sec=agent_timeout_sec,
             model=worker_spec.model,
+            effort=worker_spec.effort,
             label=f"worker_{worker_spec.agent_type}-response",
         )
 
@@ -764,6 +767,7 @@ async def resume_mode_a(
         cwd=integration.path,
         timeout_sec=agent_timeout_sec,
         model=final_spec.model,
+        effort=final_spec.effort,
         label=f"{final_type}-merge",
     )
     effective_model = (

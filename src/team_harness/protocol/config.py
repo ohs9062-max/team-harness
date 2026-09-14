@@ -22,6 +22,7 @@ class ProtocolAgentSpec:
 
     agent_type: str
     model: str | None = None
+    effort: str | None = None
 
     def __post_init__(self) -> None:
         raw_model = self.model
@@ -29,6 +30,12 @@ class ProtocolAgentSpec:
             object.__setattr__(self, "model", None)
         elif raw_model is not None:
             object.__setattr__(self, "model", raw_model.strip())
+
+        raw_effort = self.effort
+        if raw_effort is not None and not raw_effort.strip():
+            object.__setattr__(self, "effort", None)
+        elif raw_effort is not None:
+            object.__setattr__(self, "effort", raw_effort.strip())
 
         raw_agent = self.agent_type.strip() if self.agent_type else ""
         if not raw_agent:
@@ -41,26 +48,47 @@ class ProtocolAgentSpec:
 class ProtocolConfig:
     """Configuration mapping protocol roles to agent specifications across MODE A/B/C."""
 
+    # Defaults below deliberately pick the cheap/simple tier (TH-D17): Protocol
+    # has no per-task complexity judgment of its own, so an unset model must
+    # not silently fall through to each worker CLI's own default — for codex
+    # that default is gpt-5.6-sol, the *expensive* tier. A caller who knows a
+    # task is complex overrides via HARNESS_MODE_*_MODEL/_EFFORT or a runtime
+    # ProtocolAgentSpec; the failure mode of an unconsidered default should be
+    # "a bit weak on a hard task", not "burned quota on a trivial one".
     mode_a_worker_1: ProtocolAgentSpec = field(
-        default_factory=lambda: ProtocolAgentSpec(agent_type="codex")
+        default_factory=lambda: ProtocolAgentSpec(
+            agent_type="codex", model="gpt-5.6-terra", effort="high"
+        )
     )
     mode_a_worker_2: ProtocolAgentSpec = field(
-        default_factory=lambda: ProtocolAgentSpec(agent_type="antigravity")
+        default_factory=lambda: ProtocolAgentSpec(
+            agent_type="antigravity", model="Gemini 3.8 Flash (High)"
+        )
     )
     mode_a_final: ProtocolAgentSpec = field(
-        default_factory=lambda: ProtocolAgentSpec(agent_type="codex")
+        default_factory=lambda: ProtocolAgentSpec(
+            agent_type="codex", model="gpt-5.6-terra", effort="high"
+        )
     )
     mode_b_default: ProtocolAgentSpec = field(
-        default_factory=lambda: ProtocolAgentSpec(agent_type="codex")
+        default_factory=lambda: ProtocolAgentSpec(
+            agent_type="codex", model="gpt-5.6-terra", effort="high"
+        )
     )
     mode_c_design: ProtocolAgentSpec = field(
-        default_factory=lambda: ProtocolAgentSpec(agent_type="claude")
+        default_factory=lambda: ProtocolAgentSpec(
+            agent_type="claude", model="claude-sonnet-5"
+        )
     )
     mode_c_implement: ProtocolAgentSpec = field(
-        default_factory=lambda: ProtocolAgentSpec(agent_type="codex")
+        default_factory=lambda: ProtocolAgentSpec(
+            agent_type="codex", model="gpt-5.6-terra", effort="high"
+        )
     )
     mode_c_review: ProtocolAgentSpec = field(
-        default_factory=lambda: ProtocolAgentSpec(agent_type="antigravity")
+        default_factory=lambda: ProtocolAgentSpec(
+            agent_type="antigravity", model="Gemini 3.8 Flash (High)"
+        )
     )
 
 
@@ -72,39 +100,53 @@ def _resolve_role_spec(
     model_var: str,
     default_agent: str,
     default_model: str | None = None,
+    *,
+    runtime_effort: str | None = None,
+    effort_var: str | None = None,
+    default_effort: str | None = None,
 ) -> ProtocolAgentSpec:
     """Resolve a single role's spec adhering to the precedence hierarchy.
 
-    Precedence:
+    Precedence (model and effort resolved independently, same order):
         1. Explicit runtime argument
         2. Environment variables (.env / os.environ)
         3. Protocol default
     """
+
+    def _resolve_value(
+        runtime_value: str | None,
+        spec_value: str | None,
+        env_var: str | None,
+        default_value: str | None,
+    ) -> str | None:
+        if runtime_value is not None:
+            return runtime_value
+        if spec_value is not None:
+            return spec_value
+        env_val = env_map.get(env_var) if env_var else None
+        return env_val.strip() if env_val and env_val.strip() else default_value
+
     if isinstance(runtime_arg, ProtocolAgentSpec):
         agent_type = runtime_arg.agent_type
-        model = runtime_model if runtime_model is not None else runtime_arg.model
-        return ProtocolAgentSpec(agent_type=agent_type, model=model)
+        model = _resolve_value(
+            runtime_model, runtime_arg.model, model_var, default_model
+        )
+        effort = _resolve_value(
+            runtime_effort, runtime_arg.effort, effort_var, default_effort
+        )
+        return ProtocolAgentSpec(agent_type=agent_type, model=model, effort=effort)
     elif isinstance(runtime_arg, str):
         agent_type = runtime_arg
-        if runtime_model is not None:
-            model = runtime_model
-        else:
-            model_val = env_map.get(model_var)
-            model = (
-                model_val.strip() if model_val and model_val.strip() else default_model
-            )
-        return ProtocolAgentSpec(agent_type=agent_type, model=model)
+        model = _resolve_value(runtime_model, None, model_var, default_model)
+        effort = _resolve_value(runtime_effort, None, effort_var, default_effort)
+        return ProtocolAgentSpec(agent_type=agent_type, model=model, effort=effort)
 
     agent_val = env_map.get(agent_var)
-    model_val = env_map.get(model_var)
-
     agent_type = agent_val.strip() if agent_val and agent_val.strip() else default_agent
-    if runtime_model is not None:
-        model = runtime_model
-    else:
-        model = model_val.strip() if model_val and model_val.strip() else default_model
+    model = _resolve_value(runtime_model, None, model_var, default_model)
+    effort = _resolve_value(runtime_effort, None, effort_var, default_effort)
 
-    return ProtocolAgentSpec(agent_type=agent_type, model=model)
+    return ProtocolAgentSpec(agent_type=agent_type, model=model, effort=effort)
 
 
 def load_protocol_config(
@@ -114,18 +156,25 @@ def load_protocol_config(
     environ: dict[str, str] | None = None,
     mode_a_worker_1: ProtocolAgentSpec | str | None = None,
     mode_a_worker_1_model: str | None = None,
+    mode_a_worker_1_effort: str | None = None,
     mode_a_worker_2: ProtocolAgentSpec | str | None = None,
     mode_a_worker_2_model: str | None = None,
+    mode_a_worker_2_effort: str | None = None,
     mode_a_final: ProtocolAgentSpec | str | None = None,
     mode_a_final_model: str | None = None,
+    mode_a_final_effort: str | None = None,
     mode_b_default: ProtocolAgentSpec | str | None = None,
     mode_b_default_model: str | None = None,
+    mode_b_default_effort: str | None = None,
     mode_c_design: ProtocolAgentSpec | str | None = None,
     mode_c_design_model: str | None = None,
+    mode_c_design_effort: str | None = None,
     mode_c_implement: ProtocolAgentSpec | str | None = None,
     mode_c_implement_model: str | None = None,
+    mode_c_implement_effort: str | None = None,
     mode_c_review: ProtocolAgentSpec | str | None = None,
     mode_c_review_model: str | None = None,
+    mode_c_review_effort: str | None = None,
 ) -> ProtocolConfig:
     """Load protocol role configuration with full precedence resolution.
 
@@ -155,6 +204,10 @@ def load_protocol_config(
         "HARNESS_MODE_A_WORKER_1_AGENT",
         "HARNESS_MODE_A_WORKER_1_MODEL",
         "codex",
+        "gpt-5.6-terra",
+        runtime_effort=mode_a_worker_1_effort,
+        effort_var="HARNESS_MODE_A_WORKER_1_EFFORT",
+        default_effort="high",
     )
     spec_a_w2 = _resolve_role_spec(
         mode_a_worker_2,
@@ -163,6 +216,9 @@ def load_protocol_config(
         "HARNESS_MODE_A_WORKER_2_AGENT",
         "HARNESS_MODE_A_WORKER_2_MODEL",
         "antigravity",
+        "Gemini 3.8 Flash (High)",
+        runtime_effort=mode_a_worker_2_effort,
+        effort_var="HARNESS_MODE_A_WORKER_2_EFFORT",
     )
     spec_a_final = _resolve_role_spec(
         mode_a_final,
@@ -171,6 +227,10 @@ def load_protocol_config(
         "HARNESS_MODE_A_FINAL_AGENT",
         "HARNESS_MODE_A_FINAL_MODEL",
         "codex",
+        "gpt-5.6-terra",
+        runtime_effort=mode_a_final_effort,
+        effort_var="HARNESS_MODE_A_FINAL_EFFORT",
+        default_effort="high",
     )
 
     spec_b_def = _resolve_role_spec(
@@ -180,6 +240,10 @@ def load_protocol_config(
         "HARNESS_MODE_B_DEFAULT_AGENT",
         "HARNESS_MODE_B_DEFAULT_MODEL",
         "codex",
+        "gpt-5.6-terra",
+        runtime_effort=mode_b_default_effort,
+        effort_var="HARNESS_MODE_B_DEFAULT_EFFORT",
+        default_effort="high",
     )
 
     spec_c_design = _resolve_role_spec(
@@ -189,6 +253,9 @@ def load_protocol_config(
         "HARNESS_MODE_C_DESIGN_AGENT",
         "HARNESS_MODE_C_DESIGN_MODEL",
         "claude",
+        "claude-sonnet-5",
+        runtime_effort=mode_c_design_effort,
+        effort_var="HARNESS_MODE_C_DESIGN_EFFORT",
     )
     spec_c_impl = _resolve_role_spec(
         mode_c_implement,
@@ -197,6 +264,10 @@ def load_protocol_config(
         "HARNESS_MODE_C_IMPLEMENT_AGENT",
         "HARNESS_MODE_C_IMPLEMENT_MODEL",
         "codex",
+        "gpt-5.6-terra",
+        runtime_effort=mode_c_implement_effort,
+        effort_var="HARNESS_MODE_C_IMPLEMENT_EFFORT",
+        default_effort="high",
     )
     spec_c_rev = _resolve_role_spec(
         mode_c_review,
@@ -205,6 +276,9 @@ def load_protocol_config(
         "HARNESS_MODE_C_REVIEW_AGENT",
         "HARNESS_MODE_C_REVIEW_MODEL",
         "antigravity",
+        "Gemini 3.8 Flash (High)",
+        runtime_effort=mode_c_review_effort,
+        effort_var="HARNESS_MODE_C_REVIEW_EFFORT",
     )
 
     return ProtocolConfig(

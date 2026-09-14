@@ -88,6 +88,7 @@ class FakeAgentRunner:
         cwd: str,
         timeout_sec: int,
         model: str | None = None,
+        effort: str | None = None,
         label: str | None = None,
     ) -> AgentResult:
         self.calls.append(
@@ -97,6 +98,7 @@ class FakeAgentRunner:
                 "cwd": cwd,
                 "timeout_sec": timeout_sec,
                 "model": model,
+                "effort": effort,
                 "label": label,
             }
         )
@@ -194,25 +196,31 @@ class FakeAgentRunner:
         )
 
 
-# 1. env empty -> defaults maintained
+# 1. env empty -> Protocol's built-in cheap-tier defaults apply (TH-D17)
 def test_1_env_empty_defaults_maintained():
     cfg = load_protocol_config(environ={})
     assert cfg.mode_a_worker_1.agent_type == "codex"
-    assert cfg.mode_a_worker_1.model is None
+    assert cfg.mode_a_worker_1.model == "gpt-5.6-terra"
+    assert cfg.mode_a_worker_1.effort == "high"
     assert cfg.mode_a_worker_2.agent_type == "antigravity"
-    assert cfg.mode_a_worker_2.model is None
+    assert cfg.mode_a_worker_2.model == "Gemini 3.8 Flash (High)"
+    assert cfg.mode_a_worker_2.effort is None
     assert cfg.mode_a_final.agent_type == "codex"
-    assert cfg.mode_a_final.model is None
+    assert cfg.mode_a_final.model == "gpt-5.6-terra"
+    assert cfg.mode_a_final.effort == "high"
 
     assert cfg.mode_b_default.agent_type == "codex"
-    assert cfg.mode_b_default.model is None
+    assert cfg.mode_b_default.model == "gpt-5.6-terra"
+    assert cfg.mode_b_default.effort == "high"
 
     assert cfg.mode_c_design.agent_type == "claude"
-    assert cfg.mode_c_design.model is None
+    assert cfg.mode_c_design.model == "claude-sonnet-5"
     assert cfg.mode_c_implement.agent_type == "codex"
-    assert cfg.mode_c_implement.model is None
+    assert cfg.mode_c_implement.model == "gpt-5.6-terra"
+    assert cfg.mode_c_implement.effort == "high"
     assert cfg.mode_c_review.agent_type == "antigravity"
-    assert cfg.mode_c_review.model is None
+    assert cfg.mode_c_review.model == "Gemini 3.8 Flash (High)"
+    assert cfg.mode_c_review.effort is None
 
 
 # 2. MODE C DESIGN agent override: claude -> antigravity (or agy)
@@ -260,7 +268,9 @@ def test_6_empty_model_string_normalized_to_none():
     assert spec.model is None
 
     cfg = load_protocol_config(environ={"HARNESS_MODE_C_DESIGN_MODEL": ""})
-    assert cfg.mode_c_design.model is None
+    # An explicit-but-empty override is treated as "no override" and falls
+    # through to Protocol's own default (TH-D17), not to None.
+    assert cfg.mode_c_design.model == "claude-sonnet-5"
 
     # Verify build_command does NOT include --model ''
     cmd = build_command(
@@ -749,6 +759,58 @@ async def test_20_10_mode_a_select_worker_1(mode_a_repo: Path, tmp_path: Path):
     assert resumed.merge_status == "INTEGRATED"
 
 
+# TH-D17: Protocol's built-in defaults use the cheap tier for codex (never
+# silently fall through to the CLI's own expensive default), and effort
+# actually reaches the spawned worker, not just the resolved config.
+@pytest.mark.asyncio
+async def test_mode_c_implement_uses_cheap_tier_model_and_effort_by_default(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+    runner = FakeAgentRunner()
+
+    await run_mode_c(
+        task_id="TASK-CHEAP-TIER",
+        user_request="Implement answer() function",
+        target_repo=str(repo),
+        run_dir=tmp_path / "run_cheap_tier",
+        agent_runner=runner,
+        auto_discover_checks=False,
+    )
+
+    implement_call = next(
+        c for c in runner.calls if "MODE C — IMPLEMENT" in c["prompt"]
+    )
+    assert implement_call["model"] == "gpt-5.6-terra"
+    assert implement_call["effort"] == "high"
+
+
+@pytest.mark.asyncio
+async def test_mode_a_worker_1_uses_cheap_tier_by_default(
+    mode_a_repo: Path, tmp_path: Path
+) -> None:
+    runner = FakeAgentRunner()
+
+    await run_mode_a(
+        task_id="task-cheap-tier",
+        user_request="req",
+        target_repo=str(mode_a_repo),
+        run_dir=str(tmp_path / "mode_a_cheap_tier"),
+        agent_runner=runner,
+        auto_discover_checks=False,
+    )
+
+    worker_1_call = next(
+        c
+        for c in runner.calls
+        if "MODE A — INDEPENDENT_WORK" in c["prompt"] and c["agent_type"] == "codex"
+    )
+    assert worker_1_call["model"] == "gpt-5.6-terra"
+    assert worker_1_call["effort"] == "high"
+
+
 # TH-D15: resume_mode_a must set active_worktree/active_branch so a later
 # MODE B relay has something to continue — previously only MODE C set these.
 @pytest.mark.asyncio
@@ -1131,6 +1193,7 @@ async def test_mode_a_independent_work_runs_workers_concurrently(
             cwd: str,
             timeout_sec: int,
             model: str | None = None,
+            effort: str | None = None,
             label: str | None = None,
         ) -> AgentResult:
             started = time.monotonic()
@@ -1238,6 +1301,7 @@ async def test_20_16_handoff_and_events_record_requested_and_effective(tmp_path:
             cwd: str,
             timeout_sec: int,
             model: str | None = None,
+            effort: str | None = None,
             label: str | None = None,
         ) -> AgentResult:
             eff = model or ("gpt-5.6-sol" if agent_type == "codex" else None)
