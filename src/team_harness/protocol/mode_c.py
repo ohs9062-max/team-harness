@@ -44,6 +44,7 @@ from team_harness.protocol.prompt import build_fix_prompt
 from team_harness.protocol.prompt import build_implement_prompt
 from team_harness.protocol.prompt import build_review_prompt
 from team_harness.protocol.state import ProtocolStateManager
+from team_harness.protocol.worker_output import extract_final_text
 from team_harness.protocol.worktree import changed_files
 from team_harness.protocol.worktree import checkpoint_worktree
 from team_harness.protocol.worktree import create_worktree
@@ -190,7 +191,7 @@ class TeamHarnessAgentRunner:
             exit_code=returncode,
             stdout_path=str(stdout_path),
             stderr_path=str(stderr_path),
-            output_text=stdout_text,
+            output_text=extract_final_text(stdout_text),
             duration_sec=duration,
             error_message=error_msg,
         )
