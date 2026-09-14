@@ -169,6 +169,9 @@ class FakeAgentRunner:
                 effective_model=model,
             )
         if "MODE A — CODEX_MERGE" in prompt:
+            # cwd is the integration worktree (TH-D16); integrate something so
+            # the harness has a real change to checkpoint on that branch.
+            (Path(cwd) / "integrated.txt").write_text("merged\n", encoding="utf-8")
             return AgentResult(
                 agent=agent_type,
                 agent_type=agent_type,
@@ -778,8 +781,121 @@ async def test_mode_a_resume_sets_active_worktree_on_selection(
         protocol_config=cfg,
     )
 
-    assert resumed.active_worktree == resumed.worktrees["worker_1"]["path"]
-    assert resumed.active_branch == resumed.worker_branches["worker_1"]
+    # TH-D16 supersedes TH-D15's choice: the relayable line of work is the
+    # integrated result, not the pre-integration worker branch.
+    assert resumed.active_branch == "task/task-active-wt/integration"
+    assert resumed.active_worktree
+    assert resumed.active_worktree.endswith("/task-active-wt/integration")
+    assert resumed.checkpoints["integration"] == resumed.checkpoint
+
+
+@pytest.mark.asyncio
+async def test_mode_a_resume_leaves_base_repo_untouched(
+    mode_a_repo: Path, tmp_path: Path
+):
+    """TH-D16: integration happens on a branch; the base working tree and HEAD
+
+    stay exactly as they were, so the next protocol run isn't blocked by
+    uncommitted merge output and merging stays the user's decision.
+    """
+
+    run_dir = tmp_path / "mode_a_base_clean_run"
+    runner = FakeAgentRunner()
+    cfg = ProtocolConfig(
+        mode_a_worker_1=ProtocolAgentSpec("codex"),
+        mode_a_worker_2=ProtocolAgentSpec("codex"),
+    )
+    head_before = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=mode_a_repo, capture_output=True, text=True
+    ).stdout.strip()
+    await run_mode_a(
+        task_id="task-base-clean",
+        user_request="req",
+        target_repo=str(mode_a_repo),
+        run_dir=str(run_dir),
+        agent_runner=runner,
+        auto_discover_checks=False,
+        protocol_config=cfg,
+    )
+    resumed = await resume_mode_a(
+        task_id="task-base-clean",
+        selection="SELECT_WORKER_1",
+        user_instruction="",
+        run_dir=str(run_dir),
+        target_repo=str(mode_a_repo),
+        agent_runner=runner,
+        auto_discover_checks=False,
+        protocol_config=cfg,
+    )
+
+    assert resumed.merge_status == "INTEGRATED"
+    status = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=mode_a_repo,
+        capture_output=True,
+        text=True,
+    ).stdout
+    head_after = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=mode_a_repo, capture_output=True, text=True
+    ).stdout.strip()
+    assert status == ""
+    assert head_after == head_before
+    assert not (mode_a_repo / "integrated.txt").exists()
+    assert resumed.active_branch is not None
+    branch_files = subprocess.run(
+        ["git", "ls-tree", "-r", "--name-only", resumed.active_branch],
+        cwd=mode_a_repo,
+        capture_output=True,
+        text=True,
+    ).stdout.split()
+    assert "integrated.txt" in branch_files
+
+
+@pytest.mark.asyncio
+async def test_mode_a_resume_blocks_when_integration_changes_nothing(
+    mode_a_repo: Path, tmp_path: Path
+):
+    class NoOpMergeRunner(FakeAgentRunner):
+        async def run_agent(self, *, prompt: str, **kwargs: Any) -> AgentResult:
+            if "MODE A — CODEX_MERGE" in prompt:
+                return AgentResult(
+                    agent=kwargs["agent_type"],
+                    agent_type=kwargs["agent_type"],
+                    stage=Stage.CODEX_MERGE.value,
+                    success=True,
+                    output_text="done (did nothing)",
+                )
+            return await super().run_agent(prompt=prompt, **kwargs)
+
+    run_dir = tmp_path / "mode_a_noop_merge_run"
+    runner = NoOpMergeRunner()
+    cfg = ProtocolConfig(
+        mode_a_worker_1=ProtocolAgentSpec("codex"),
+        mode_a_worker_2=ProtocolAgentSpec("codex"),
+    )
+    await run_mode_a(
+        task_id="task-noop-merge",
+        user_request="req",
+        target_repo=str(mode_a_repo),
+        run_dir=str(run_dir),
+        agent_runner=runner,
+        auto_discover_checks=False,
+        protocol_config=cfg,
+    )
+    resumed = await resume_mode_a(
+        task_id="task-noop-merge",
+        selection="SELECT_WORKER_1",
+        user_instruction="",
+        run_dir=str(run_dir),
+        target_repo=str(mode_a_repo),
+        agent_runner=runner,
+        auto_discover_checks=False,
+        protocol_config=cfg,
+    )
+
+    assert resumed.status == "BLOCKED"
+    assert resumed.merge_status != "INTEGRATED"
+    assert "no changes" in (resumed.blocker or "")
 
 
 @pytest.mark.asyncio

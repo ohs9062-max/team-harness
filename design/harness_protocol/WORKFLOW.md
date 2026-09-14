@@ -34,6 +34,18 @@ worker마다 tmux 창을 하나씩 열어 그 worker의 로그를 실시간으�
 그 사실을 안내한다. 이 창은 worker의 표준 출력을 읽기만 할 뿐 표준 입력에는 전혀
 연결되지 않는다 — worker는 여전히 TH-D2가 말하는 1회성 배치 서브프로세스다.
 
+**결과를 base 브랜치에 반영하기 (TH-D16).** protocol 실행은 `--repo`로 지정한 저장소의
+작업 트리를 절대 수정하지 않습니다. 결과는 `task/<task-id>/...` 브랜치에 커밋되고, 실행이
+끝나면 CLI가 결과 브랜치와 반영 명령을 출력합니다:
+
+```bash
+[protocol] 결과 브랜치: task/<task-id>/integration (checkpoint 1a2b3c4d5e6f)
+[protocol] base에 반영하려면: git -C <repo> merge task/<task-id>/integration
+```
+
+MODE A는 `integration`, MODE C는 `pipeline` 브랜치가 결과이며, MODE B로 이어받으면 같은
+브랜치 위에 이어서 커밋됩니다. 검토 후 위 `git merge`를 직접 실행하세요.
+
 **사람이 직접 worker를 끊기.** `th repl`에서 실행 중인 worker가 이상해 보이면
 `/kill <agent_id>`로 즉시 종료할 수 있다(`/agents`로 id 확인). 이건 coordinator LLM이
 쓰는 `kill_agent` 도구와 달리 사람이 직접 트리거하는 것이라 "너무 성급하게 끄지 말라"는
@@ -124,7 +136,7 @@ DEFINE (Entry AI)
 → Compare 보고서 작성
 → WAITING_USER
 → 사용자 선택 (SELECT_CODEX / SELECT_GEMINI / SELECT_HYBRID / REWORK / CANCEL)
-→ Codex Merge (선택된 결과만 local base에 통합)
+→ Codex Merge (선택된 결과만 `task/<TASK-ID>/integration` 브랜치에 통합 — base 작업 트리는 건드리지 않음, TH-D16)
 → CHECK
 → FINAL
 ```

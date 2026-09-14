@@ -564,6 +564,17 @@ def _print_protocol_state(state: Any, *, run_dir: Path) -> None:
         click.echo(f"[protocol] user_selection={state.user_selection}")
     if state.merge_status and state.merge_status != "PENDING":
         click.echo(f"[protocol] merge_status={state.merge_status}")
+    if state.status == "DONE" and state.active_branch and state.checkpoint:
+        # Protocol runs never modify the base working tree (TH-D16); merging
+        # the result branch into the base branch is the user's call.
+        click.echo(
+            f"[protocol] 결과 브랜치: {state.active_branch} "
+            f"(checkpoint {state.checkpoint[:12]})"
+        )
+        click.echo(
+            "[protocol] base에 반영하려면: "
+            f"git -C {state.target_repo} merge {state.active_branch}"
+        )
     click.echo(f"[protocol] run_dir={run_dir}")
 
 

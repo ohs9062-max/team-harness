@@ -600,12 +600,12 @@ async def resume_mode_a(
 
     Valid selections: SELECT_CODEX, SELECT_GEMINI, SELECT_HYBRID, REWORK, CANCEL.
 
-    On SELECT_WORKER_1/2/HYBRID, records the selected worker's worktree/branch
-    as state.active_worktree/active_branch so a subsequent `run_mode_b` relay
-    has something to continue (see TH-D15) — without this, MODE B's
-    GIT_VERIFY stage always blocks with "No active worktree in state" for any
-    task that started as MODE A, since only MODE C previously set these
-    fields.
+    On SELECT_WORKER_1/2/HYBRID, the final agent integrates the selection on a
+    dedicated `task/<id>/integration` branch cut from the frozen base commit;
+    the base repository's working tree is never modified (TH-D16). That branch
+    becomes state.active_worktree/active_branch, so a later `run_mode_b` relay
+    continues from the integrated result, and merging it into the base branch
+    is left to the user.
     """
     proto_cfg = protocol_config or load_protocol_config()
     run_path = Path(run_dir).resolve()
@@ -663,9 +663,10 @@ async def resume_mode_a(
         )
 
     # Verify checkpoints
-    workers = (
-        list(state.worktrees.keys()) if state.worktrees else ["worker_1", "worker_2"]
-    )
+    workers = [w for w in state.worktrees if w in ("worker_1", "worker_2")] or [
+        "worker_1",
+        "worker_2",
+    ]
     for worker in workers:
         cp = state.checkpoints.get(worker, "")
         if not cp:
@@ -707,36 +708,28 @@ async def resume_mode_a(
         for w in selected
     )
 
-    # Record the chosen line of work as the "active" worktree/branch so a
-    # later MODE B relay has something to continue on (see TH-D15). For
-    # SELECT_HYBRID, MODE B can only continue one branch at a time, so the
-    # first selected worker becomes primary — the merge prompt above already
-    # told the integration agent to draw on both checkpoints regardless.
-    if selected:
-        primary_worker = selected[0]
-        state.active_worktree = state.worktrees.get(primary_worker, {}).get("path")
-        state.active_branch = state.worker_branches.get(primary_worker)
-        # logical_agent/backend_agent: state.handoffs already recorded the
-        # primary worker's agent_type during INDEPENDENT_WORK (see
-        # _build_compare_report for the same lookup) — mode_a.py otherwise
-        # never sets these, which left MODE B's relay prompt citing "unknown
-        # agent" as the previous_agent for any task that started as MODE A.
-        primary_agent_type = next(
-            (
-                h.get("agent_type")
-                for h in state.handoffs
-                if h.get("stage") == Stage.INDEPENDENT_WORK.value
-                and h.get("lane") == primary_worker
-            ),
-            None,
-        )
-        state.logical_agent = primary_agent_type
-        state.backend_agent = primary_agent_type
-
     # -- CODEX_MERGE --
     state.stage = Stage.CODEX_MERGE.value
     state.stage_statuses[Stage.CODEX_MERGE.value] = StageStatus.RUNNING.value
     state_mgr.save_state(state)
+
+    # Integrate on a dedicated branch cut from the frozen base commit, never in
+    # the base repository's own working tree (TH-D16). The base stays clean, so
+    # the next protocol run isn't blocked by uncommitted merge output, and
+    # merging the result into the base branch remains the human's decision.
+    try:
+        integration = create_worktree(
+            target_repo, task_id, "integration", state.base_commit
+        )
+    except Exception as exc:
+        return _block(state, state_mgr, Stage.CODEX_MERGE.value, str(exc))
+    state_mgr.append_event(
+        "worktree.created",
+        label="integration",
+        path=integration.path,
+        branch=integration.branch,
+        base_commit=state.base_commit,
+    )
 
     # The COMPARE stage (run_mode_a) writes a human-readable comparison
     # report and records its path on state.compare_path. Feed that same
@@ -761,12 +754,14 @@ async def resume_mode_a(
         base_head=preflight.head,
         selected_details=selected_details,
         compare_text=compare_text,
+        integration_worktree=integration.path,
+        integration_branch=integration.branch,
     )
 
     result = await agent_runner.run_agent(
         agent_type=final_type,
         prompt=prompt,
-        cwd=target_repo,
+        cwd=integration.path,
         timeout_sec=agent_timeout_sec,
         model=final_spec.model,
         label=f"{final_type}-merge",
@@ -803,6 +798,32 @@ async def resume_mode_a(
             result.error_message or f"Integration agent {final_type} failed",
         )
 
+    # Capture the integration as a commit on its branch. The merge prompt tells
+    # the agent not to commit, so normally we commit its staged edits; if it
+    # committed anyway (e.g. ran `git merge`), its HEAD already holds the work.
+    # A branch still at the base commit means nothing was integrated — that
+    # must not be reported as INTEGRATED (TH-D3: a normal return is not success).
+    try:
+        integration_cp = checkpoint_worktree(integration.path, task_id, "integration")
+    except RuntimeError:
+        integration_cp = git_preflight(integration.path).head
+        if integration_cp == state.base_commit:
+            return _block(
+                state,
+                state_mgr,
+                Stage.CODEX_MERGE.value,
+                "Integration produced no changes on the integration branch",
+            )
+    state.checkpoint = integration_cp
+    state.checkpoints["integration"] = integration_cp
+
+    # The integration branch is now the task's line of work: MODE B relays
+    # continue from it, and the CLI prints how to merge it into the base.
+    state.active_worktree = integration.path
+    state.active_branch = integration.branch
+    state.logical_agent = final_type
+    state.backend_agent = final_type
+
     state.merge_status = "INTEGRATED"
     state.stage_statuses[Stage.CODEX_MERGE.value] = StageStatus.DONE.value
 
@@ -810,7 +831,7 @@ async def resume_mode_a(
     check_status = _run_checks(
         state=state,
         state_mgr=state_mgr,
-        worktree_path=target_repo,
+        worktree_path=integration.path,
         check_commands=check_commands,
         auto_discover=auto_discover_checks,
         timeout_sec=check_timeout_sec,
@@ -823,6 +844,12 @@ async def resume_mode_a(
     state.stage_statuses[Stage.FINAL.value] = StageStatus.DONE.value
     state.status = StageStatus.DONE.value
     state_mgr.save_state(state)
-    state_mgr.append_event("run.finished", status="DONE", selection=selection)
+    state_mgr.append_event(
+        "run.finished",
+        status="DONE",
+        selection=selection,
+        branch=integration.branch,
+        checkpoint=integration_cp,
+    )
 
     return state

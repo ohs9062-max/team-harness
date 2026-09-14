@@ -218,6 +218,8 @@ def build_merge_prompt(
     base_head: str,
     selected_details: str,
     compare_text: str,
+    integration_worktree: str = "",
+    integration_branch: str = "",
 ) -> str:
     """Build the prompt for MODE A Codex merge."""
     compare_excerpt = compare_text[:60_000] if compare_text else "(no compare)"
@@ -228,8 +230,12 @@ def build_merge_prompt(
         f"USER-INSTRUCTION: {user_instruction or 'none'}\n"
         f"BASE-BRANCH: {base_branch}\n"
         f"BASE-CURRENT-HEAD: {base_head}\n\n"
+        f"INTEGRATION-WORKTREE: {integration_worktree or '(current directory)'}\n"
+        f"INTEGRATION-BRANCH: {integration_branch or '(current branch)'}\n\n"
         f"SELECTED RESULTS:\n{selected_details}\n\n"
-        "Integrate exactly the selected result into the base working tree.\n"
+        "Integrate exactly the selected result into the integration worktree "
+        "(your current directory: a fresh branch cut from the frozen base "
+        "commit). Never edit the base repository's own working tree.\n"
         "You are the integration executor, not the decision maker.\n"
         "For SELECT_HYBRID, use both checkpoints and the user instruction.\n"
         "Do not commit, push, reset, or delete branches.\n"

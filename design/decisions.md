@@ -149,8 +149,19 @@ team-harness를 구축하고 검토하는 과정에서 내린 결정들을 기�
 
 ## TH-D15. MODE A의 resume는 선택된 worker의 worktree/branch를 active_worktree/active_branch에 기록해, MODE B가 이어받을 대상을 갖게 한다
 
+> **TH-D16에서 변경됨:** active_worktree/active_branch는 이제 선택된 worker의 브랜치가 아니라 통합(integration) 브랜치를 가리킵니다. "MODE A 출신 작업도 MODE B로 이어받을 수 있어야 한다"는 이 항목의 목적은 그대로 유지됩니다.
+
 **결정.** `resume_mode_a`는 사용자가 SELECT_WORKER_1/SELECT_WORKER_2/SELECT_HYBRID로 선택을 마치면, 선택된 worker(HYBRID는 첫 번째 worker를 대표로) 의 worktree 경로와 branch를 각각 `state.active_worktree`, `state.active_branch`에 기록합니다. 같은 시점에 `state.logical_agent`/`state.backend_agent`도 그 worker의 실제 agent_type으로 채웁니다(예: `codex`). REWORK/CANCEL 선택은 이 필드를 건드리지 않습니다 — 이어받을 확정된 작업 라인이 없는 상태이기 때문입니다.
 
 **맥락.** MODE A로 시작한 작업을 실제로 `th protocol relay`(MODE B)로 넘기려 시도했더니 `run_mode_b`의 GIT_VERIFY 단계가 항상 `"No active worktree in state"`로 막혔습니다. 원인은 `state.active_worktree`/`active_branch`(및 `logical_agent`)를 지금까지 **MODE C만** 채우고 있었기 때문입니다 — MODE A는 `state.worktrees`(worker별 딕셔너리)라는 별도 구조를 쓰고, 어느 코드 경로에서도 이 두 필드에 값을 넣지 않았습니다. `design/harness_protocol/MODES.md`가 정의하는 MODE B("현재 작업의 Git branch, worktree, checkpoint, diff, state를 유지한 채 다음 Agent가 이어받는 방식")는 "현재 작업"이 어느 MODE에서 왔는지 가리지 않아야 하는데, 실제 구현은 MODE C에서 시작한 작업만 이어받을 수 있었습니다. TH-D14로 MODE B의 CONTINUE 단계를 실제로 동작하게 고친 뒤에야, 그 앞단인 GIT_VERIFY가 MODE A 출신 상태를 애초에 통과시키지 못한다는 사실이 실제 A→B 연쇄 테스트에서 드러났습니다.
 
 **결과.** 최종 병합(`CODEX_MERGE`) 이후 base_repo에 통합된 결과 자체가 아니라, 선택된 worker의 (병합 전) worktree/branch가 "이어받을 대상"이 됩니다 — MODE B는 `active_worktree == base_repo`를 명시적으로 거부하므로(사용자 저장소에 worktree 없이 직접 쓰지 않기 위한 기존 가드), base_repo를 active_worktree로 삼을 수는 없었습니다. 따라서 MODE A→B로 이어받은 다음 에이전트의 작업은 그 worker 브랜치 위에서 계속되며, base_repo에 다시 합치려면 별도의 병합 절차(사람이 직접, 또는 또 다른 MODE A/C 실행)가 필요합니다 — MODE B는 그 재병합을 자동으로 하지 않습니다. SELECT_HYBRID처럼 두 worker가 모두 선택된 경우에도 MODE B는 한 번에 하나의 branch만 이어받을 수 있으므로 첫 번째 worker를 대표로 삼습니다.
+
+## TH-D16. Protocol 실행은 base 저장소의 작업 트리를 절대 수정하지 않는다 — 결과는 task 브랜치에 커밋되고, base 반영은 사람이 merge한다
+
+**결정.** MODE A/B/C 모두 최종 결과를 `task/<task-id>/...` 브랜치에 커밋으로 남기고, 사용자가 지정한 base 저장소(`--repo`)의 작업 트리와 HEAD는 건드리지 않습니다. MODE A의 최종 통합(CODEX_MERGE)은 이제 base 작업 트리가 아니라, 동결된 base commit에서 새로 딴 `task/<task-id>/integration` worktree에서 실행되고, 하네스가 그 결과를 체크포인트 커밋합니다. 통합 에이전트가 지시와 달리 직접 커밋한 경우(예: `git merge`)에는 그 HEAD를 결과로 인정하고, 통합 브랜치가 base commit에서 한 커밋도 나아가지 않았다면 INTEGRATED가 아니라 BLOCKED로 끝냅니다(TH-D3: 정상 반환 ≠ 성공). 통합 브랜치는 `active_worktree`/`active_branch`가 되어 MODE B 릴레이의 출발점이 됩니다(TH-D15 갱신). 실행이 DONE으로 끝나면 CLI가 결과 브랜치와 `git -C <repo> merge <branch>` 명령을 출력합니다.
+
+**맥락.** 실제 A→B→C 연속 테스트에서 두 모드가 서로 다르게 동작하는 것이 드러났습니다. MODE A는 통합 에이전트가 base 작업 트리를 직접 수정하되 커밋은 하지 말라는 지시를 받아, 결과가 uncommitted 변경으로 남았고 — 그 직후 같은 저장소로 시작한 MODE C가 GIT_PREFLIGHT에서 "Repository has uncommitted changes"로 막혔습니다. 반대로 MODE C는 결과를 pipeline 브랜치에만 커밋하고 base를 건드리지 않아, FINAL/DONE이라고 표시되는데 사용자는 결과가 어느 브랜치에 있는지 찾아야 했습니다. 사람이 검토하기 전에 base 브랜치를 바꾸지 않는다는 원칙은 두 방식에 공통이지만, 그 원칙을 지키는 방법이 달랐고 MODE A 쪽 방법은 다음 실행을 막는 부작용이 있었습니다.
+
+**결과.** base 저장소는 protocol 실행 전후로 항상 깨끗하게 유지되므로 연속 실행이 막히지 않습니다. 결과를 base 브랜치에 반영할지, 언제 반영할지는 사람이 `git merge`로 결정합니다 — protocol은 자동 병합하지 않습니다. MODE A의 worker worktree와 통합 worktree는 서로 다른 브랜치이므로, 통합 에이전트는 공유된 git 객체 DB를 통해 선택된 worker의 체크포인트를 가져옵니다(프롬프트에 브랜치·체크포인트·worktree 경로가 모두 제공됨).
+
