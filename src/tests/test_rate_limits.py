@@ -300,6 +300,16 @@ async def test_config_knob_disables_detection_recording_and_short_circuit(tmp_pa
 
 @pytest.mark.asyncio
 async def test_stdout_read_error_leaves_scan_retryable(tmp_path, ui, monkeypatch):
+    # The claude fixture carries an absolute resetsAt (1784811600). Without
+    # pinning "now" before that instant the trip this test asserts on is
+    # expired by RateLimitCircuitBreaker._expire_stale the moment it is
+    # created, so the test would silently start failing once wall-clock time
+    # passed the fixture's reset. Pin it like the sibling reprobe test does.
+    monkeypatch.setattr(
+        rate_limits,
+        "_utc_now",
+        lambda: datetime.fromtimestamp(1784811500, tz=timezone.utc),
+    )
     worker = _fake_worker(tmp_path)
     config = _config(tmp_path, worker)
     run_dir = config.run_dir

@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from team_harness.protocol.models import AGENT_TYPE_MAP
+from team_harness.protocol.models import AgentResult
 from team_harness.protocol.models import CheckStatus
 from team_harness.protocol.models import LogicalAgent
 from team_harness.protocol.models import ProtocolMode
@@ -257,3 +258,43 @@ def test_protocol_state_manager_sensitive_masking(tmp_path: Path) -> None:
     raw_json = (run_dir / "protocol_state.json").read_text(encoding="utf-8")
     assert "sk-1234567890abcdef123456" not in raw_json
     assert "[MASKED]" in raw_json
+
+
+def test_resolve_effective_model_prefers_what_the_spawner_injected():
+    result = AgentResult(
+        agent="codex",
+        agent_type="codex",
+        stage="IMPLEMENT",
+        success=True,
+        model="stale",
+        effective_model="gpt-5.6-terra",
+    )
+
+    assert result.resolve_effective_model("gpt-5.6-lite") == "gpt-5.6-terra"
+
+
+def test_resolve_effective_model_falls_back_to_model_then_configured():
+    from_model = AgentResult(
+        agent="codex", agent_type="codex", stage="IMPLEMENT", success=True, model="mid"
+    )
+    from_config = AgentResult(
+        agent="codex", agent_type="codex", stage="IMPLEMENT", success=True
+    )
+
+    assert from_model.resolve_effective_model("configured") == "mid"
+    assert from_config.resolve_effective_model("configured") == "configured"
+
+
+def test_resolve_effective_model_is_none_when_nothing_was_launched():
+    """A refused stage must not report a model it never actually used (TH-D6)."""
+
+    refused = AgentResult(
+        agent="claude",
+        agent_type="claude",
+        stage="IMPLEMENT",
+        success=False,
+        spawned=False,
+        requested_model="claude-sonnet-5",
+    )
+
+    assert refused.resolve_effective_model("claude-sonnet-5") is None

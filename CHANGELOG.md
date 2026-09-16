@@ -7,6 +7,15 @@
 
 ## [Unreleased]
 
+### 추가됨 (Added)
+
+- **Protocol worker 실패 분류 및 패밀리 서킷 차단 (TH-D18).** MODE A/B/C가 공유하는 `TeamHarnessAgentRunner`가 이제 실패한 worker의 원인을 분류해 `AgentResult.failure_classification`에 담고 `protocol_state.json`의 `handoffs`와 `protocol_events.jsonl`에 기록합니다. TH-D10의 엄격한 stdout JSONL 스캔이 명시적인 하드 429를 찾은 경우에만 해당 에이전트 패밀리의 실행 범위 서킷이 열리고, 서킷이 열린 동안 같은 패밀리의 stage는 프로세스를 띄우지 않고 즉시 거부됩니다(`spawned=False`). 그 결과 stage 실패 메시지가 `"exited with code 1"`에서 `"... [rate_limit: ...]"`처럼 원인과 리셋 시각을 담게 됩니다. 하네스는 role에 지정된 백엔드를 자동으로 다른 패밀리로 교체하지 않습니다(TH-D6).
+- `AgentResult`에 `spawned: bool = True`와 `failure_classification: dict | None = None` 필드 추가(둘 다 기본값이 있어 기존 `AgentRunner` 구현과 호환됩니다), 그리고 `AgentResult.resolve_effective_model()` 헬퍼 추가 — 실행되지 않은 stage는 설정된 모델을 `effective_model`로 보고하지 않고 `None`을 보고합니다(TH-D6 감사 정합성). MODE A에 4번, MODE C에 1번 중복돼 있던 모델 리졸브 로직을 이 헬퍼로 통합했습니다.
+
+### 수정됨 (Fixed)
+
+- `test_stdout_read_error_leaves_scan_retryable`가 벽시계 시간에 따라 실패하던 문제. 이 테스트는 `claude_rate_limit.jsonl` 픽스처의 절대 `resetsAt`(1784811600 = 2026-07-23T13:00Z)에 의존하는데 `now`를 고정하지 않아, 실제 시간이 그 시각을 지난 뒤로는 서킷이 생성 즉시 만료되어 항상 실패했습니다. 형제 테스트와 동일하게 `rate_limits._utc_now`를 픽스처 리셋 이전으로 고정합니다.
+
 ## [0.7.0] - 2026-07-20
 
 ### 추가됨 (Added)

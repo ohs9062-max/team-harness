@@ -258,11 +258,7 @@ async def run_mode_a(
 
         worker_spec = worker_specs[worker]
         agent_type = worker_spec.agent_type
-        effective_model = (
-            result.effective_model
-            if result.effective_model is not None
-            else (result.model if result.model is not None else worker_spec.model)
-        )
+        effective_model = result.resolve_effective_model(worker_spec.model)
         result.agent = agent_type
         result.agent_type = agent_type
         result.stage = Stage.INDEPENDENT_WORK.value
@@ -280,6 +276,8 @@ async def run_mode_a(
                 "requested_model": worker_spec.model,
                 "effective_model": effective_model,
                 "success": result.success,
+                "spawned": result.spawned,
+                "failure_classification": result.failure_classification,
             }
         )
 
@@ -410,11 +408,7 @@ async def run_mode_a(
     for (reviewer, target), result in zip(pairs, review_results, strict=True):
         reviewer_spec = worker_specs[reviewer]
         reviewer_type = reviewer_spec.agent_type
-        effective_model = (
-            result.effective_model
-            if result.effective_model is not None
-            else (result.model if result.model is not None else reviewer_spec.model)
-        )
+        effective_model = result.resolve_effective_model(reviewer_spec.model)
         result.agent = reviewer_type
         result.agent_type = reviewer_type
         result.stage = Stage.CROSS_REVIEW.value
@@ -433,6 +427,8 @@ async def run_mode_a(
                 "requested_model": reviewer_spec.model,
                 "effective_model": effective_model,
                 "success": result.success,
+                "spawned": result.spawned,
+                "failure_classification": result.failure_classification,
             }
         )
 
@@ -503,11 +499,7 @@ async def run_mode_a(
     ):
         worker_spec = worker_specs[worker]
         worker_type = worker_spec.agent_type
-        effective_model = (
-            result.effective_model
-            if result.effective_model is not None
-            else (result.model if result.model is not None else worker_spec.model)
-        )
+        effective_model = result.resolve_effective_model(worker_spec.model)
         result.agent = worker_type
         result.agent_type = worker_type
         result.stage = Stage.RESPONSE.value
@@ -539,6 +531,8 @@ async def run_mode_a(
                 "requested_model": worker_spec.model,
                 "effective_model": effective_model,
                 "success": result.success,
+                "spawned": result.spawned,
+                "failure_classification": result.failure_classification,
             }
         )
 
@@ -770,11 +764,7 @@ async def resume_mode_a(
         effort=final_spec.effort,
         label=f"{final_type}-merge",
     )
-    effective_model = (
-        result.effective_model
-        if result.effective_model is not None
-        else (result.model if result.model is not None else final_spec.model)
-    )
+    effective_model = result.resolve_effective_model(final_spec.model)
     result.agent = final_type
     result.agent_type = final_type
     result.stage = Stage.CODEX_MERGE.value
@@ -791,6 +781,8 @@ async def resume_mode_a(
             "requested_model": final_spec.model,
             "effective_model": effective_model,
             "success": result.success,
+            "spawned": result.spawned,
+            "failure_classification": result.failure_classification,
         }
     )
 

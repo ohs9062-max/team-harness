@@ -20,9 +20,13 @@ from typing import Protocol as TypingProtocol
 import uuid
 
 from team_harness.agents import spawner
+from team_harness.agents.api_error_classifier import classify_agent_failure
 from team_harness.agents.manager import AgentManager
 from team_harness.agents.manager import AgentState
 from team_harness.agents.process_identity import signal_group
+from team_harness.agents.rate_limits import detect_rate_limit_from_path
+from team_harness.agents.rate_limits import RateLimitCircuitBreaker
+from team_harness.agents.rate_limits import RateLimitTrip
 from team_harness.agents.registry import resolve_template
 from team_harness.agents.tmux_view import tmux_available
 from team_harness.agents.tmux_view import TmuxViewer
@@ -82,9 +86,21 @@ class TeamHarnessAgentRunner:
         log_dir: str | Path | None = None,
         tmux_session: str | None = None,
         verbose: bool = True,
+        breaker: RateLimitCircuitBreaker | None = None,
     ) -> None:
         self.config = config or Config()
         self.manager = manager or AgentManager()
+        # Run-scoped rate-limit circuit (TH-D18). A protocol run fans out
+        # several workers over the same few agent families — MODE A alone
+        # spawns per worker for INDEPENDENT_WORK, CROSS_REVIEW and RESPONSE.
+        # Once a family has returned a hard provider 429 every later spawn on
+        # that family is doomed, so we refuse to launch it and say why instead
+        # of paying the full startup-plus-timeout cost again. The role's
+        # configured backend is never silently swapped for another one (TH-D6).
+        self.breaker = breaker or RateLimitCircuitBreaker(
+            enabled=self.config.rate_limit_circuit_breaker,
+            default_cooldown_s=self.config.rate_limit_default_cooldown_s,
+        )
         # Print one line per worker completion (agent + effective model/effort)
         # so a person watching `th protocol` output always knows who actually
         # did each piece of work, not just the final stage/status summary.
@@ -119,6 +135,12 @@ class TeamHarnessAgentRunner:
         label: str | None = None,
     ) -> AgentResult:
         resolve_template(agent_type=agent_type, config=self.config)
+
+        trip = self.breaker.active_trip(agent_type)
+        if trip is not None:
+            return self._rate_limited_result(
+                agent_type=agent_type, requested_model=model, label=label, trip=trip
+            )
 
         started = time.monotonic()
         agent_id = f"{agent_type}_{uuid.uuid4().hex[:8]}"
@@ -189,6 +211,22 @@ class TeamHarnessAgentRunner:
             suffix = f": {stderr_text[:500]}" if stderr_text else ""
             error_msg = f"Agent process exited with code {returncode}{suffix}"
 
+        classification: dict[str, Any] | None = None
+        if not success:
+            classification = self._classify_failure(
+                agent_type=agent_type,
+                effective_model=spawn_result.effective_model,
+                stdout_path=stdout_path,
+                stdout_text=stdout_text,
+                stderr_text=stderr_text,
+                returncode=returncode,
+            )
+        if classification is not None:
+            error_msg = (
+                f"{error_msg} [{classification['category']}: "
+                f"{classification['detail']}]"
+            )
+
         if self.verbose:
             print(
                 _completion_line(
@@ -214,6 +252,100 @@ class TeamHarnessAgentRunner:
             output_text=extract_final_text(stdout_text),
             duration_sec=duration,
             error_message=error_msg,
+            failure_classification=classification,
+        )
+
+    def _classify_failure(
+        self,
+        *,
+        agent_type: str,
+        effective_model: str | None,
+        stdout_path: Path,
+        stdout_text: str,
+        stderr_text: str,
+        returncode: int,
+    ) -> dict[str, Any] | None:
+        """Explain a failed stage, and open the family circuit on a hard 429.
+
+        Two layers, matching the coordinator path. First the strict JSONL scan
+        of TH-D10, which only fires on an explicit provider rejection and is
+        what may trip the circuit. Otherwise a best-effort regex scan of the
+        worker's own output, which is advisory only: it labels the failure for
+        the human reading ``protocol_state.json`` but never blocks a family,
+        because a test log that merely mentions "rate limit" is not evidence
+        that this account is actually throttled.
+        """
+
+        if returncode != 0:
+            try:
+                signal_ = detect_rate_limit_from_path(stdout_path)
+            except (OSError, UnicodeError):
+                signal_ = None
+            if signal_ is not None:
+                trip = self.breaker.trip(
+                    family=agent_type, model=effective_model, signal=signal_
+                )
+                if trip is not None:
+                    return {
+                        "is_api_error": True,
+                        "category": "rate_limit",
+                        "detail": trip.reason,
+                        "family": trip.family,
+                        "model": trip.model,
+                        "resets_at": trip.resets_at.isoformat(),
+                        "suggested_action": (
+                            f"Agent family {trip.family!r} is rate limited until "
+                            f"{trip.resets_at.isoformat()}. Re-run this stage after "
+                            "that, or configure the role onto another family."
+                        ),
+                    }
+
+        advisory = classify_agent_failure(stderr_text, stdout_text)
+        if advisory is None:
+            return None
+        return {
+            "is_api_error": advisory.is_api_error,
+            "category": advisory.category,
+            "detail": advisory.detail,
+        }
+
+    def _rate_limited_result(
+        self,
+        *,
+        agent_type: str,
+        requested_model: str | None,
+        label: str | None,
+        trip: RateLimitTrip,
+    ) -> AgentResult:
+        """Refuse to launch a stage whose family is inside an open circuit."""
+
+        reason = (
+            f"Agent family {trip.family!r} is rate limited until "
+            f"{trip.resets_at.isoformat()} ({trip.reason}); worker not launched"
+        )
+        if self.verbose:
+            print(f"[protocol] {label or agent_type} 건너뜀 — {reason}")
+        return AgentResult(
+            agent=agent_type,
+            agent_type=agent_type,
+            stage="",
+            success=False,
+            requested_model=requested_model,
+            spawned=False,
+            error_message=reason,
+            failure_classification={
+                "is_api_error": True,
+                "category": "rate_limit",
+                "detail": trip.reason,
+                "family": trip.family,
+                "model": trip.model,
+                "resets_at": trip.resets_at.isoformat(),
+                "suggested_action": (
+                    f"Agent family {trip.family!r} is rate limited until "
+                    f"{trip.resets_at.isoformat()}. Re-run this stage after "
+                    "that, or configure the role onto another family."
+                ),
+            },
         )
 
 
@@ -767,11 +899,7 @@ async def _run_stage(
     result.role = role_name
     if result.requested_model is None:
         result.requested_model = spec.model
-    effective_model = (
-        result.effective_model
-        if result.effective_model is not None
-        else (result.model if result.model is not None else spec.model)
-    )
+    effective_model = result.resolve_effective_model(spec.model)
     result.model = effective_model
     result.effective_model = effective_model
 
@@ -793,6 +921,8 @@ async def _run_stage(
             "success": result.success,
             "exit_code": result.exit_code,
             "review_verdict": result.review_verdict,
+            "spawned": result.spawned,
+            "failure_classification": result.failure_classification,
         }
     )
     state_mgr.save_state(state)
@@ -806,6 +936,8 @@ async def _run_stage(
         requested_model=state.requested_model,
         effective_model=state.effective_model,
         success=result.success,
+        spawned=result.spawned,
+        failure_classification=result.failure_classification,
     )
 
     return result

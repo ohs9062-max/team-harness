@@ -169,6 +169,32 @@ class AgentResult:
     review_verdict: str | None = None
     duration_sec: float = 0.0
     error_message: str | None = None
+    # False when the harness deliberately refused to launch this stage's worker
+    # (currently: its agent family is inside an open rate-limit circuit, TH-D18).
+    # Nothing ran, so there is no exit code and no effective model to audit.
+    spawned: bool = True
+    # Advisory structured reason a failed stage failed, mirroring the
+    # coordinator path's AgentState.failure_classification: keys
+    # is_api_error / category / detail, plus family, resets_at and
+    # suggested_action for hard rate limits. None when the stage succeeded or
+    # the failure looks like ordinary work failure (test failure, bug, ...).
+    failure_classification: dict[str, Any] | None = None
+
+    def resolve_effective_model(self, configured: str | None) -> str | None:
+        """The model this stage actually ran on, or None if nothing ran.
+
+        Workers report the model the spawner injected. When a runner leaves
+        that unset the role's configured model is the best available answer,
+        so it is used as the fallback. A stage the harness refused to launch
+        (``spawned=False``) resolves to None instead: the audit trail records
+        only what actually happened, never a model that was merely configured
+        (TH-D6).
+        """
+        if not self.spawned:
+            return None
+        if self.effective_model is not None:
+            return self.effective_model
+        return self.model if self.model is not None else configured
 
 
 @dataclass
