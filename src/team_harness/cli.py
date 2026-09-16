@@ -649,6 +649,7 @@ def _print_protocol_state(state: Any, *, run_dir: Path) -> None:
             "[protocol] base에 반영하려면: "
             f"git -C {state.target_repo} merge {state.active_branch}"
         )
+    _print_protocol_usage(list(getattr(state, "handoffs", []) or []))
     click.echo(f"[protocol] run_dir={run_dir}")
 
 
@@ -850,6 +851,8 @@ def _print_protocol_status(run_dir: Path) -> None:
         for stage, status in state.stage_statuses.items():
             click.echo(f"  {stage:<16} {status}")
 
+    _print_protocol_usage(state.handoffs)
+
     if state.checks:
         click.echo("[protocol] ----- CHECK -----")
         for check in state.checks:
@@ -866,6 +869,64 @@ def _print_protocol_status(run_dir: Path) -> None:
     click.echo(f"[protocol] run_dir={run_dir}")
 
 
+def _print_protocol_usage(handoffs: list[dict[str, Any]]) -> None:
+    """Print what the run spent, and say how much of that is actually known."""
+    from team_harness.protocol.usage import summarize_usage
+
+    totals = summarize_usage(handoffs)
+    if totals.stages_run == 0 and totals.stages_refused == 0:
+        return
+
+    click.echo("[protocol] ----- 사용량 -----")
+    line = (
+        f"  실행된 stage {totals.stages_run}개 · 총 {totals.total_duration_sec:.1f}초"
+    )
+    if totals.stages_failed:
+        line += f" · 실패 {totals.stages_failed}개"
+    if totals.stages_refused:
+        line += f" · 거부(실행 안 됨) {totals.stages_refused}개"
+    click.echo(line)
+
+    for label, mapping in (
+        ("agent별 시간", totals.duration_by_agent),
+        ("model별 시간", totals.duration_by_model),
+    ):
+        if not mapping:
+            continue
+        parts = ", ".join(
+            f"{key} {value:.1f}s"
+            for key, value in sorted(mapping.items(), key=lambda kv: -kv[1])
+        )
+        click.echo(f"  {label}: {parts}")
+
+    if totals.stages_reporting_usage == 0:
+        # Antigravity reports nothing, so this is normal, not an error.
+        click.echo("  토큰: 워커가 보고한 사용량 없음")
+        return
+
+    numbers: list[str] = []
+    if totals.total_tokens is not None:
+        numbers.append(f"합계 {totals.total_tokens:,}")
+    if totals.input_tokens is not None:
+        numbers.append(f"입력 {totals.input_tokens:,}")
+    if totals.output_tokens is not None:
+        numbers.append(f"출력 {totals.output_tokens:,}")
+    if totals.cached_input_tokens is not None:
+        numbers.append(f"캐시 읽기 {totals.cached_input_tokens:,}")
+    if numbers:
+        click.echo("  토큰: " + " · ".join(numbers))
+    if totals.cost_usd is not None:
+        click.echo(f"  워커 보고 비용: ${totals.cost_usd:.4f} USD")
+
+    # Never let a partial total read as a complete one.
+    if not totals.usage_is_complete:
+        click.echo(
+            f"  ⚠ 위 토큰/비용은 실행된 {totals.stages_run}개 stage 중 "
+            f"{totals.stages_reporting_usage}개만 반영합니다 "
+            "(나머지 워커 CLI는 사용량을 보고하지 않습니다)."
+        )
+
+
 def _format_handoff(handoff: dict[str, Any]) -> str:
     """One line per stage: who ran it, on what model, and how it ended."""
     stage = str(handoff.get("stage", "?"))
@@ -878,6 +939,9 @@ def _format_handoff(handoff: dict[str, Any]) -> str:
         outcome = "성공" if handoff.get("success") else "실패"
         model_label = str(model or "default")
     line = f"{stage:<16} {outcome:<12} {agent} {model_label}"
+    duration = handoff.get("duration_sec")
+    if isinstance(duration, (int, float)) and not isinstance(duration, bool):
+        line += f"  {float(duration):.1f}s"
     classification = handoff.get("failure_classification")
     if isinstance(classification, dict):
         detail = classification.get("category")

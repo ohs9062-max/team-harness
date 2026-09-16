@@ -47,6 +47,10 @@ if [ "$EMIT_RATE_LIMIT" = "1" ]; then
     /bin/cat "$RATE_LIMIT_FIXTURE"
     exit 1
 fi
+if [ "$EMIT_STREAM" = "1" ]; then
+    /bin/cat "$STREAM_FIXTURE"
+    exit 0
+fi
 if [ "$EMIT_PLAIN_FAILURE" = "1" ]; then
     echo 'FAILED src/tests/test_thing.py::test_math - assert 1 == 2' >&2
     exit 2
@@ -243,3 +247,58 @@ async def test_run_stage_records_the_classification_and_audits_no_model(
     persisted = state_mgr.load_state()
     assert persisted is not None
     assert persisted.handoffs[-1]["failure_classification"]["family"] == "claude"
+
+
+async def test_a_real_worker_stream_has_its_reported_usage_captured(
+    tmp_path, monkeypatch
+):
+    """The runner records what the worker said it spent, end to end."""
+    stream = tmp_path / "usage.jsonl"
+    stream.write_text(
+        '{"type":"system","subtype":"init","session_id":"s1"}\n'
+        '{"type":"result","subtype":"success","is_error":false,'
+        '"total_cost_usd":0.25,'
+        '"usage":{"input_tokens":900,"output_tokens":100,'
+        '"cache_read_input_tokens":400}}\n',
+        encoding="utf-8",
+    )
+    runner = _runner(tmp_path)
+    monkeypatch.setenv("EMIT_STREAM", "1")
+    monkeypatch.setenv("STREAM_FIXTURE", str(stream))
+
+    result = await _run(runner, tmp_path)
+
+    assert result.success is True
+    assert result.usage == {
+        "input_tokens": 900,
+        "output_tokens": 100,
+        "cached_input_tokens": 400,
+        "cost_usd": 0.25,
+        "source_event_type": "result",
+    }
+    assert result.duration_sec > 0
+
+
+async def test_a_plain_text_worker_records_no_usage(tmp_path, monkeypatch):
+    """Antigravity-style prose output must not imply a zero-cost stage."""
+    runner = _runner(tmp_path)
+
+    result = await _run(runner, tmp_path)
+
+    assert result.success is True
+    assert result.usage is None
+
+
+async def test_a_refused_stage_records_neither_usage_nor_duration(
+    tmp_path, monkeypatch
+):
+    runner = _runner(tmp_path)
+    _emit_rate_limit(monkeypatch)
+    await _run(runner, tmp_path)
+    monkeypatch.delenv("EMIT_RATE_LIMIT")
+
+    refused = await _run(runner, tmp_path)
+
+    assert refused.spawned is False
+    assert refused.usage is None
+    assert refused.duration_sec == 0.0

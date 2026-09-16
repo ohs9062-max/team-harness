@@ -1685,3 +1685,103 @@ def test_protocol_resume_rejects_mismatched_mode_flags(tmp_path):
     missing_selection = runner.invoke(main, base + ["--run-dir", str(mode_a)])
     assert missing_selection.exit_code != 0
     assert "--selection is required" in missing_selection.output
+
+
+def test_protocol_status_prints_the_spend_rollup(tmp_path):
+    run_dir = _save_protocol_state(
+        tmp_path / "protocol-spend",
+        task_id="TASK-S",
+        mode="C",
+        stage="FINAL",
+        status="DONE",
+        handoffs=[
+            {
+                "stage": "DESIGN",
+                "agent_type": "claude",
+                "effective_model": "claude-sonnet-5",
+                "success": True,
+                "spawned": True,
+                "duration_sec": 12.0,
+                "usage": {"input_tokens": 900, "output_tokens": 100, "cost_usd": 0.25},
+            },
+            {
+                "stage": "IMPLEMENT",
+                "agent_type": "codex",
+                "effective_model": "gpt-5.6-terra",
+                "success": True,
+                "spawned": True,
+                "duration_sec": 48.0,
+                "usage": None,
+            },
+        ],
+    )
+
+    result = CliRunner().invoke(main, ["protocol", "status", "--run-dir", str(run_dir)])
+
+    assert result.exit_code == 0, result.output
+    assert "실행된 stage 2개" in result.output
+    assert "60.0초" in result.output
+    assert "codex 48.0s" in result.output and "claude 12.0s" in result.output
+    assert "1,000" in result.output  # derived token total
+    assert "$0.2500" in result.output
+    # The partial total must announce that it covers 1 of 2 stages.
+    assert "2개 stage 중 1개만 반영" in result.output
+    # Per-stage durations show up on the stage lines too.
+    assert "48.0s" in result.output
+
+
+def test_protocol_status_says_so_when_no_worker_reported_usage(tmp_path):
+    run_dir = _save_protocol_state(
+        tmp_path / "protocol-nousage",
+        task_id="TASK-N",
+        mode="C",
+        status="DONE",
+        handoffs=[
+            {
+                "stage": "REVIEW",
+                "agent_type": "antigravity",
+                "success": True,
+                "spawned": True,
+                "duration_sec": 5.0,
+            }
+        ],
+    )
+
+    result = CliRunner().invoke(main, ["protocol", "status", "--run-dir", str(run_dir)])
+
+    assert result.exit_code == 0, result.output
+    assert "워커가 보고한 사용량 없음" in result.output
+    # No cost or token figure is invented.
+    assert "USD" not in result.output
+
+
+def test_protocol_status_separates_refused_stages_from_run_ones(tmp_path):
+    run_dir = _save_protocol_state(
+        tmp_path / "protocol-refused",
+        task_id="TASK-R",
+        mode="C",
+        status="BLOCKED",
+        handoffs=[
+            {
+                "stage": "IMPLEMENT",
+                "agent_type": "codex",
+                "success": True,
+                "spawned": True,
+                "duration_sec": 9.0,
+            },
+            {
+                "stage": "REVIEW",
+                "agent_type": "antigravity",
+                "success": False,
+                "spawned": False,
+                "duration_sec": 0.0,
+                "failure_classification": {"category": "rate_limit"},
+            },
+        ],
+    )
+
+    result = CliRunner().invoke(main, ["protocol", "status", "--run-dir", str(run_dir)])
+
+    assert result.exit_code == 0, result.output
+    assert "실행된 stage 1개" in result.output
+    assert "거부(실행 안 됨) 1개" in result.output

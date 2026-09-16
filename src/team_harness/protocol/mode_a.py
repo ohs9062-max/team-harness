@@ -278,6 +278,8 @@ async def run_mode_a(
                 "success": result.success,
                 "spawned": result.spawned,
                 "failure_classification": result.failure_classification,
+                "duration_sec": result.duration_sec,
+                "usage": result.usage,
             }
         )
 
@@ -434,6 +436,8 @@ async def run_mode_a(
                 "success": result.success,
                 "spawned": result.spawned,
                 "failure_classification": result.failure_classification,
+                "duration_sec": result.duration_sec,
+                "usage": result.usage,
             }
         )
 
@@ -538,6 +542,8 @@ async def run_mode_a(
                 "success": result.success,
                 "spawned": result.spawned,
                 "failure_classification": result.failure_classification,
+                "duration_sec": result.duration_sec,
+                "usage": result.usage,
             }
         )
 
@@ -788,6 +794,8 @@ async def resume_mode_a(
             "success": result.success,
             "spawned": result.spawned,
             "failure_classification": result.failure_classification,
+            "duration_sec": result.duration_sec,
+            "usage": result.usage,
         }
     )
 

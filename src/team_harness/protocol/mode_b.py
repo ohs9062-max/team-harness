@@ -191,6 +191,8 @@ async def run_mode_b(
             "success": result.success,
             "spawned": result.spawned,
             "failure_classification": result.failure_classification,
+            "duration_sec": result.duration_sec,
+            "usage": result.usage,
         }
     )
     if result.output_text:

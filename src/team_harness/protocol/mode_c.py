@@ -48,6 +48,7 @@ from team_harness.protocol.prompt import build_fix_prompt
 from team_harness.protocol.prompt import build_implement_prompt
 from team_harness.protocol.prompt import build_review_prompt
 from team_harness.protocol.state import ProtocolStateManager
+from team_harness.protocol.usage import extract_usage
 from team_harness.protocol.worker_output import extract_final_text
 from team_harness.protocol.worktree import changed_files
 from team_harness.protocol.worktree import checkpoint_worktree
@@ -253,6 +254,7 @@ class TeamHarnessAgentRunner:
             duration_sec=duration,
             error_message=error_msg,
             failure_classification=classification,
+            usage=(usage.to_dict() if (usage := extract_usage(stdout_text)) else None),
         )
 
     def _classify_failure(
@@ -1214,6 +1216,8 @@ async def _run_stage(
             "review_verdict": result.review_verdict,
             "spawned": result.spawned,
             "failure_classification": result.failure_classification,
+            "duration_sec": result.duration_sec,
+            "usage": result.usage,
         }
     )
     state_mgr.save_state(state)

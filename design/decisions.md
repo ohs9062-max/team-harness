@@ -218,3 +218,22 @@ team-harness를 구축하고 검토하는 과정에서 내린 결정들을 기�
 **맥락.** MODE C는 최대 7단계(DESIGN → IMPLEMENT → TEST → CHECK → REVIEW → FIX → FINAL)이고 각 stage가 실제 워커 서브프로세스 한 번입니다. 이 변경 전까지 `th protocol resume`은 MODE A의 사용자 선택 전용이었고 MODE C에는 재개 경로가 아예 없었으므로, 5번째 stage에서 막힌 파이프라인을 이어가려면 `th protocol run`으로 DESIGN부터 전부 다시 실행해야 했습니다 — 이미 정상적으로 끝난 DESIGN과 IMPLEMENT의 워커 비용을 새 정보 없이 다시 지불하는 것입니다. 또한 실행이 끝난 뒤 그 실행이 무엇을 했는지 확인할 방법은 `protocol_state.json`을 직접 열어보는 것뿐이었습니다. `protocol run`은 시작할 때 `run_dir`만 출력하므로, 터미널 출력이 스크롤되어 사라지면 어떤 stage가 어떤 모델로 실행됐는지 확인할 경로가 없었습니다.
 
 **결과.** 재개는 base 저장소를 여전히 건드리지 않습니다(TH-D16). worktree가 사라진 경우 조용히 다시 만들지 않고 그 이유로 `BLOCKED` 처리합니다 — 커밋되지 않은 워커 산출물은 재구성할 수 없으므로(TH-D11) "새로 만들어 이어가는 것"은 재개가 아니라 다른 실행입니다. 재개 시 `DESIGN` 출력은 `protocol_outputs/design/<agent>.md`에서 다시 읽어 `IMPLEMENT`/`REVIEW` 프롬프트에 넣습니다. 그 파일이 비어 있으면 `IMPLEMENT`로 재개할 수 없고 `DESIGN`부터 다시 하라고 거부합니다. `--selection`은 MODE A에서만 필수가 되었으므로 기존 MODE A 사용법은 그대로 동작합니다.
+
+## TH-D21. 실행 비용은 "측정한 것"과 "워커가 보고한 것"을 구분해 집계하고, 불완전한 합계는 불완전하다고 밝힌다
+
+**결정.** `protocol/usage.py`가 두 가지를 집계합니다.
+
+1. **하네스가 직접 측정한 것 — 벽시계 시간.** `AgentResult.duration_sec`는 이전에도 계산됐지만 어디에도 기록되지 않고 버려졌습니다. 이제 모든 mode의 stage별 `handoffs` 항목에 `duration_sec`로 남고, `summarize_usage()`가 총합과 agent별·model별 분해를 제공합니다. 이 값은 하네스가 직접 재므로 실행된 stage에 대해 **항상 완전**합니다.
+
+2. **워커가 스스로 보고한 것 — 토큰 수와 비용.** `extract_usage()`가 worker의 stdout 이벤트 스트림에서 카운터를 읽습니다. claude stream-json은 `usage` 블록과 최상위 `total_cost_usd`, gemini/antigravity stream-json은 `stats` 블록, codex는 `token_count`/`token_usage` 형태를 씁니다. 컨테이너 이름과 키 별칭(`input_tokens`/`inputTokens`/`prompt_tokens` 등)을 모두 받되, 마지막으로 값을 보고한 이벤트가 이깁니다 — 이 스트림들은 누적 총량을 보고하므로 종단 이벤트가 완전한 값입니다.
+
+**두 가지 정직성 규칙.**
+
+- **없는 것은 0이 아닙니다.** 아무 카운터도 보고하지 않은 워커는 `None`을 내놓으며, 0으로 채운 레코드를 만들지 않습니다. antigravity는 평문을 출력하고 카운터를 전혀 보고하지 않으므로, antigravity가 포함된 실행은 원리적으로 토큰 수가 완전할 수 없습니다. 음수·문자열·불리언 같은 쓸 수 없는 값도 0으로 강제하지 않고 거부합니다.
+- **합계는 자신이 얼마나 완전한지 함께 말합니다.** `ProtocolUsageTotals`는 `stages_run`과 나란히 `stages_reporting_usage`를 세고 `usage_is_complete`를 노출합니다. `th protocol status`는 불완전한 경우 "실행된 N개 stage 중 M개만 반영합니다"를 명시적으로 경고합니다. 5개 stage 중 3개만 반영한 비용 총액이 전체 비용처럼 읽히는 것이 이 기능에서 가장 위험한 실패 모드이기 때문입니다.
+
+**하지 않는 것.** 하네스는 모델 가격표를 갖지 않고 토큰을 돈으로 환산하지 않습니다. `cost_usd`는 워커 CLI가 스스로 보고한 값을 그대로 합산한 것일 뿐입니다. 가격은 공급자·플랜·시점에 따라 달라지므로, 하네스가 추정 비용을 만들어내면 그것이 곧 틀린 숫자가 됩니다. TH-D6의 "감사 추적은 실제로 일어난 사실만 기록한다"와 같은 원칙입니다. 또한 TH-D18로 실행이 거부된 stage(`spawned=False`)는 `stages_refused`로 따로 세며, 시간도 토큰도 쓰지 않았으므로 agent별 분해에서 아예 제외됩니다.
+
+**맥락.** MODE A는 worker 최대 7회, MODE C는 stage 최대 7회를 각각 별도의 유료 모델 CLI 서브프로세스로 실행합니다. 사용자가 실제로 codex 토큰 할당량을 단순 작업에서 소진한 사례(TH-D17의 맥락)가 있었는데도, "그 실행이 얼마를 썼는가"를 하네스 안에서 답할 방법이 전혀 없었습니다. 시간은 재고 버렸고 토큰은 보지 않았으므로, 공급자 대시보드를 직접 열어보는 것이 유일한 수단이었습니다.
+
+**결과.** `AgentResult`에 `usage: dict | None` 필드가 **추가**되었고 기본값이 있으므로 `AgentRunner`를 자체 구현한 소비자는 그대로 동작합니다. 구현 중 `protocol/state.py`의 비밀정보 마스킹이 `input_tokens`의 "token" 부분에 매칭되어 모든 토큰 수를 `[MASKED]`로 저장하던 문제를 발견해 고쳤습니다 — 이제 sensitive 키 패턴에 걸리더라도 **값이 실제 숫자면 마스킹하지 않습니다**(자격증명은 결코 맨 숫자가 아닙니다). 문자열·dict·리스트는 이전과 똑같이 마스킹되므로 비밀정보 보호는 약화되지 않았습니다.

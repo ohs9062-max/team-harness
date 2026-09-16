@@ -29,6 +29,10 @@ from team_harness.protocol.models import StageStatus
 from team_harness.protocol.models import UserSelection
 from team_harness.protocol.models import WorktreeInfo
 from team_harness.protocol.state import ProtocolStateManager
+from team_harness.protocol.usage import extract_usage
+from team_harness.protocol.usage import ProtocolUsageTotals
+from team_harness.protocol.usage import summarize_usage
+from team_harness.protocol.usage import WorkerUsage
 from team_harness.protocol.worktree import checkpoint_worktree
 from team_harness.protocol.worktree import compute_repo_id
 from team_harness.protocol.worktree import create_worktree
@@ -53,11 +57,13 @@ __all__ = [
     "ProtocolMode",
     "ProtocolState",
     "ProtocolStateManager",
+    "ProtocolUsageTotals",
     "ReviewVerdict",
     "Stage",
     "StageStatus",
     "TeamHarnessAgentRunner",
     "UserSelection",
+    "WorkerUsage",
     "WorktreeInfo",
     "WorktreeRef",
     "checkpoint_worktree",
@@ -65,6 +71,7 @@ __all__ = [
     "create_worktree",
     "diff_worktree",
     "evaluate_checks",
+    "extract_usage",
     "get_worktree_path",
     "git_preflight",
     "is_git_repo",
@@ -73,6 +80,7 @@ __all__ = [
     "normalize_agent_type",
     "remove_worktree",
     "resolve_agent_type",
+    "summarize_usage",
     "RESUMABLE_MODE_C_STAGES",
     "resume_mode_c",
     "run_mode_c",

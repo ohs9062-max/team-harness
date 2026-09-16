@@ -40,7 +40,13 @@ def mask_sensitive(text: str) -> str:
 
 def _mask_value(value: Any, key: str = "") -> Any:
     """Recursively mask sensitive values before JSON serialization."""
-    if key and _SENSITIVE_KEY.search(key):
+    if key and _SENSITIVE_KEY.search(key) and not _is_number(value):
+        # A credential is never a bare number, but a token *count* is: the
+        # key pattern matches "token" inside usage fields like
+        # "input_tokens"/"total_tokens" (protocol/usage.py), which would
+        # otherwise be persisted as "[MASKED]" and make every spend figure
+        # unreadable. Strings, dicts and lists under a sensitive key are
+        # still masked exactly as before.
         return "[MASKED]"
     if isinstance(value, dict):
         return {k: _mask_value(v, str(k)) for k, v in value.items()}
@@ -49,6 +55,11 @@ def _mask_value(value: Any, key: str = "") -> Any:
     if isinstance(value, str):
         return mask_sensitive(value)
     return value
+
+
+def _is_number(value: Any) -> bool:
+    """True for a real int/float, which cannot be a credential."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def _atomic_json(path: Path, data: dict[str, Any]) -> None:

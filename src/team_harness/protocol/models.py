@@ -179,6 +179,11 @@ class AgentResult:
     # suggested_action for hard rate limits. None when the stage succeeded or
     # the failure looks like ordinary work failure (test failure, bug, ...).
     failure_classification: dict[str, Any] | None = None
+    # Token counts / cost the worker reported about itself, as parsed by
+    # protocol/usage.py. None when the CLI reported nothing — antigravity
+    # prints plain text and reports no counters at all — so a missing figure
+    # stays missing instead of becoming a zero a total would absorb.
+    usage: dict[str, Any] | None = None
 
     def resolve_effective_model(self, configured: str | None) -> str | None:
         """The model this stage actually ran on, or None if nothing ran.
