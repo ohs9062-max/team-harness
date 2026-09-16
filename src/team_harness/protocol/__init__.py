@@ -12,6 +12,8 @@ from team_harness.protocol.git import GitPreflight
 from team_harness.protocol.git import is_git_repo
 from team_harness.protocol.git import list_worktrees
 from team_harness.protocol.mode_c import AgentRunner
+from team_harness.protocol.mode_c import RESUMABLE_MODE_C_STAGES
+from team_harness.protocol.mode_c import resume_mode_c
 from team_harness.protocol.mode_c import run_mode_c
 from team_harness.protocol.mode_c import TeamHarnessAgentRunner
 from team_harness.protocol.models import AGENT_TYPE_MAP
@@ -71,6 +73,8 @@ __all__ = [
     "normalize_agent_type",
     "remove_worktree",
     "resolve_agent_type",
+    "RESUMABLE_MODE_C_STAGES",
+    "resume_mode_c",
     "run_mode_c",
     "validate_protocol_config",
     "verify_checkpoint",

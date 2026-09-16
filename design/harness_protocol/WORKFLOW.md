@@ -80,6 +80,36 @@ effort = "high"
 실행 시간을, `--check-timeout <초>`(기본 300)로 결정론적 CHECK 명령의 최대 실행 시간을
 조정합니다. 세 명령(`run`/`resume`/`relay`) 모두 동일한 플래그를 받습니다.
 
+**실행 상태 확인 (TH-D20).** 터미널 출력이 스크롤되어 사라져도 `protocol_state.json`에
+기록이 남습니다. `th protocol status`로 조회하세요 — 워커를 띄우거나 상태를 바꾸지 않고
+읽기만 합니다.
+
+```bash
+th protocol status                          # 최근 protocol 실행 목록
+th protocol status --run-dir <DIR>          # 한 실행의 stage별 기록
+```
+
+stage별로 누가(어떤 agent/model) 실행했고 성공/실패했는지, 하네스가 실행을 거부한
+stage라면 그 이유(예: `rate_limit`과 리셋 시각, TH-D18)까지 한 줄로 보여줍니다.
+
+**MODE C 이어서 실행하기 (TH-D20).** REVIEW에서 막힌 파이프라인은 이미 DESIGN과
+IMPLEMENT 비용을 지불한 상태입니다. 처음부터 다시 돌리지 말고 이어서 실행하세요 —
+기존 task worktree와 동결된 base commit을 그대로 재사용합니다:
+
+```bash
+th protocol resume --task-id <ID> --run-dir <DIR> --repo .
+th protocol resume --task-id <ID> --run-dir <DIR> --repo . --from-stage IMPLEMENT
+```
+
+`--from-stage`를 생략하면 **DONE이 아닌 가장 이른 stage**에서 재개하며, 막힌 직후라면
+그게 곧 막힌 stage입니다. 재개 가능한 stage는 `DESIGN`/`IMPLEMENT`/`REVIEW`뿐입니다 —
+`FIX`는 `REVIEW`로 재개하면 지금 코드 상태를 다시 읽고 판단하므로, 오래된 리뷰 지적을
+그대로 재생하는 것보다 정확합니다. worktree가 사라졌다면 조용히 다시 만들지 않고
+그 이유로 BLOCKED 처리합니다(커밋되지 않은 워커 산출물은 복원할 수 없습니다, TH-D11).
+
+`resume`은 저장된 상태의 mode를 읽어 동작을 결정합니다: MODE A는 `--selection`이,
+MODE C는 `--from-stage`(선택)가 유효하며, 서로 바꿔 주면 오류로 거부됩니다.
+
 **결과를 base 브랜치에 반영하기 (TH-D16).** protocol 실행은 `--repo`로 지정한 저장소의
 작업 트리를 절대 수정하지 않습니다. 결과는 `task/<task-id>/...` 브랜치에 커밋되고, 실행이
 끝나면 CLI가 결과 브랜치와 반영 명령을 출력합니다:

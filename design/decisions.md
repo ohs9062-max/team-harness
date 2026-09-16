@@ -202,3 +202,19 @@ team-harness를 구축하고 검토하는 과정에서 내린 결정들을 기�
 **맥락.** CLAUDE.md는 이 프로젝트의 설정 우선순위를 "CLI 플래그 → 환경변수 → 로컬 `config.toml` → 전역 `config.toml` → 내장 기본값"으로 문서화하고 있지만, protocol의 role 설정만 이 사슬에서 빠져 있었습니다. `load_protocol_config`는 런타임 인자 → `HARNESS_MODE_*` 환경변수 → `.env` → 기본값만 보았고, `config.toml`의 두 계층은 아예 읽지 않았으며 CLI 플래그도 존재하지 않았습니다. 그 결과 TH-D17의 맥락에 기록된 상황 — 사용자가 이미 `~/.team-harness/config.toml`에 자신의 모델 티어 정책을 적어두었는데 그것이 protocol에는 전혀 관여하지 못하는 상황 — 이 설정 측면에서도 그대로 남아 있었습니다. 티어를 바꾸려면 매번 환경변수를 export해야 했고, `agent_timeout_sec=600`/`check_timeout_sec=300`은 함수 기본값으로만 존재해 CLI에서는 도달할 방법이 아예 없었습니다.
 
 **결과.** role 오버라이드를 전용 키워드 인자 21개(7 role × 3 필드)로 노출하는 대신 `runtime_roles`라는 중첩 dict 하나로 받기로 했습니다 — CLI가 `--set-role` 하나로 모든 조합을 전달할 수 있고, 새 role이나 필드가 추가될 때 시그니처가 늘어나지 않습니다. `--set-role`을 3번(config.toml) 계층이 아니라 1번(런타임) 계층에 넣은 것은 의도적입니다: 이번 실행을 위해 타이핑한 플래그가 셸에 남아 있는 오래된 `HARNESS_MODE_*` 변수에 밀리면 안 됩니다. `config.toml`은 `--repo`로 지정한 대상 저장소를 기준으로 탐색하므로, 저장소별 `.team-harness/config.toml`이 그 저장소에 대한 작업에 적용됩니다. 기존 `HARNESS_MODE_*` 환경변수 사용법은 그대로 동작하며, 새 계층은 그 아래에만 추가되었으므로 하위 호환입니다. `load_protocol_config(role_tables=...)`로 3번 계층을 직접 주입할 수 있어 테스트와 임베디드 호출자는 디스크를 읽지 않습니다.
+
+## TH-D20. MODE C는 이미 지불한 stage를 다시 실행하지 않고 재개할 수 있고, 저장된 실행 상태는 조회 전용 명령으로 읽는다
+
+**결정.** 두 가지를 추가했습니다.
+
+1. **`resume_mode_c` / `th protocol resume`의 MODE C 경로.** 저장된 `protocol_state.json`을 읽어 `DESIGN`/`IMPLEMENT`/`REVIEW` 중 한 stage부터 파이프라인을 다시 진행합니다. 기존 task worktree와 동결된 base commit을 그대로 재사용하며, git preflight도 worktree 생성도 다시 하지 않습니다. `--from-stage`를 생략하면 `DONE`이 아닌 가장 이른 stage에서 재개하는데, 막힌 직후라면 그것이 곧 막힌 stage입니다. `run_mode_c`와 `resume_mode_c`는 `_run_pipeline`이라는 **하나의** 파이프라인 구현을 공유합니다 — 전자는 worktree를 만든 뒤 `DESIGN`부터, 후자는 이미 존재하는 worktree 위에서 지정된 stage부터 들어갑니다.
+
+   `CHECK`/`TEST`/`FIX`는 재개 지점이 아닙니다. 이들은 리뷰 루프 내부의 단계라서, 루프 중간에서 멈춘 실행을 이어가는 정직한 방법은 `REVIEW`로 재진입해 **지금 코드 상태**를 다시 읽는 것입니다. 오래된 리뷰 지적 목록을 다시 `FIX`에 먹이는 것은 그 사이 코드가 바뀌었을 수 있으므로 재개가 아니라 재생(replay)입니다.
+
+   `resume`은 CLI 플래그가 아니라 **저장된 상태의 `mode` 필드**로 분기합니다. MODE A에는 `--selection`이, MODE C에는 `--from-stage`가 유효하며 서로 바꿔 주면 오류로 거부됩니다.
+
+2. **`th protocol status`.** `--run-dir`를 주면 한 실행의 stage별 기록(어떤 agent/model이 실행했는지, 성공/실패, TH-D18의 실패 분류와 리셋 시각, CHECK 결과, blocker)을 출력하고, 생략하면 최근 protocol 실행 목록을 출력합니다. 워커를 띄우거나 상태를 수정하지 않는 순수 조회 명령입니다.
+
+**맥락.** MODE C는 최대 7단계(DESIGN → IMPLEMENT → TEST → CHECK → REVIEW → FIX → FINAL)이고 각 stage가 실제 워커 서브프로세스 한 번입니다. 이 변경 전까지 `th protocol resume`은 MODE A의 사용자 선택 전용이었고 MODE C에는 재개 경로가 아예 없었으므로, 5번째 stage에서 막힌 파이프라인을 이어가려면 `th protocol run`으로 DESIGN부터 전부 다시 실행해야 했습니다 — 이미 정상적으로 끝난 DESIGN과 IMPLEMENT의 워커 비용을 새 정보 없이 다시 지불하는 것입니다. 또한 실행이 끝난 뒤 그 실행이 무엇을 했는지 확인할 방법은 `protocol_state.json`을 직접 열어보는 것뿐이었습니다. `protocol run`은 시작할 때 `run_dir`만 출력하므로, 터미널 출력이 스크롤되어 사라지면 어떤 stage가 어떤 모델로 실행됐는지 확인할 경로가 없었습니다.
+
+**결과.** 재개는 base 저장소를 여전히 건드리지 않습니다(TH-D16). worktree가 사라진 경우 조용히 다시 만들지 않고 그 이유로 `BLOCKED` 처리합니다 — 커밋되지 않은 워커 산출물은 재구성할 수 없으므로(TH-D11) "새로 만들어 이어가는 것"은 재개가 아니라 다른 실행입니다. 재개 시 `DESIGN` 출력은 `protocol_outputs/design/<agent>.md`에서 다시 읽어 `IMPLEMENT`/`REVIEW` 프롬프트에 넣습니다. 그 파일이 비어 있으면 `IMPLEMENT`로 재개할 수 없고 `DESIGN`부터 다시 하라고 거부합니다. `--selection`은 MODE A에서만 필수가 되었으므로 기존 MODE A 사용법은 그대로 동작합니다.

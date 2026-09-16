@@ -500,8 +500,263 @@ async def run_mode_c(
 
     worktree_path = wt.path
 
+    return await _run_pipeline(
+        state=state,
+        state_mgr=state_mgr,
+        agent_runner=agent_runner,
+        proto_cfg=proto_cfg,
+        task_id=task_id,
+        user_request=user_request,
+        worktree_path=worktree_path,
+        start_stage=Stage.DESIGN.value,
+        design_output="",
+        max_review_cycles=max_review_cycles,
+        check_commands=check_commands,
+        auto_discover_checks=auto_discover_checks,
+        agent_timeout_sec=agent_timeout_sec,
+        check_timeout_sec=check_timeout_sec,
+    )
+
+
+RESUMABLE_MODE_C_STAGES: tuple[str, ...] = (
+    Stage.DESIGN.value,
+    Stage.IMPLEMENT.value,
+    Stage.REVIEW.value,
+)
+
+
+async def resume_mode_c(
+    *,
+    run_dir: str | Path,
+    agent_runner: AgentRunner,
+    from_stage: str | None = None,
+    check_commands: list[list[str]] | None = None,
+    auto_discover_checks: bool = True,
+    agent_timeout_sec: int = 600,
+    check_timeout_sec: int = 300,
+    protocol_config: ProtocolConfig | None = None,
+) -> ProtocolState:
+    """Re-enter a saved MODE C run at *from_stage* instead of from the start.
+
+    A pipeline that blocks at REVIEW has already paid for DESIGN and IMPLEMENT;
+    re-running it from DEFINE spends those worker turns again for no new
+    information. This reuses the persisted state, the frozen base commit and
+    the existing task worktree, so only the stages from *from_stage* onward run.
+
+    *from_stage* defaults to the earliest stage that is not DONE, which after a
+    block is the stage that blocked. Resuming is only meaningful at a stage that
+    consumes durable inputs — DESIGN (nothing prior), IMPLEMENT (the recorded
+    design) or REVIEW (the worktree's current diff). FIX is reached by resuming
+    at REVIEW, which re-reads the code as it now stands rather than replaying a
+    stale set of findings.
+
+    The base working tree is still never touched (TH-D16), and nothing is
+    re-checked out: if the worktree is gone the run is BLOCKED with that reason
+    rather than silently recreated, since its uncommitted work cannot be
+    reconstructed (TH-D11).
+    """
+
+    run_path = Path(run_dir).resolve()
+    state_mgr = ProtocolStateManager(run_path)
+    state = state_mgr.load_state()
+    if state is None:
+        raise ValueError(f"No protocol state found in {run_path}")
+    if state.mode != "C":
+        raise ValueError(
+            f"Run {state.task_id} is MODE {state.mode}, not MODE C. "
+            "MODE A runs are continued with resume_mode_a."
+        )
+
+    stage = from_stage or _first_unfinished_stage(state)
+    if stage not in RESUMABLE_MODE_C_STAGES:
+        raise ValueError(
+            f"Cannot resume MODE C at {stage!r}. "
+            f"Resumable stages: {list(RESUMABLE_MODE_C_STAGES)}"
+        )
+
+    pipeline = state.worktrees.get("pipeline")
+    worktree_path = (pipeline or {}).get("path", "")
+    if not worktree_path or not Path(worktree_path).is_dir():
+        return _block(
+            state,
+            state_mgr,
+            stage,
+            f"Task worktree is missing ({worktree_path or 'not recorded'}); "
+            "cannot resume. Start a fresh run instead.",
+        )
+
+    design_output = ""
+    if stage != Stage.DESIGN.value:
+        design_output = _read_stage_output(state_mgr, "design")
+        if not design_output.strip():
+            return _block(
+                state,
+                state_mgr,
+                stage,
+                "No recorded DESIGN output to resume from; "
+                f"resume at {Stage.DESIGN.value} instead.",
+            )
+
+    proto_cfg = protocol_config or load_protocol_config()
+    state.status = StageStatus.RUNNING.value
+    state.blocker = None
+    state_mgr.append_event("RESUMED", stage=stage, mode="C")
+    state_mgr.save_state(state)
+
+    return await _run_pipeline(
+        state=state,
+        state_mgr=state_mgr,
+        agent_runner=agent_runner,
+        proto_cfg=proto_cfg,
+        task_id=state.task_id,
+        user_request=state.user_request,
+        worktree_path=worktree_path,
+        start_stage=stage,
+        design_output=design_output,
+        max_review_cycles=state.max_review_cycles,
+        check_commands=check_commands,
+        auto_discover_checks=auto_discover_checks,
+        agent_timeout_sec=agent_timeout_sec,
+        check_timeout_sec=check_timeout_sec,
+    )
+
+
+# The order stages first become reachable, used to pick a default resume point.
+_MODE_C_STAGE_ORDER: tuple[str, ...] = (
+    Stage.DEFINE.value,
+    Stage.GIT_PREFLIGHT.value,
+    Stage.WORKTREE_SETUP.value,
+    Stage.DESIGN.value,
+    Stage.IMPLEMENT.value,
+    Stage.TEST.value,
+    Stage.CHECK.value,
+    Stage.REVIEW.value,
+    Stage.FIX.value,
+    Stage.FINAL.value,
+)
+
+
+def _first_unfinished_stage(state: ProtocolState) -> str:
+    """The earliest pipeline stage that did not finish, mapped to a resume point.
+
+    A stage that blocked mid-loop (CHECK, FIX, TEST) is not itself a resume
+    point: re-entering at REVIEW re-reads the worktree as it now stands, which
+    is the only honest way to continue from a half-finished fix cycle.
+    """
+    for candidate in _MODE_C_STAGE_ORDER:
+        if state.stage_statuses.get(candidate) != StageStatus.DONE.value:
+            if candidate in RESUMABLE_MODE_C_STAGES:
+                return candidate
+            if candidate in (
+                Stage.DEFINE.value,
+                Stage.GIT_PREFLIGHT.value,
+                Stage.WORKTREE_SETUP.value,
+            ):
+                return Stage.DESIGN.value
+            return Stage.REVIEW.value
+    return Stage.REVIEW.value
+
+
+def _read_stage_output(state_mgr: ProtocolStateManager, stage_key: str) -> str:
+    """Read back whatever a stage wrote under protocol_outputs/<stage_key>/."""
+    directory = state_mgr.run_dir / "protocol_outputs" / stage_key
+    if not directory.is_dir():
+        return ""
+    for path in sorted(directory.glob("*.md")):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if text.strip():
+            return text
+    return ""
+
+
+async def _run_pipeline(
+    *,
+    state: ProtocolState,
+    state_mgr: ProtocolStateManager,
+    agent_runner: AgentRunner,
+    proto_cfg: ProtocolConfig,
+    task_id: str,
+    user_request: str,
+    worktree_path: str,
+    start_stage: str,
+    design_output: str,
+    max_review_cycles: int,
+    check_commands: list[list[str]] | None,
+    auto_discover_checks: bool,
+    agent_timeout_sec: int,
+    check_timeout_sec: int,
+) -> ProtocolState:
+    """Run MODE C from *start_stage* onward over an already-prepared worktree.
+
+    Shared by `run_mode_c` (which starts at DESIGN after building the worktree)
+    and `resume_mode_c` (which starts later over the worktree that already
+    exists), so there is exactly one implementation of the pipeline.
+    """
+
+    run_design = start_stage == Stage.DESIGN.value
+    run_implement = start_stage in (Stage.DESIGN.value, Stage.IMPLEMENT.value)
+
     # -- DESIGN --
     design_spec = proto_cfg.mode_c_design
+    if run_design:
+        designed = await _pipeline_design(
+            state=state,
+            state_mgr=state_mgr,
+            agent_runner=agent_runner,
+            design_spec=design_spec,
+            task_id=task_id,
+            user_request=user_request,
+            worktree_path=worktree_path,
+            agent_timeout_sec=agent_timeout_sec,
+        )
+        if designed is None:
+            return state
+        design_output = designed
+
+    if run_implement:
+        implemented = await _pipeline_implement(
+            state=state,
+            state_mgr=state_mgr,
+            agent_runner=agent_runner,
+            implement_spec=proto_cfg.mode_c_implement,
+            task_id=task_id,
+            user_request=user_request,
+            design_output=design_output,
+            worktree_path=worktree_path,
+            agent_timeout_sec=agent_timeout_sec,
+        )
+        if not implemented:
+            return state
+
+    return await _pipeline_review_loop(
+        state=state,
+        state_mgr=state_mgr,
+        agent_runner=agent_runner,
+        proto_cfg=proto_cfg,
+        task_id=task_id,
+        user_request=user_request,
+        worktree_path=worktree_path,
+        design_output=design_output,
+        max_review_cycles=max_review_cycles,
+        check_commands=check_commands,
+        auto_discover_checks=auto_discover_checks,
+        agent_timeout_sec=agent_timeout_sec,
+        check_timeout_sec=check_timeout_sec,
+    )
+
+
+async def _pipeline_design(
+    *,
+    state: ProtocolState,
+    state_mgr: ProtocolStateManager,
+    agent_runner: AgentRunner,
+    design_spec: ProtocolAgentSpec,
+    task_id: str,
+    user_request: str,
+    worktree_path: str,
+    agent_timeout_sec: int,
+) -> str | None:
+    """Run DESIGN. Returns its output text, or None when the run is blocked."""
     state_mgr.append_event(
         "DESIGN_STARTED",
         agent=design_spec.agent_type,
@@ -526,19 +781,21 @@ async def run_mode_c(
         timeout_sec=agent_timeout_sec,
     )
     if not design_result.success:
-        return _block(
+        _block(
             state,
             state_mgr,
             Stage.DESIGN.value,
             design_result.error_message or "DESIGN stage failed",
         )
+        return None
     if not design_result.output_text or not design_result.output_text.strip():
-        return _block(
+        _block(
             state,
             state_mgr,
             Stage.DESIGN.value,
             f"{design_spec.agent_type} produced no design output",
         )
+        return None
 
     state_mgr.write_output("design", design_spec.agent_type, design_result.output_text)
     state_mgr.append_event(
@@ -549,9 +806,22 @@ async def run_mode_c(
         requested_model=design_result.requested_model,
         effective_model=design_result.effective_model,
     )
+    return design_result.output_text
 
-    # -- IMPLEMENT --
-    implement_spec = proto_cfg.mode_c_implement
+
+async def _pipeline_implement(
+    *,
+    state: ProtocolState,
+    state_mgr: ProtocolStateManager,
+    agent_runner: AgentRunner,
+    implement_spec: ProtocolAgentSpec,
+    task_id: str,
+    user_request: str,
+    design_output: str,
+    worktree_path: str,
+    agent_timeout_sec: int,
+) -> bool:
+    """Run IMPLEMENT and the self-reported TEST. False when the run is blocked."""
     state_mgr.append_event(
         "IMPLEMENT_STARTED",
         agent=implement_spec.agent_type,
@@ -569,7 +839,7 @@ async def run_mode_c(
         prompt=build_implement_prompt(
             task_id=task_id,
             user_request=user_request,
-            design_output=design_result.output_text,
+            design_output=design_output,
             worktree_path=worktree_path,
             base_commit=state.base_commit,
         ),
@@ -577,12 +847,13 @@ async def run_mode_c(
         timeout_sec=agent_timeout_sec,
     )
     if not implement_result.success:
-        return _block(
+        _block(
             state,
             state_mgr,
             Stage.IMPLEMENT.value,
             implement_result.error_message or "IMPLEMENT stage failed",
         )
+        return False
 
     state_mgr.write_output(
         "implement", implement_spec.agent_type, implement_result.output_text
@@ -611,6 +882,26 @@ async def run_mode_c(
     state_mgr.append_event(
         "TEST_DONE", agent=implement_spec.agent_type, role="IMPLEMENT"
     )
+    return True
+
+
+async def _pipeline_review_loop(
+    *,
+    state: ProtocolState,
+    state_mgr: ProtocolStateManager,
+    agent_runner: AgentRunner,
+    proto_cfg: ProtocolConfig,
+    task_id: str,
+    user_request: str,
+    worktree_path: str,
+    design_output: str,
+    max_review_cycles: int,
+    check_commands: list[list[str]] | None,
+    auto_discover_checks: bool,
+    agent_timeout_sec: int,
+    check_timeout_sec: int,
+) -> ProtocolState:
+    """CHECK → REVIEW with FIX cycles, then the checkpoint and FINAL."""
 
     # -- Review loop (CHECK → REVIEW, with FIX cycles) --
     review_cycle = 0
@@ -654,7 +945,7 @@ async def run_mode_c(
             prompt=build_review_prompt(
                 task_id=task_id,
                 user_request=user_request,
-                design_output=design_result.output_text,
+                design_output=design_output,
                 diff_text=current_diff,
                 check_results=_format_checks(state.checks),
                 worktree_path=worktree_path,

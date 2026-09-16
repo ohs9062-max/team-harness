@@ -1516,3 +1516,172 @@ def test_protocol_run_rejects_a_zero_timeout():
 
     assert result.exit_code != 0
     assert "--agent-timeout" in result.output
+
+
+def _save_protocol_state(run_dir, **fields):
+    from team_harness.protocol.models import ProtocolState
+    from team_harness.protocol.state import ProtocolStateManager
+
+    run_dir.mkdir(parents=True, exist_ok=True)
+    ProtocolStateManager(run_dir).save_state(ProtocolState(**fields))
+    return run_dir
+
+
+def test_protocol_status_prints_stages_and_the_failure_reason(tmp_path):
+    run_dir = _save_protocol_state(
+        tmp_path / "protocol-run1",
+        task_id="TASK-1",
+        mode="C",
+        stage="REVIEW",
+        status="BLOCKED",
+        base_branch="main",
+        base_commit="a" * 40,
+        target_repo=str(tmp_path / "repo"),
+        blocker="REVIEW stage failed",
+        worktrees={"pipeline": {"branch": "task/TASK-1/pipeline", "path": "/tmp/wt"}},
+        handoffs=[
+            {
+                "stage": "DESIGN",
+                "agent_type": "claude",
+                "effective_model": "claude-sonnet-5",
+                "success": True,
+                "spawned": True,
+            },
+            {
+                "stage": "REVIEW",
+                "agent_type": "antigravity",
+                "success": False,
+                "spawned": False,
+                "failure_classification": {
+                    "category": "rate_limit",
+                    "resets_at": "2026-07-23T13:00:00+00:00",
+                },
+            },
+        ],
+    )
+
+    result = CliRunner().invoke(main, ["protocol", "status", "--run-dir", str(run_dir)])
+
+    assert result.exit_code == 0, result.output
+    assert "MODE C" in result.output
+    assert "DESIGN" in result.output and "claude-sonnet-5" in result.output
+    # A stage the harness refused to launch reads as such, with the cause.
+    assert "실행되지 않음" in result.output
+    assert "rate_limit" in result.output
+    assert "2026-07-23T13:00:00+00:00" in result.output
+    assert "blocker: REVIEW stage failed" in result.output
+    # An unfinished MODE C run tells you how to continue it.
+    assert "th protocol resume" in result.output
+
+
+def test_protocol_status_lists_recent_runs_without_a_run_dir(tmp_path, monkeypatch):
+    runs = tmp_path / "runs"
+    _save_protocol_state(runs / "protocol-aaa", task_id="T-A", mode="C", status="DONE")
+    _save_protocol_state(
+        runs / "protocol-bbb", task_id="T-B", mode="A", status="WAITING_USER"
+    )
+    monkeypatch.setattr("team_harness.cli.RUNS_DIR", runs)
+
+    result = CliRunner().invoke(main, ["protocol", "status"])
+
+    assert result.exit_code == 0, result.output
+    assert "protocol-bbb" in result.output and "WAITING_USER" in result.output
+    assert "protocol-aaa" in result.output and "DONE" in result.output
+
+
+def test_protocol_status_reports_a_missing_state_file(tmp_path):
+    result = CliRunner().invoke(
+        main, ["protocol", "status", "--run-dir", str(tmp_path / "nope")]
+    )
+
+    assert result.exit_code != 0
+    assert "No protocol state found" in result.output
+
+
+def test_protocol_resume_routes_a_mode_c_run_to_resume_mode_c(monkeypatch, tmp_path):
+    run_dir = _save_protocol_state(
+        tmp_path / "protocol-c", task_id="T-C", mode="C", status="BLOCKED"
+    )
+    captured: dict[str, object] = {}
+
+    async def fake_resume_mode_c(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            status="DONE",
+            stage="FINAL",
+            blocker=None,
+            user_selection=None,
+            merge_status="PENDING",
+            active_branch=None,
+            checkpoint=None,
+        )
+
+    async def fail_resume_mode_a(**kwargs):
+        raise AssertionError("MODE A resume must not run for a MODE C run")
+
+    monkeypatch.setattr(
+        "team_harness.protocol.mode_c.resume_mode_c", fake_resume_mode_c
+    )
+    monkeypatch.setattr(
+        "team_harness.protocol.mode_a.resume_mode_a", fail_resume_mode_a
+    )
+    monkeypatch.setattr(
+        "team_harness.protocol.mode_c.TeamHarnessAgentRunner", lambda **kwargs: object()
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "protocol",
+            "resume",
+            "--task-id",
+            "T-C",
+            "--run-dir",
+            str(run_dir),
+            "--repo",
+            str(tmp_path),
+            "--no-visible",
+            "--from-stage",
+            "IMPLEMENT",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["from_stage"] == "IMPLEMENT"
+
+
+def test_protocol_resume_rejects_mismatched_mode_flags(tmp_path):
+    mode_c = _save_protocol_state(
+        tmp_path / "protocol-c2", task_id="T-C", mode="C", status="BLOCKED"
+    )
+    mode_a = _save_protocol_state(
+        tmp_path / "protocol-a2", task_id="T-A", mode="A", status="WAITING_USER"
+    )
+    runner = CliRunner()
+    base = [
+        "protocol",
+        "resume",
+        "--task-id",
+        "T",
+        "--no-visible",
+        "--repo",
+        str(tmp_path),
+    ]
+
+    selection_on_c = runner.invoke(
+        main, base + ["--run-dir", str(mode_c), "--selection", "SELECT_WORKER_1"]
+    )
+    assert selection_on_c.exit_code != 0
+    assert "--selection applies to MODE A" in selection_on_c.output
+
+    stage_on_a = runner.invoke(
+        main,
+        base
+        + ["--run-dir", str(mode_a), "--selection", "REWORK", "--from-stage", "REVIEW"],
+    )
+    assert stage_on_a.exit_code != 0
+    assert "--from-stage applies to MODE C" in stage_on_a.output
+
+    missing_selection = runner.invoke(main, base + ["--run-dir", str(mode_a)])
+    assert missing_selection.exit_code != 0
+    assert "--selection is required" in missing_selection.output

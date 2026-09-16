@@ -624,6 +624,8 @@ def _resolve_visibility(
 
 
 _COMPARE_REPORT_PRINT_LIMIT = 4000
+# How many recent protocol runs `th protocol status` lists with no --run-dir.
+_PROTOCOL_RUN_LIST_LIMIT = 20
 
 
 def _print_protocol_state(state: Any, *, run_dir: Path) -> None:
@@ -774,6 +776,120 @@ async def _protocol_run(
         )
 
 
+@protocol.command("status")
+@click.option(
+    "--run-dir",
+    default=None,
+    type=click.Path(),
+    help="run_dir from `protocol run`. Omit to list recent protocol runs.",
+)
+def protocol_status(run_dir: str | None) -> None:
+    """Show a saved protocol run's stages, or list recent runs.
+
+    Nothing here launches a worker or changes state — it only reads
+    protocol_state.json, which is the only record of what a run actually did
+    once its terminal output has scrolled away.
+    """
+
+    if run_dir is None:
+        _print_protocol_run_list()
+        return
+    _print_protocol_status(Path(run_dir).resolve())
+
+
+def _print_protocol_run_list() -> None:
+    """List protocol run directories, newest first."""
+    from team_harness.protocol.state import ProtocolStateManager
+
+    candidates = sorted(
+        (path for path in RUNS_DIR.glob("protocol-*") if path.is_dir()),
+        key=lambda path: path.name,
+        reverse=True,
+    )
+    if not candidates:
+        click.echo(f"[protocol] {RUNS_DIR} 아래에 protocol 실행 기록이 없습니다.")
+        return
+    for path in candidates[:_PROTOCOL_RUN_LIST_LIMIT]:
+        state = ProtocolStateManager(path).load_state()
+        if state is None:
+            click.echo(f"  {path.name}  (state 없음)")
+            continue
+        click.echo(
+            f"  {path.name}  MODE {state.mode}  {state.status:<12} stage={state.stage}"
+        )
+    click.echo(
+        f"[protocol] 자세히 보려면: th protocol status --run-dir {RUNS_DIR}/<이름>"
+    )
+
+
+def _print_protocol_status(run_dir: Path) -> None:
+    """Print one run's stage table, then anything that blocked it."""
+    from team_harness.protocol.state import ProtocolStateManager
+
+    state = ProtocolStateManager(run_dir).load_state()
+    if state is None:
+        raise click.ClickException(f"No protocol state found in {run_dir}")
+
+    click.echo(
+        f"[protocol] task_id={state.task_id} MODE {state.mode} "
+        f"status={state.status} stage={state.stage}"
+    )
+    if state.base_branch or state.base_commit:
+        click.echo(f"[protocol] base: {state.base_branch} @ {state.base_commit[:12]}")
+    for label, info in state.worktrees.items():
+        click.echo(
+            f"[protocol] worktree {label}: {info.get('branch')} @ {info.get('path')}"
+        )
+
+    if state.handoffs:
+        click.echo("[protocol] ----- stage별 실행 기록 -----")
+        for handoff in state.handoffs:
+            click.echo("  " + _format_handoff(handoff))
+    elif state.stage_statuses:
+        click.echo("[protocol] ----- stage 상태 -----")
+        for stage, status in state.stage_statuses.items():
+            click.echo(f"  {stage:<16} {status}")
+
+    if state.checks:
+        click.echo("[protocol] ----- CHECK -----")
+        for check in state.checks:
+            click.echo(f"  {check.get('status'):<8} {check.get('command')}")
+
+    if state.blocker:
+        click.echo(f"[protocol] blocker: {state.blocker}")
+    if state.mode == "C" and state.status != "DONE":
+        click.echo(
+            "[protocol] 이어서 진행하려면: "
+            f"th protocol resume --task-id {state.task_id} --run-dir {run_dir} "
+            f"--repo {state.target_repo}"
+        )
+    click.echo(f"[protocol] run_dir={run_dir}")
+
+
+def _format_handoff(handoff: dict[str, Any]) -> str:
+    """One line per stage: who ran it, on what model, and how it ended."""
+    stage = str(handoff.get("stage", "?"))
+    agent = str(handoff.get("agent_type") or handoff.get("agent") or "?")
+    model = handoff.get("effective_model") or handoff.get("model")
+    if handoff.get("spawned") is False:
+        outcome = "실행되지 않음"
+        model_label = "-"
+    else:
+        outcome = "성공" if handoff.get("success") else "실패"
+        model_label = str(model or "default")
+    line = f"{stage:<16} {outcome:<12} {agent} {model_label}"
+    classification = handoff.get("failure_classification")
+    if isinstance(classification, dict):
+        detail = classification.get("category")
+        resets_at = classification.get("resets_at")
+        line += f"  [{detail}"
+        line += f", resets {resets_at}]" if resets_at else "]"
+    verdict = handoff.get("review_verdict")
+    if verdict:
+        line += f"  verdict={verdict}"
+    return line
+
+
 @protocol.command("resume")
 @click.option("--task-id", required=True)
 @click.option(
@@ -782,7 +898,7 @@ async def _protocol_run(
 @click.option("--repo", default=".", show_default=True)
 @click.option(
     "--selection",
-    required=True,
+    default=None,
     type=click.Choice(
         [
             "SELECT_WORKER_1",
@@ -794,8 +910,16 @@ async def _protocol_run(
             "SELECT_GEMINI",
         ]
     ),
+    help="MODE A only: which worker's result to take. Required for MODE A.",
 )
 @click.option("--note", default="", help="Optional instruction accompanying REWORK.")
+@click.option(
+    "--from-stage",
+    default=None,
+    type=click.Choice(["DESIGN", "IMPLEMENT", "REVIEW"]),
+    help="MODE C only: stage to re-enter at. Defaults to the earliest stage "
+    "that is not DONE, which after a block is the stage that blocked.",
+)
 @_protocol_visible_option()
 @click.option("--tmux-session", default=None)
 @_protocol_role_options()
@@ -803,15 +927,25 @@ def protocol_resume(
     task_id: str,
     run_dir: str,
     repo: str,
-    selection: str,
+    selection: str | None,
     note: str,
+    from_stage: str | None,
     visible: bool,
     tmux_session: str | None,
     set_role: tuple[str, ...],
     agent_timeout_sec: int,
     check_timeout_sec: int,
 ) -> None:
-    """Complete a MODE A run that is WAITING_USER with your selection."""
+    """Continue a saved protocol run.
+
+    \b
+    MODE A — complete a WAITING_USER run with --selection.
+    MODE C — re-enter the pipeline at --from-stage (default: the earliest
+             stage that is not DONE) reusing the existing task worktree, so a
+             run that blocked late does not re-pay for DESIGN and IMPLEMENT.
+
+    The mode is read from the saved state, not guessed.
+    """
 
     asyncio.run(
         _protocol_resume(
@@ -820,6 +954,7 @@ def protocol_resume(
             repo=repo,
             selection=selection,
             note=note,
+            from_stage=from_stage,
             visible=visible,
             tmux_session=tmux_session,
             set_role=set_role,
@@ -834,8 +969,9 @@ async def _protocol_resume(
     task_id: str,
     run_dir: str,
     repo: str,
-    selection: str,
+    selection: str | None,
     note: str,
+    from_stage: str | None = None,
     visible: bool,
     tmux_session: str | None,
     set_role: tuple[str, ...] = (),
@@ -844,14 +980,50 @@ async def _protocol_resume(
 ) -> None:
     from team_harness.protocol.config import load_protocol_config
     from team_harness.protocol.mode_a import resume_mode_a
+    from team_harness.protocol.mode_c import resume_mode_c
     from team_harness.protocol.mode_c import TeamHarnessAgentRunner
+    from team_harness.protocol.state import ProtocolStateManager
 
     resolved_run_dir = Path(run_dir).resolve()
     resolved_repo = str(Path(repo).resolve())
+    saved = ProtocolStateManager(resolved_run_dir).load_state()
+    if saved is None:
+        raise click.ClickException(f"No protocol state found in {resolved_run_dir}")
+
     session_name = _resolve_visibility(
         visible=visible, tmux_session=tmux_session, task_id=task_id
     )
     runner = TeamHarnessAgentRunner(log_dir=resolved_run_dir, tmux_session=session_name)
+    proto_cfg = load_protocol_config(
+        runtime_roles=_parse_set_role(set_role), config_start_dir=resolved_repo
+    )
+
+    if saved.mode == "C":
+        if selection is not None:
+            raise click.ClickException(
+                "--selection applies to MODE A runs; this run is MODE C. "
+                "Use --from-stage instead."
+            )
+        state = await resume_mode_c(
+            run_dir=resolved_run_dir,
+            agent_runner=runner,
+            from_stage=from_stage,
+            protocol_config=proto_cfg,
+            agent_timeout_sec=agent_timeout_sec,
+            check_timeout_sec=check_timeout_sec,
+        )
+        _print_protocol_state(state, run_dir=resolved_run_dir)
+        return
+
+    if selection is None:
+        raise click.ClickException(
+            "--selection is required to resume a MODE A run "
+            "(SELECT_WORKER_1|SELECT_WORKER_2|SELECT_HYBRID|REWORK|CANCEL)."
+        )
+    if from_stage is not None:
+        raise click.ClickException(
+            "--from-stage applies to MODE C runs; this run is MODE A."
+        )
     state = await resume_mode_a(
         task_id=task_id,
         selection=selection,
@@ -859,9 +1031,7 @@ async def _protocol_resume(
         run_dir=resolved_run_dir,
         target_repo=resolved_repo,
         agent_runner=runner,
-        protocol_config=load_protocol_config(
-            runtime_roles=_parse_set_role(set_role), config_start_dir=resolved_repo
-        ),
+        protocol_config=proto_cfg,
         agent_timeout_sec=agent_timeout_sec,
         check_timeout_sec=check_timeout_sec,
     )
