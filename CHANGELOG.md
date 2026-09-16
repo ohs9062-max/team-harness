@@ -18,8 +18,11 @@
 - `load_protocol_config`에 `runtime_roles`/`role_tables`/`config_start_dir` 인자와 `load_protocol_role_tables`, `validate_role_tables`, `PROTOCOL_ROLE_NAMES`, `PROTOCOL_ROLE_FIELDS` 추가. 기존 `HARNESS_MODE_*` 사용법과 기존 인자는 그대로 동작합니다.
 - `AgentResult`에 `spawned: bool = True`와 `failure_classification: dict | None = None` 필드 추가(둘 다 기본값이 있어 기존 `AgentRunner` 구현과 호환됩니다), 그리고 `AgentResult.resolve_effective_model()` 헬퍼 추가 — 실행되지 않은 stage는 설정된 모델을 `effective_model`로 보고하지 않고 `None`을 보고합니다(TH-D6 감사 정합성). MODE A에 4번, MODE C에 1번 중복돼 있던 모델 리졸브 로직을 이 헬퍼로 통합했습니다.
 
+- **MODE A/MODE B 테스트 추가.** `mode_a.py`(859줄, block 종료점 약 10개, 병렬 fan-out 3단계, 사용자 선택 resume)와 `mode_b.py`(244줄)에는 직접 테스트가 아예 없었습니다(`mode_c.py`는 575줄의 테스트 보유). 41개 테스트를 추가해 protocol 패키지 전체 커버리지가 94%(mode_a 94%, mode_b 100%)가 되었습니다.
+
 ### 수정됨 (Fixed)
 
+- MODE A에서 worker가 실패했을 때 그 워커의 실제 오류 메시지가 유실되던 문제. `state.blocker = result.error_message`로 담아둔 값이 바로 다음 줄의 `_block()`에 의해 `"Required MODE A worker failed: worker_1"`이라는 일반 메시지로 덮어써져, 그 대입은 사실상 죽은 코드였고 무엇이 잘못됐는지에 대한 유일한 설명(TH-D18의 실패 분류와 리셋 시각 포함)이 사라졌습니다. 이제 blocker가 레인 이름과 원인을 함께 담습니다.
 - `test_bash_cancellation_cleans_up_process_group` 및 `test_bash_cancellation_escalates_for_sigterm_ignoring_group`의 심각한 간헐적 실패(단독 실행 시 12회 중 10회 실패). `bash`는 프로세스 그룹을 죽이고 자신이 띄운 셸을 정상적으로 reap하지만, 셸의 자식은 테스트 프로세스의 손자입니다. 셸이 먼저 죽으면 이미 죽은 손자는 init으로 재양육되어 init이 reap할 때까지 좀비로 남고, 그 동안 `os.kill(pid, 0)`은 계속 성공합니다. 이 창은 약 20ms에 불과하지만 두 테스트가 `task.cancel()` 직후 즉시 단정하고 있어 부하가 걸린 머신에서 대부분 실패했습니다. 이제 유한한 데드라인(5초) 안에서 폴링하며, 프로세스가 실제로 종료된다는 사실은 그대로 검증합니다. `shell_tools`의 정리 로직 자체는 정상이었으며 변경하지 않았습니다.
 - `test_stdout_read_error_leaves_scan_retryable`가 벽시계 시간에 따라 실패하던 문제. 이 테스트는 `claude_rate_limit.jsonl` 픽스처의 절대 `resetsAt`(1784811600 = 2026-07-23T13:00Z)에 의존하는데 `now`를 고정하지 않아, 실제 시간이 그 시각을 지난 뒤로는 서킷이 생성 즉시 만료되어 항상 실패했습니다. 형제 테스트와 동일하게 `rate_limits._utc_now`를 픽스처 리셋 이전으로 고정합니다.
 

@@ -283,12 +283,17 @@ async def run_mode_a(
 
         if not result.success:
             state.worker_status[worker] = StageStatus.FAILED.value
-            state.blocker = result.error_message or f"Worker {worker} failed"
+            # Name the lane *and* carry the worker's own error. Assigning
+            # state.blocker separately here used to be dead — _block overwrites
+            # it with its reason — which threw away the only description of
+            # what actually went wrong, including TH-D18's failure
+            # classification (e.g. "[rate_limit: ... resets ...]").
+            cause = result.error_message or "no error message reported"
             return _block(
                 state,
                 state_mgr,
                 Stage.WORKER_GATE.value,
-                f"Required MODE A worker failed: {worker}",
+                f"Required MODE A worker failed: {worker} — {cause}",
             )
 
         # Run checks in worker worktree

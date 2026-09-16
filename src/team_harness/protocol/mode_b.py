@@ -172,11 +172,7 @@ async def run_mode_b(
         effort=target_effort,
         label=f"{target_agent}-relay",
     )
-    effective_model = (
-        result.effective_model
-        if result.effective_model is not None
-        else (result.model if result.model is not None else target_model)
-    )
+    effective_model = result.resolve_effective_model(target_model)
     result.agent = target_agent
     result.agent_type = target_agent
     result.stage = Stage.CONTINUE.value
@@ -193,6 +189,8 @@ async def run_mode_b(
             "requested_model": target_model,
             "effective_model": effective_model,
             "success": result.success,
+            "spawned": result.spawned,
+            "failure_classification": result.failure_classification,
         }
     )
     if result.output_text:
