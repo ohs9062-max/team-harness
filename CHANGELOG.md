@@ -14,6 +14,7 @@
 
 ### 수정됨 (Fixed)
 
+- `test_bash_cancellation_cleans_up_process_group` 및 `test_bash_cancellation_escalates_for_sigterm_ignoring_group`의 심각한 간헐적 실패(단독 실행 시 12회 중 10회 실패). `bash`는 프로세스 그룹을 죽이고 자신이 띄운 셸을 정상적으로 reap하지만, 셸의 자식은 테스트 프로세스의 손자입니다. 셸이 먼저 죽으면 이미 죽은 손자는 init으로 재양육되어 init이 reap할 때까지 좀비로 남고, 그 동안 `os.kill(pid, 0)`은 계속 성공합니다. 이 창은 약 20ms에 불과하지만 두 테스트가 `task.cancel()` 직후 즉시 단정하고 있어 부하가 걸린 머신에서 대부분 실패했습니다. 이제 유한한 데드라인(5초) 안에서 폴링하며, 프로세스가 실제로 종료된다는 사실은 그대로 검증합니다. `shell_tools`의 정리 로직 자체는 정상이었으며 변경하지 않았습니다.
 - `test_stdout_read_error_leaves_scan_retryable`가 벽시계 시간에 따라 실패하던 문제. 이 테스트는 `claude_rate_limit.jsonl` 픽스처의 절대 `resetsAt`(1784811600 = 2026-07-23T13:00Z)에 의존하는데 `now`를 고정하지 않아, 실제 시간이 그 시각을 지난 뒤로는 서킷이 생성 즉시 만료되어 항상 실패했습니다. 형제 테스트와 동일하게 `rate_limits._utc_now`를 픽스처 리셋 이전으로 고정합니다.
 
 ## [0.7.0] - 2026-07-20

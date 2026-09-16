@@ -2,12 +2,47 @@
 
 import asyncio
 import os
+from pathlib import Path
 
 import pytest
 
 from team_harness.tools.shell_tools import bash
 from team_harness.tools.shell_tools import BASH_SCHEMA
 from team_harness.tools.shell_tools import DEFAULT_BASH_TIMEOUT_SECONDS
+
+
+async def _assert_all_terminated(*pid_paths: Path, deadline_s: float = 5.0) -> None:
+    """Assert every recorded pid is gone, allowing a bounded reap window.
+
+    `bash` kills the whole process group and reaps the shell it started, but
+    the shell's own children are grandchildren of this test process. When the
+    shell dies first, a killed grandchild is re-parented to init and stays a
+    zombie until init reaps it — and `os.kill(zombie, 0)` still succeeds. That
+    window is only ~20ms, so asserting termination the instant `task.cancel()`
+    returns fails most of the time on a loaded machine. Poll instead: this
+    still proves the processes die, without depending on how fast init runs.
+    """
+    pids = [int(path.read_text()) for path in pid_paths]
+    loop = asyncio.get_running_loop()
+    give_up_at = loop.time() + deadline_s
+    while True:
+        alive = [pid for pid in pids if _pid_resolves(pid)]
+        if not alive:
+            return
+        if loop.time() >= give_up_at:
+            pytest.fail(f"pids still resolve {deadline_s}s after cancellation: {alive}")
+        await asyncio.sleep(delay=0.01)
+
+
+def _pid_resolves(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # Someone else's process now owns a recycled pid; ours is gone.
+        return False
+    return True
 
 
 @pytest.mark.asyncio
@@ -107,10 +142,7 @@ async def test_bash_cancellation_cleans_up_process_group(tmp_path, monkeypatch):
     with pytest.raises(asyncio.CancelledError):
         await task
 
-    for pid_path in (shell_pid_path, child_pid_path):
-        pid = int(pid_path.read_text())
-        with pytest.raises(ProcessLookupError):
-            os.kill(pid, 0)
+    await _assert_all_terminated(shell_pid_path, child_pid_path)
 
 
 @pytest.mark.asyncio
@@ -140,10 +172,7 @@ async def test_bash_cancellation_escalates_for_sigterm_ignoring_group(
     with pytest.raises(asyncio.CancelledError):
         await task
 
-    for pid_path in (shell_pid_path, child_pid_path):
-        pid = int(pid_path.read_text())
-        with pytest.raises(ProcessLookupError):
-            os.kill(pid, 0)
+    await _assert_all_terminated(shell_pid_path, child_pid_path)
 
 
 @pytest.mark.asyncio
