@@ -526,6 +526,78 @@ def protocol() -> None:
     """
 
 
+def _parse_set_role(values: tuple[str, ...]) -> dict[str, dict[str, str]]:
+    """Turn repeated ``--set-role role.field=value`` flags into role tables.
+
+    Seven protocol roles times three fields would be twenty-one dedicated
+    flags, so one repeatable flag carries them all, e.g.
+    ``--set-role mode_c_implement.model=gpt-5.6-sol
+    --set-role mode_c_implement.effort=medium``. Role and field names are
+    validated by the protocol layer, so a typo fails loudly instead of leaving
+    the default silently in place.
+    """
+    from team_harness.protocol.config import PROTOCOL_ROLE_FIELDS
+    from team_harness.protocol.config import PROTOCOL_ROLE_NAMES
+
+    tables: dict[str, dict[str, str]] = {}
+    for raw in values:
+        target, _, value = raw.partition("=")
+        role_name, _, field_name = target.partition(".")
+        if not value.strip() or not role_name or not field_name:
+            raise click.BadParameter(
+                f"expected role.field=value, got {raw!r}", param_hint="--set-role"
+            )
+        if role_name not in PROTOCOL_ROLE_NAMES:
+            raise click.BadParameter(
+                f"unknown role {role_name!r}; known roles: "
+                f"{', '.join(PROTOCOL_ROLE_NAMES)}",
+                param_hint="--set-role",
+            )
+        if field_name not in PROTOCOL_ROLE_FIELDS:
+            raise click.BadParameter(
+                f"unknown field {field_name!r} for role {role_name!r}; known "
+                f"fields: {', '.join(PROTOCOL_ROLE_FIELDS)}",
+                param_hint="--set-role",
+            )
+        tables.setdefault(role_name, {})[field_name] = value.strip()
+    return tables
+
+
+def _protocol_role_options() -> Any:
+    """Per-run role/timeout overrides shared by every `th protocol` command."""
+
+    def decorate(fn: Any) -> Any:
+        fn = click.option(
+            "--set-role",
+            "set_role",
+            multiple=True,
+            metavar="ROLE.FIELD=VALUE",
+            help="Override one protocol role knob for this run, e.g. "
+            "--set-role mode_c_implement.model=gpt-5.6-sol. FIELD is "
+            "agent, model or effort. Repeatable. Takes precedence over "
+            "HARNESS_MODE_* env vars and config.toml.",
+        )(fn)
+        fn = click.option(
+            "--agent-timeout",
+            "agent_timeout_sec",
+            type=click.IntRange(min=1),
+            default=600,
+            show_default=True,
+            help="Seconds a single worker stage may run before it is killed.",
+        )(fn)
+        fn = click.option(
+            "--check-timeout",
+            "check_timeout_sec",
+            type=click.IntRange(min=1),
+            default=300,
+            show_default=True,
+            help="Seconds the deterministic CHECK commands may run.",
+        )(fn)
+        return fn
+
+    return decorate
+
+
 def _protocol_visible_option() -> Any:
     return click.option(
         "--visible/--no-visible",
@@ -618,21 +690,45 @@ def _print_compare_report(compare_path: str) -> None:
     default=None,
     help="tmux session name (default: team-harness-<task-id>).",
 )
+@_protocol_role_options()
 def protocol_run(
-    task: str, mode: str, repo: str, visible: bool, tmux_session: str | None
+    task: str,
+    mode: str,
+    repo: str,
+    visible: bool,
+    tmux_session: str | None,
+    set_role: tuple[str, ...],
+    agent_timeout_sec: int,
+    check_timeout_sec: int,
 ) -> None:
     """Start a fresh MODE A or MODE C task with the given TASK description."""
 
     asyncio.run(
         _protocol_run(
-            task=task, mode=mode, repo=repo, visible=visible, tmux_session=tmux_session
+            task=task,
+            mode=mode,
+            repo=repo,
+            visible=visible,
+            tmux_session=tmux_session,
+            set_role=set_role,
+            agent_timeout_sec=agent_timeout_sec,
+            check_timeout_sec=check_timeout_sec,
         )
     )
 
 
 async def _protocol_run(
-    *, task: str, mode: str, repo: str, visible: bool, tmux_session: str | None
+    *,
+    task: str,
+    mode: str,
+    repo: str,
+    visible: bool,
+    tmux_session: str | None,
+    set_role: tuple[str, ...] = (),
+    agent_timeout_sec: int = 600,
+    check_timeout_sec: int = 300,
 ) -> None:
+    from team_harness.protocol.config import load_protocol_config
     from team_harness.protocol.mode_a import run_mode_a
     from team_harness.protocol.mode_c import run_mode_c
     from team_harness.protocol.mode_c import TeamHarnessAgentRunner
@@ -650,6 +746,13 @@ async def _protocol_run(
         click.echo(f"[protocol] 실시간으로 보려면: tmux attach -t {session_name}")
 
     runner = TeamHarnessAgentRunner(log_dir=run_dir, tmux_session=session_name)
+    # --set-role goes in as the runtime layer so a flag typed for this run
+    # beats a stale HARNESS_MODE_* variable left in the shell; config.toml is
+    # read relative to the target repo so a repo-local .team-harness/config.toml
+    # applies to work done on that repo.
+    proto_cfg = load_protocol_config(
+        runtime_roles=_parse_set_role(set_role), config_start_dir=target_repo
+    )
     mode_fn = run_mode_a if mode == "a" else run_mode_c
     state = await mode_fn(
         task_id=task_id,
@@ -657,6 +760,9 @@ async def _protocol_run(
         target_repo=target_repo,
         run_dir=run_dir,
         agent_runner=runner,
+        protocol_config=proto_cfg,
+        agent_timeout_sec=agent_timeout_sec,
+        check_timeout_sec=check_timeout_sec,
     )
     _print_protocol_state(state, run_dir=run_dir)
     if mode == "a" and state.status == "WAITING_USER":
@@ -692,6 +798,7 @@ async def _protocol_run(
 @click.option("--note", default="", help="Optional instruction accompanying REWORK.")
 @_protocol_visible_option()
 @click.option("--tmux-session", default=None)
+@_protocol_role_options()
 def protocol_resume(
     task_id: str,
     run_dir: str,
@@ -700,6 +807,9 @@ def protocol_resume(
     note: str,
     visible: bool,
     tmux_session: str | None,
+    set_role: tuple[str, ...],
+    agent_timeout_sec: int,
+    check_timeout_sec: int,
 ) -> None:
     """Complete a MODE A run that is WAITING_USER with your selection."""
 
@@ -712,6 +822,9 @@ def protocol_resume(
             note=note,
             visible=visible,
             tmux_session=tmux_session,
+            set_role=set_role,
+            agent_timeout_sec=agent_timeout_sec,
+            check_timeout_sec=check_timeout_sec,
         )
     )
 
@@ -725,11 +838,16 @@ async def _protocol_resume(
     note: str,
     visible: bool,
     tmux_session: str | None,
+    set_role: tuple[str, ...] = (),
+    agent_timeout_sec: int = 600,
+    check_timeout_sec: int = 300,
 ) -> None:
+    from team_harness.protocol.config import load_protocol_config
     from team_harness.protocol.mode_a import resume_mode_a
     from team_harness.protocol.mode_c import TeamHarnessAgentRunner
 
     resolved_run_dir = Path(run_dir).resolve()
+    resolved_repo = str(Path(repo).resolve())
     session_name = _resolve_visibility(
         visible=visible, tmux_session=tmux_session, task_id=task_id
     )
@@ -739,8 +857,13 @@ async def _protocol_resume(
         selection=selection,
         user_instruction=note,
         run_dir=resolved_run_dir,
-        target_repo=str(Path(repo).resolve()),
+        target_repo=resolved_repo,
         agent_runner=runner,
+        protocol_config=load_protocol_config(
+            runtime_roles=_parse_set_role(set_role), config_start_dir=resolved_repo
+        ),
+        agent_timeout_sec=agent_timeout_sec,
+        check_timeout_sec=check_timeout_sec,
     )
     _print_protocol_state(state, run_dir=resolved_run_dir)
 
@@ -758,6 +881,7 @@ async def _protocol_resume(
 )
 @_protocol_visible_option()
 @click.option("--tmux-session", default=None)
+@_protocol_role_options()
 def protocol_relay(
     task_id: str,
     run_dir: str,
@@ -765,6 +889,9 @@ def protocol_relay(
     next_agent: str | None,
     visible: bool,
     tmux_session: str | None,
+    set_role: tuple[str, ...],
+    agent_timeout_sec: int,
+    check_timeout_sec: int,
 ) -> None:
     """MODE B — hand an existing task to a different agent, state intact."""
 
@@ -776,6 +903,9 @@ def protocol_relay(
             next_agent=next_agent,
             visible=visible,
             tmux_session=tmux_session,
+            set_role=set_role,
+            agent_timeout_sec=agent_timeout_sec,
+            check_timeout_sec=check_timeout_sec,
         )
     )
 
@@ -788,11 +918,16 @@ async def _protocol_relay(
     next_agent: str | None,
     visible: bool,
     tmux_session: str | None,
+    set_role: tuple[str, ...] = (),
+    agent_timeout_sec: int = 600,
+    check_timeout_sec: int = 300,
 ) -> None:
+    from team_harness.protocol.config import load_protocol_config
     from team_harness.protocol.mode_b import run_mode_b
     from team_harness.protocol.mode_c import TeamHarnessAgentRunner
 
     resolved_run_dir = Path(run_dir).resolve()
+    resolved_repo = str(Path(repo).resolve())
     session_name = _resolve_visibility(
         visible=visible, tmux_session=tmux_session, task_id=task_id
     )
@@ -801,7 +936,12 @@ async def _protocol_relay(
         task_id=task_id,
         next_agent=next_agent,
         run_dir=resolved_run_dir,
-        target_repo=str(Path(repo).resolve()),
+        target_repo=resolved_repo,
         agent_runner=runner,
+        protocol_config=load_protocol_config(
+            runtime_roles=_parse_set_role(set_role), config_start_dir=resolved_repo
+        ),
+        agent_timeout_sec=agent_timeout_sec,
+        check_timeout_sec=check_timeout_sec,
     )
     _print_protocol_state(state, run_dir=resolved_run_dir)

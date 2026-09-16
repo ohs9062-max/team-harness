@@ -92,6 +92,39 @@ class ProtocolConfig:
     )
 
 
+# Every role the Harness Protocol maps onto an agent backend. Used to reject a
+# misspelled role in config.toml or `--set-role` instead of silently ignoring
+# it — a typo that quietly leaves the expensive default in place is exactly the
+# failure TH-D17 was about.
+PROTOCOL_ROLE_NAMES: tuple[str, ...] = (
+    "mode_a_worker_1",
+    "mode_a_worker_2",
+    "mode_a_final",
+    "mode_b_default",
+    "mode_c_design",
+    "mode_c_implement",
+    "mode_c_review",
+)
+
+PROTOCOL_ROLE_FIELDS: tuple[str, ...] = ("agent", "model", "effort")
+
+
+def validate_role_tables(tables: dict[str, dict[str, str]]) -> None:
+    """Reject unknown role or field names before they are silently ignored."""
+    for role_name, fields in tables.items():
+        if role_name not in PROTOCOL_ROLE_NAMES:
+            raise ValueError(
+                f"Unknown protocol role {role_name!r}. "
+                f"Known roles: {list(PROTOCOL_ROLE_NAMES)}"
+            )
+        for key in fields:
+            if key not in PROTOCOL_ROLE_FIELDS:
+                raise ValueError(
+                    f"Unknown field {key!r} for protocol role {role_name!r}. "
+                    f"Known fields: {list(PROTOCOL_ROLE_FIELDS)}"
+                )
+
+
 def _resolve_role_spec(
     runtime_arg: ProtocolAgentSpec | str | None,
     runtime_model: str | None,
@@ -104,47 +137,72 @@ def _resolve_role_spec(
     runtime_effort: str | None = None,
     effort_var: str | None = None,
     default_effort: str | None = None,
+    runtime_role: dict[str, str] | None = None,
+    toml_role: dict[str, str] | None = None,
 ) -> ProtocolAgentSpec:
     """Resolve a single role's spec adhering to the precedence hierarchy.
 
-    Precedence (model and effort resolved independently, same order):
-        1. Explicit runtime argument
+    Precedence (agent, model and effort resolved independently, same order):
+        1. Explicit runtime argument, then *runtime_role* (one `--set-role`
+           style override table for this role)
         2. Environment variables (.env / os.environ)
-        3. Protocol default
+        3. `[protocol.roles.<role>]` in local then global config.toml
+        4. Protocol default
+
+    Layer 3 mirrors the project-wide chain documented in CLAUDE.md, which the
+    protocol layer previously skipped: roles were settable only by environment
+    variable, so the config.toml a user already keeps their model-tier policy in
+    had no say over them. *runtime_role* sits in layer 1 because a flag typed
+    for one run must beat a stale variable left in the shell.
     """
+
+    runtime_table = runtime_role or {}
+    role_table = toml_role or {}
 
     def _resolve_value(
         runtime_value: str | None,
         spec_value: str | None,
         env_var: str | None,
         default_value: str | None,
+        toml_key: str,
     ) -> str | None:
         if runtime_value is not None:
             return runtime_value
         if spec_value is not None:
             return spec_value
+        runtime_val = runtime_table.get(toml_key)
+        if runtime_val:
+            return runtime_val
         env_val = env_map.get(env_var) if env_var else None
-        return env_val.strip() if env_val and env_val.strip() else default_value
+        if env_val and env_val.strip():
+            return env_val.strip()
+        toml_val = role_table.get(toml_key)
+        if toml_val:
+            return toml_val
+        return default_value
 
     if isinstance(runtime_arg, ProtocolAgentSpec):
         agent_type = runtime_arg.agent_type
         model = _resolve_value(
-            runtime_model, runtime_arg.model, model_var, default_model
+            runtime_model, runtime_arg.model, model_var, default_model, "model"
         )
         effort = _resolve_value(
-            runtime_effort, runtime_arg.effort, effort_var, default_effort
+            runtime_effort, runtime_arg.effort, effort_var, default_effort, "effort"
         )
         return ProtocolAgentSpec(agent_type=agent_type, model=model, effort=effort)
     elif isinstance(runtime_arg, str):
         agent_type = runtime_arg
-        model = _resolve_value(runtime_model, None, model_var, default_model)
-        effort = _resolve_value(runtime_effort, None, effort_var, default_effort)
+        model = _resolve_value(runtime_model, None, model_var, default_model, "model")
+        effort = _resolve_value(
+            runtime_effort, None, effort_var, default_effort, "effort"
+        )
         return ProtocolAgentSpec(agent_type=agent_type, model=model, effort=effort)
 
-    agent_val = env_map.get(agent_var)
-    agent_type = agent_val.strip() if agent_val and agent_val.strip() else default_agent
-    model = _resolve_value(runtime_model, None, model_var, default_model)
-    effort = _resolve_value(runtime_effort, None, effort_var, default_effort)
+    agent_type = (
+        _resolve_value(None, None, agent_var, default_agent, "agent") or default_agent
+    )
+    model = _resolve_value(runtime_model, None, model_var, default_model, "model")
+    effort = _resolve_value(runtime_effort, None, effort_var, default_effort, "effort")
 
     return ProtocolAgentSpec(agent_type=agent_type, model=model, effort=effort)
 
@@ -175,14 +233,37 @@ def load_protocol_config(
     mode_c_review: ProtocolAgentSpec | str | None = None,
     mode_c_review_model: str | None = None,
     mode_c_review_effort: str | None = None,
+    role_tables: dict[str, dict[str, str]] | None = None,
+    runtime_roles: dict[str, dict[str, str]] | None = None,
+    config_start_dir: str | Path | None = None,
 ) -> ProtocolConfig:
     """Load protocol role configuration with full precedence resolution.
 
     Precedence:
-        1. Explicit runtime arguments (e.g. mode_c_design=ProtocolAgentSpec(...) or string name)
+        1. Explicit runtime arguments (e.g. mode_c_design=ProtocolAgentSpec(...)
+           or string name), then *runtime_roles*
         2. Environment variables (os.environ takes precedence over .env file)
-        3. Protocol default specifications
+        3. `[protocol.roles.<role>]` tables in local then global config.toml
+        4. Protocol default specifications
+
+    *runtime_roles* carries per-run overrides as ``{role: {field: value}}``,
+    which is how the CLI passes ``--set-role`` without needing one keyword
+    argument per role-and-field pair.
+
+    Pass *role_tables* to supply layer 3 directly (tests, embedded callers).
+    When it is None the tables are read from disk, rooted at *config_start_dir*
+    or the current directory, the same way the .env lookup already works.
     """
+
+    if role_tables is None:
+        from team_harness.config import load_protocol_role_tables
+
+        role_tables = load_protocol_role_tables(
+            Path(config_start_dir) if config_start_dir else None
+        )
+    validate_role_tables(role_tables)
+    runtime_roles = runtime_roles or {}
+    validate_role_tables(runtime_roles)
     env_source = env if env is not None else environ
     if env_source is not None:
         merged_env: dict[str, str] = dict(env_source)
@@ -208,6 +289,8 @@ def load_protocol_config(
         runtime_effort=mode_a_worker_1_effort,
         effort_var="HARNESS_MODE_A_WORKER_1_EFFORT",
         default_effort="high",
+        runtime_role=runtime_roles.get("mode_a_worker_1"),
+        toml_role=role_tables.get("mode_a_worker_1"),
     )
     spec_a_w2 = _resolve_role_spec(
         mode_a_worker_2,
@@ -219,6 +302,8 @@ def load_protocol_config(
         "Gemini 3.8 Flash (High)",
         runtime_effort=mode_a_worker_2_effort,
         effort_var="HARNESS_MODE_A_WORKER_2_EFFORT",
+        runtime_role=runtime_roles.get("mode_a_worker_2"),
+        toml_role=role_tables.get("mode_a_worker_2"),
     )
     spec_a_final = _resolve_role_spec(
         mode_a_final,
@@ -231,6 +316,8 @@ def load_protocol_config(
         runtime_effort=mode_a_final_effort,
         effort_var="HARNESS_MODE_A_FINAL_EFFORT",
         default_effort="high",
+        runtime_role=runtime_roles.get("mode_a_final"),
+        toml_role=role_tables.get("mode_a_final"),
     )
 
     spec_b_def = _resolve_role_spec(
@@ -244,6 +331,8 @@ def load_protocol_config(
         runtime_effort=mode_b_default_effort,
         effort_var="HARNESS_MODE_B_DEFAULT_EFFORT",
         default_effort="high",
+        runtime_role=runtime_roles.get("mode_b_default"),
+        toml_role=role_tables.get("mode_b_default"),
     )
 
     spec_c_design = _resolve_role_spec(
@@ -256,6 +345,8 @@ def load_protocol_config(
         "claude-sonnet-5",
         runtime_effort=mode_c_design_effort,
         effort_var="HARNESS_MODE_C_DESIGN_EFFORT",
+        runtime_role=runtime_roles.get("mode_c_design"),
+        toml_role=role_tables.get("mode_c_design"),
     )
     spec_c_impl = _resolve_role_spec(
         mode_c_implement,
@@ -268,6 +359,8 @@ def load_protocol_config(
         runtime_effort=mode_c_implement_effort,
         effort_var="HARNESS_MODE_C_IMPLEMENT_EFFORT",
         default_effort="high",
+        runtime_role=runtime_roles.get("mode_c_implement"),
+        toml_role=role_tables.get("mode_c_implement"),
     )
     spec_c_rev = _resolve_role_spec(
         mode_c_review,
@@ -279,6 +372,8 @@ def load_protocol_config(
         "Gemini 3.8 Flash (High)",
         runtime_effort=mode_c_review_effort,
         effort_var="HARNESS_MODE_C_REVIEW_EFFORT",
+        runtime_role=runtime_roles.get("mode_c_review"),
+        toml_role=role_tables.get("mode_c_review"),
     )
 
     return ProtocolConfig(

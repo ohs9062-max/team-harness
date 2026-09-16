@@ -400,6 +400,26 @@ min_agent_lifetime_before_kill_s = 600.0
 # model = "codex-mini-latest"
 # codex_auth_path = "~/.codex/auth.json"
 
+# --- Harness Protocol role mapping (`th protocol`) ---
+# Each MODE A/B/C role maps onto a worker agent, an optional model, and an
+# optional reasoning effort. Roles: mode_a_worker_1, mode_a_worker_2,
+# mode_a_final, mode_b_default, mode_c_design, mode_c_implement,
+# mode_c_review. Fields: agent, model, effort.
+#
+# Precedence, highest first: `th protocol ... --set-role role.field=value`,
+# then HARNESS_MODE_<ROLE>_{AGENT,MODEL,EFFORT} env vars, then these tables
+# (project config.toml over global), then the built-in defaults, which
+# deliberately pick the cheap tier (TH-D17).
+#
+# [protocol.roles.mode_c_implement]
+# agent = "codex"
+# model = "gpt-5.6-terra"
+# effort = "high"
+#
+# [protocol.roles.mode_c_review]
+# agent = "antigravity"
+# model = "Gemini 3.8 Flash (High)"
+
 """
         + _STRUCTURED_AGENTS_BLOCK
     )
@@ -488,6 +508,27 @@ min_agent_lifetime_before_kill_s = 600.0
 # provider = "codex"
 # model = "codex-mini-latest"
 # codex_auth_path = ".team-harness/codex-auth.json"
+
+
+# --- Harness Protocol role mapping (`th protocol`) ---
+# Each MODE A/B/C role maps onto a worker agent, an optional model, and an
+# optional reasoning effort. Roles: mode_a_worker_1, mode_a_worker_2,
+# mode_a_final, mode_b_default, mode_c_design, mode_c_implement,
+# mode_c_review. Fields: agent, model, effort.
+#
+# Precedence, highest first: `th protocol ... --set-role role.field=value`,
+# then HARNESS_MODE_<ROLE>_{AGENT,MODEL,EFFORT} env vars, then these tables
+# (project config.toml over global), then the built-in defaults, which
+# deliberately pick the cheap tier (TH-D17).
+#
+# [protocol.roles.mode_c_implement]
+# agent = "codex"
+# model = "gpt-5.6-terra"
+# effort = "high"
+#
+# [protocol.roles.mode_c_review]
+# agent = "antigravity"
+# model = "Gemini 3.8 Flash (High)"
 
 """
         + _STRUCTURED_AGENTS_BLOCK
@@ -882,6 +923,53 @@ def _parse_agent_template(agent_name: str, section: dict[str, object]) -> AgentT
         deduplicate_flags=deduplicate_flags,
         session_capture=session_capture,
     )
+
+
+def load_protocol_role_tables(start: Path | None = None) -> dict[str, dict[str, str]]:
+    """Read `[protocol.roles.<role>]` tables from the config.toml layers.
+
+    The Harness Protocol maps each role (``mode_c_implement``, ``mode_a_final``,
+    ...) onto an agent backend plus an optional model and reasoning effort.
+    Those knobs used to be reachable only through ``HARNESS_MODE_*`` environment
+    variables, which left the documented config.toml layers out of the chain
+    entirely. This returns the global-then-local merged section so
+    ``load_protocol_config`` can slot it in below the environment and above the
+    protocol defaults.
+
+    Values are returned as plain strings keyed by role name, e.g.
+    ``{"mode_c_implement": {"agent": "codex", "model": "gpt-5.6-terra"}}``.
+    Unparseable entries are dropped here rather than raising, so an unrelated
+    typo in a rarely used table cannot break every protocol run; role and field
+    names are validated by the protocol layer that consumes this.
+    """
+    start_dir = (start or Path.cwd()).resolve()
+    global_path = CONFIG_PATH.resolve() if CONFIG_PATH.exists() else None
+    local_path = find_local_config(start_dir)
+    if (
+        global_path is not None
+        and local_path is not None
+        and local_path.resolve() == global_path.resolve()
+    ):
+        local_path = None
+
+    merged = _deep_merge(
+        base=_load_toml_file(global_path) if global_path else {},
+        override=_load_toml_file(local_path) if local_path else {},
+    )
+    roles = _get_section(_get_section(merged, "protocol"), "roles")
+
+    tables: dict[str, dict[str, str]] = {}
+    for role_name, table in roles.items():
+        if not isinstance(table, dict):
+            continue
+        fields = {
+            key: value.strip()
+            for key, value in cast(dict[str, object], table).items()
+            if isinstance(value, str) and value.strip()
+        }
+        if fields:
+            tables[role_name] = fields
+    return tables
 
 
 def find_local_config(start: Path | None = None) -> Path | None:

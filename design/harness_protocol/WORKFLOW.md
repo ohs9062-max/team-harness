@@ -51,6 +51,35 @@ HARNESS_MODE_C_IMPLEMENT_MODEL=gpt-5.6-sol HARNESS_MODE_C_IMPLEMENT_EFFORT=mediu
 `_EFFORT`를 주지 마세요 — antigravity 템플릿엔 reasoning-effort 플래그가 없어서
 오류로 거부됩니다.
 
+환경변수 대신 **이번 실행만** 바꾸려면 `--set-role <역할>.<필드>=<값>`을 쓰세요.
+필드는 `agent`/`model`/`effort`이고, 반복해서 여러 번 줄 수 있습니다:
+
+```bash
+th protocol run --mode c "복잡한 작업" --repo . \
+  --set-role mode_c_implement.model=gpt-5.6-sol \
+  --set-role mode_c_implement.effort=medium
+```
+
+**항상 쓰는 설정은 `config.toml`에 적으세요 (TH-D19).** 프로젝트의
+`.team-harness/config.toml`이나 전역 `~/.team-harness/config.toml`에
+`[protocol.roles.<역할>]` 테이블로 적어두면 매번 환경변수를 export하지 않아도 됩니다:
+
+```toml
+[protocol.roles.mode_c_implement]
+agent = "codex"
+model = "gpt-5.6-terra"
+effort = "high"
+```
+
+우선순위는 높은 쪽부터 `--set-role` → `HARNESS_MODE_*` 환경변수 → 프로젝트
+`config.toml` → 전역 `config.toml` → 내장 기본값(TH-D17의 값싼 티어)입니다. 역할
+이름이나 필드 이름을 잘못 적으면 조용히 무시되지 않고 **오류로 거부**됩니다 — 오타
+때문에 비싼 기본값이 그대로 쓰이는 일이 TH-D17이 다룬 바로 그 실패였기 때문입니다.
+
+**stage/CHECK 타임아웃.** `--agent-timeout <초>`(기본 600)로 worker 한 stage의 최대
+실행 시간을, `--check-timeout <초>`(기본 300)로 결정론적 CHECK 명령의 최대 실행 시간을
+조정합니다. 세 명령(`run`/`resume`/`relay`) 모두 동일한 플래그를 받습니다.
+
 **결과를 base 브랜치에 반영하기 (TH-D16).** protocol 실행은 `--repo`로 지정한 저장소의
 작업 트리를 절대 수정하지 않습니다. 결과는 `task/<task-id>/...` 브랜치에 커밋되고, 실행이
 끝나면 CLI가 결과 브랜치와 반영 명령을 출력합니다:

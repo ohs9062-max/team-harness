@@ -187,3 +187,18 @@ team-harness를 구축하고 검토하는 과정에서 내린 결정들을 기�
 **맥락.** protocol 실행은 소수의 에이전트 패밀리에 여러 worker를 부채꼴로 펼칩니다. MODE A 하나만 해도 `INDEPENDENT_WORK`·`CROSS_REVIEW`·`RESPONSE`에서 worker마다 한 번씩, 그리고 `CODEX_MERGE`에서 한 번 더 spawn합니다. 이 변경 전까지 `protocol/`에는 rate-limit·재시도·오류 분류 코드가 **한 줄도 없었습니다**(`grep -rn 'rate_limit\|retry\|classify' src/team_harness/protocol/` 결과 0건). 즉 TH-D10의 서킷 브레이커는 코디네이터 경로(`tools/agent_tools.py`)에만 연결되어 있었고, protocol 경로는 `returncode == 0`인지만 보고 있었습니다. 그 결과 첫 worker가 하드 429를 맞아도 남은 stage들이 같은 패밀리로 계속 spawn되어 매번 프로세스 시작 비용과 타임아웃(기본 `agent_timeout_sec=600`)을 다시 지불했고, 최종 상태에 남는 설명은 `"Agent process exited with code 1"` 뿐이라 사람이 로그를 직접 뒤져야 원인을 알 수 있었습니다. TH-D10의 맥락에 기록된 "Claude 7일 제한에 걸린 조율자가 9개 서브프로세스를 반복 실행해 잃어버린" 문제가 protocol 경로에서 그대로 재현될 수 있는 상태였습니다.
 
 **결과.** worker는 TH-D2대로 1회성으로 유지되고, 실패한 stage는 TH-D3대로 일반 레코드로 남습니다. 새 서킷은 이미 실패가 확정된 중복 실행만 막습니다. `Config.rate_limit_circuit_breaker = false`로 끄면 TH-D18 이전과 정확히 동일하게 동작합니다(분류도 차단도 하지 않음). `AgentResult`에 `spawned: bool = True`와 `failure_classification: dict | None = None` 두 필드가 **추가**되었고 기존 필드는 그대로이므로, `AgentRunner` 프로토콜을 자체 구현한 소비자도 두 필드의 기본값을 그대로 받아 깨지지 않습니다. 감사 정합성을 위해 `AgentResult.resolve_effective_model()` 헬퍼가 추가되었습니다 — `spawned=False`인 stage는 실제로 아무 모델도 쓰지 않았으므로 role에 설정된 모델을 `effective_model`로 보고하지 않고 `None`을 보고합니다(TH-D6의 "감사 추적은 실제로 일어난 사실만 기록한다"). 이 헬퍼는 MODE A에 4번, MODE C에 1번 중복돼 있던 동일 로직을 한곳으로 합친 것이기도 합니다.
+
+## TH-D19. Protocol의 role 설정은 `config.toml` 계층을 따르고, 실행별 오버라이드는 하나의 반복 가능한 CLI 플래그로 받는다
+
+**결정.** Harness Protocol의 7개 role(`mode_a_worker_1`, `mode_a_worker_2`, `mode_a_final`, `mode_b_default`, `mode_c_design`, `mode_c_implement`, `mode_c_review`)에 대한 `agent`/`model`/`effort` 설정이 이제 다음 우선순위로 해석됩니다(각 필드는 독립적으로 해석됩니다).
+
+1. `load_protocol_config`의 명시적 런타임 인자(`mode_c_design=ProtocolAgentSpec(...)` 등), 그다음 `runtime_roles={역할: {필드: 값}}`
+2. `HARNESS_MODE_<ROLE>_{AGENT,MODEL,EFFORT}` 환경변수(`os.environ`이 `.env`보다 우선)
+3. 프로젝트 `.team-harness/config.toml`, 그다음 전역 `~/.team-harness/config.toml`의 `[protocol.roles.<역할>]` 테이블
+4. `ProtocolConfig`의 내장 기본값(TH-D17의 값싼 티어)
+
+3번이 새로 추가된 계층입니다. CLI에서는 `th protocol run|resume|relay --set-role <역할>.<필드>=<값>`(반복 가능)이 1번 계층으로, `--agent-timeout`/`--check-timeout`이 각각 `agent_timeout_sec`/`check_timeout_sec`로 전달됩니다. 잘못된 role 이름이나 필드 이름은 `config.toml`에서든 `--set-role`에서든 **조용히 무시되지 않고 오류로 거부**됩니다.
+
+**맥락.** CLAUDE.md는 이 프로젝트의 설정 우선순위를 "CLI 플래그 → 환경변수 → 로컬 `config.toml` → 전역 `config.toml` → 내장 기본값"으로 문서화하고 있지만, protocol의 role 설정만 이 사슬에서 빠져 있었습니다. `load_protocol_config`는 런타임 인자 → `HARNESS_MODE_*` 환경변수 → `.env` → 기본값만 보았고, `config.toml`의 두 계층은 아예 읽지 않았으며 CLI 플래그도 존재하지 않았습니다. 그 결과 TH-D17의 맥락에 기록된 상황 — 사용자가 이미 `~/.team-harness/config.toml`에 자신의 모델 티어 정책을 적어두었는데 그것이 protocol에는 전혀 관여하지 못하는 상황 — 이 설정 측면에서도 그대로 남아 있었습니다. 티어를 바꾸려면 매번 환경변수를 export해야 했고, `agent_timeout_sec=600`/`check_timeout_sec=300`은 함수 기본값으로만 존재해 CLI에서는 도달할 방법이 아예 없었습니다.
+
+**결과.** role 오버라이드를 전용 키워드 인자 21개(7 role × 3 필드)로 노출하는 대신 `runtime_roles`라는 중첩 dict 하나로 받기로 했습니다 — CLI가 `--set-role` 하나로 모든 조합을 전달할 수 있고, 새 role이나 필드가 추가될 때 시그니처가 늘어나지 않습니다. `--set-role`을 3번(config.toml) 계층이 아니라 1번(런타임) 계층에 넣은 것은 의도적입니다: 이번 실행을 위해 타이핑한 플래그가 셸에 남아 있는 오래된 `HARNESS_MODE_*` 변수에 밀리면 안 됩니다. `config.toml`은 `--repo`로 지정한 대상 저장소를 기준으로 탐색하므로, 저장소별 `.team-harness/config.toml`이 그 저장소에 대한 작업에 적용됩니다. 기존 `HARNESS_MODE_*` 환경변수 사용법은 그대로 동작하며, 새 계층은 그 아래에만 추가되었으므로 하위 호환입니다. `load_protocol_config(role_tables=...)`로 3번 계층을 직접 주입할 수 있어 테스트와 임베디드 호출자는 디스크를 읽지 않습니다.

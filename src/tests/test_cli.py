@@ -1,7 +1,9 @@
 # pyright: reportMissingParameterType=false, reportArgumentType=false
 
 import json
+from types import SimpleNamespace
 
+import click
 from click.testing import CliRunner
 import pytest
 
@@ -13,6 +15,7 @@ from team_harness.config import Config
 from team_harness.coordinator.system_prompt import COORDINATOR_PROMPT
 from team_harness.coordinator.system_prompt import DEFAULT_WORKER_FOOTER
 from team_harness.harness import _warn_provider_startup
+from team_harness.protocol.config import ProtocolConfig
 
 
 def test_help_uses_th_prog_name():
@@ -1421,3 +1424,95 @@ async def test_clear_preserves_system_prompt_and_resets_last_logged_index(
         {"role": "user", "content": "second"},
         {"role": "assistant", "content": "done"},
     ]
+
+
+def test_protocol_set_role_parses_into_role_tables():
+    from team_harness.cli import _parse_set_role
+
+    tables = _parse_set_role(
+        (
+            "mode_c_implement.model=gpt-5.6-sol",
+            "mode_c_implement.effort=medium",
+            "mode_a_final.agent=claude",
+        )
+    )
+
+    assert tables == {
+        "mode_c_implement": {"model": "gpt-5.6-sol", "effort": "medium"},
+        "mode_a_final": {"agent": "claude"},
+    }
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "mode_c_implement.model",
+        "mode_c_implement=gpt-5.6-sol",
+        "mode_c_implement.model=",
+        "mode_c_implemnt.model=x",
+        "mode_c_implement.modle=x",
+    ],
+)
+def test_protocol_set_role_rejects_malformed_or_unknown_overrides(value):
+    """A typo must fail loudly, not leave the expensive default in place."""
+    from team_harness.cli import _parse_set_role
+
+    with pytest.raises(click.BadParameter):
+        _parse_set_role((value,))
+
+
+def test_protocol_run_forwards_role_and_timeout_overrides(monkeypatch, tmp_path):
+    """`th protocol run` must actually pass its new flags to the mode function."""
+    captured: dict[str, object] = {}
+
+    async def fake_run_mode_c(**kwargs):
+        captured.update(kwargs)
+        state = SimpleNamespace(status="DONE", stage="FINAL")
+        return state
+
+    class FakeRunner:
+        def __init__(self, **kwargs):
+            pass
+
+    monkeypatch.setattr("team_harness.protocol.mode_c.run_mode_c", fake_run_mode_c)
+    monkeypatch.setattr(
+        "team_harness.protocol.mode_c.TeamHarnessAgentRunner", FakeRunner
+    )
+    monkeypatch.setattr("team_harness.cli._print_protocol_state", lambda *a, **k: None)
+    monkeypatch.setattr("team_harness.cli.RUNS_DIR", tmp_path / "runs")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "protocol",
+            "run",
+            "do the thing",
+            "--repo",
+            str(tmp_path),
+            "--no-visible",
+            "--agent-timeout",
+            "42",
+            "--check-timeout",
+            "7",
+            "--set-role",
+            "mode_c_implement.model=gpt-5.6-sol",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["agent_timeout_sec"] == 42
+    assert captured["check_timeout_sec"] == 7
+    proto_cfg = captured["protocol_config"]
+    assert isinstance(proto_cfg, ProtocolConfig)
+    assert proto_cfg.mode_c_implement.model == "gpt-5.6-sol"
+
+
+def test_protocol_run_rejects_a_zero_timeout():
+    runner = CliRunner()
+    result = runner.invoke(
+        main, ["protocol", "run", "task", "--agent-timeout", "0", "--no-visible"]
+    )
+
+    assert result.exit_code != 0
+    assert "--agent-timeout" in result.output

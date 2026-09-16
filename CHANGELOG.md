@@ -10,6 +10,9 @@
 ### 추가됨 (Added)
 
 - **Protocol worker 실패 분류 및 패밀리 서킷 차단 (TH-D18).** MODE A/B/C가 공유하는 `TeamHarnessAgentRunner`가 이제 실패한 worker의 원인을 분류해 `AgentResult.failure_classification`에 담고 `protocol_state.json`의 `handoffs`와 `protocol_events.jsonl`에 기록합니다. TH-D10의 엄격한 stdout JSONL 스캔이 명시적인 하드 429를 찾은 경우에만 해당 에이전트 패밀리의 실행 범위 서킷이 열리고, 서킷이 열린 동안 같은 패밀리의 stage는 프로세스를 띄우지 않고 즉시 거부됩니다(`spawned=False`). 그 결과 stage 실패 메시지가 `"exited with code 1"`에서 `"... [rate_limit: ...]"`처럼 원인과 리셋 시각을 담게 됩니다. 하네스는 role에 지정된 백엔드를 자동으로 다른 패밀리로 교체하지 않습니다(TH-D6).
+- **Protocol role 설정이 `config.toml`을 따르고, 실행별 CLI 오버라이드가 추가됨 (TH-D19).** 프로젝트 `.team-harness/config.toml`과 전역 `~/.team-harness/config.toml`의 `[protocol.roles.<역할>]` 테이블로 7개 role의 `agent`/`model`/`effort`를 설정할 수 있습니다 — 지금까지 protocol role은 `HARNESS_MODE_*` 환경변수로만 설정 가능해서, CLAUDE.md가 문서화한 프로젝트 전체 설정 우선순위에서 유일하게 빠져 있었습니다. 우선순위는 높은 쪽부터 `--set-role` → `HARNESS_MODE_*` → 프로젝트 `config.toml` → 전역 `config.toml` → 내장 기본값입니다.
+- `th protocol run|resume|relay`에 `--set-role <역할>.<필드>=<값>`(반복 가능), `--agent-timeout`, `--check-timeout` 플래그 추가. 타임아웃은 지금까지 함수 기본값(600초/300초)으로만 존재해 CLI에서 도달할 수 없었습니다. 잘못된 role/필드 이름은 조용히 무시되지 않고 오류로 거부됩니다.
+- `load_protocol_config`에 `runtime_roles`/`role_tables`/`config_start_dir` 인자와 `load_protocol_role_tables`, `validate_role_tables`, `PROTOCOL_ROLE_NAMES`, `PROTOCOL_ROLE_FIELDS` 추가. 기존 `HARNESS_MODE_*` 사용법과 기존 인자는 그대로 동작합니다.
 - `AgentResult`에 `spawned: bool = True`와 `failure_classification: dict | None = None` 필드 추가(둘 다 기본값이 있어 기존 `AgentRunner` 구현과 호환됩니다), 그리고 `AgentResult.resolve_effective_model()` 헬퍼 추가 — 실행되지 않은 stage는 설정된 모델을 `effective_model`로 보고하지 않고 `None`을 보고합니다(TH-D6 감사 정합성). MODE A에 4번, MODE C에 1번 중복돼 있던 모델 리졸브 로직을 이 헬퍼로 통합했습니다.
 
 ### 수정됨 (Fixed)
