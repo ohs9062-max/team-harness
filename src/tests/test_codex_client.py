@@ -15,10 +15,18 @@ from team_harness.coordinator.codex_client import CodexCoordinatorClient
 
 
 class FakeResponse:
+    """Mimics a real httpx streamed response: `.text` is unreadable until
+    `.aread()` runs, exactly like the live client's response is before its
+    body has been pulled off the wire. `raise_for_status()` uses ``self`` as
+    the error's `.response` (as real httpx does), so a caller that forgets to
+    `aread()` before reading `.text` hits `httpx.ResponseNotRead` here too.
+    """
+
     def __init__(self, lines, *, status_code=200, text="") -> None:
         self._lines = lines
         self.status_code = status_code
         self._text = text
+        self._read = False
         self.request = httpx.Request(
             "POST", "https://chatgpt.com/backend-api/codex/responses"
         )
@@ -27,13 +35,20 @@ class FakeResponse:
         for line in self._lines:
             yield line
 
+    async def aread(self) -> bytes:
+        self._read = True
+        return self._text.encode()
+
+    @property
+    def text(self) -> str:
+        if not self._read:
+            raise httpx.ResponseNotRead()
+        return self._text
+
     def raise_for_status(self):
         if self.status_code < 400:
             return None
-        response = httpx.Response(
-            self.status_code, request=self.request, text=self._text
-        )
-        raise httpx.HTTPStatusError("boom", request=self.request, response=response)
+        raise httpx.HTTPStatusError("boom", request=self.request, response=self)
 
 
 class FakeStreamContext:
@@ -264,6 +279,32 @@ async def test_codex_client_maps_auth_http_errors(status_code):
         await client.chat(
             [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}]
         )
+
+
+@pytest.mark.asyncio
+async def test_codex_client_surfaces_backend_detail_on_400():
+    # Live-verified shape: chatgpt.com/backend-api/codex/responses rejects an
+    # unsupported model with a plain `{"detail": "..."}` 400 body (not the
+    # `{"error": {"message": ...}}` shape 401/403 use above). Before this
+    # response's body was read with `.aread()` before mapping the error, this
+    # collapsed into an uninformative "status 400" — see codex_client.py.
+    response = FakeResponse(
+        [],
+        status_code=400,
+        text=(
+            '{"detail":"The \'codex-mini-latest\' model is not supported '
+            'when using Codex with a ChatGPT account."}'
+        ),
+    )
+    client, _ = _make_client(response=response)
+
+    with pytest.raises(CoordinatorAPIError, match="not supported") as caught:
+        await client.chat(
+            [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}]
+        )
+
+    assert caught.value.status_code == 400
+    assert caught.value.retryable is False
 
 
 @pytest.mark.parametrize(

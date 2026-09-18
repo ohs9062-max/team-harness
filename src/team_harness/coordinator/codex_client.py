@@ -74,7 +74,16 @@ class CodexCoordinatorClient:
             async with self._client.stream(
                 "POST", self.api_base, json=body
             ) as response:
-                response.raise_for_status()
+                try:
+                    response.raise_for_status()
+                except httpx.HTTPStatusError:
+                    # A streamed response's body is empty until read; without
+                    # this, `_http_error_message` below hits
+                    # `httpx.ResponseNotRead` and every failure — including
+                    # ones the backend explains, like an unsupported model —
+                    # collapses into a bare "status 400" with no cause.
+                    await response.aread()
+                    raise
                 async for event in _iter_sse_events(response):
                     event_type = event.get("type")
                     if event_type == "response.output_text.delta":

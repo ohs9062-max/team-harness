@@ -850,7 +850,7 @@ def test_provider_aware_codex_defaults(tmp_path, monkeypatch):
     config = load_config(provider="codex", cwd=str(tmp_path))
 
     assert config.provider == "codex"
-    assert config.model == "codex-mini-latest"
+    assert config.model == "gpt-5.6-sol"
     assert config.api_base == ""
 
 
@@ -864,7 +864,7 @@ def test_load_config_reads_provider_and_codex_auth_env(tmp_path, monkeypatch):
 
     assert config.provider == "codex"
     assert config.codex_auth_path == "relative/auth.json"
-    assert config.model == "codex-mini-latest"
+    assert config.model == "gpt-5.6-sol"
 
 
 def test_parse_provider_normalizes_openrouter_alias():

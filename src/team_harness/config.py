@@ -400,7 +400,7 @@ min_agent_lifetime_before_kill_s = 600.0
 
 # --- Experimental Codex subscription coordinator ---
 # provider = "codex"
-# model = "codex-mini-latest"
+# model = "gpt-5.6-sol"   # codex-mini-latest is rejected for ChatGPT-account tokens
 # codex_auth_path = "~/.codex/auth.json"
 
 # --- Harness Protocol role mapping (`th protocol`) ---
@@ -509,7 +509,7 @@ min_agent_lifetime_before_kill_s = 600.0
 
 # --- Experimental Codex subscription coordinator ---
 # provider = "codex"
-# model = "codex-mini-latest"
+# model = "gpt-5.6-sol"   # codex-mini-latest is rejected for ChatGPT-account tokens
 # codex_auth_path = ".team-harness/codex-auth.json"
 
 
@@ -1365,7 +1365,14 @@ def load_config(
         if raw_model
         else "gpt-5.6-sol"
         if provider_value == "openai_compat"
-        else "codex-mini-latest",
+        # ChatGPT-subscription Codex accounts (this provider's whole point —
+        # see auth.py) reject "codex-mini-latest": confirmed live against
+        # https://chatgpt.com/backend-api/codex/responses on 2026-09-18,
+        # error: "The 'codex-mini-latest' model is not supported when using
+        # Codex with a ChatGPT account." gpt-5.6-sol is not codex-specific
+        # (it is the same default as openai_compat above) but it is the one
+        # verified to work for a ChatGPT-account token.
+        else "gpt-5.6-sol",
         api_base=str(raw_api_base)
         if raw_api_base
         else "https://openrouter.ai/api/v1"
