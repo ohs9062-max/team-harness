@@ -2,6 +2,7 @@ import asyncio
 import json
 from pathlib import Path
 from typing import Any
+from typing import TYPE_CHECKING
 
 import click
 from pydantic import ValidationError
@@ -46,6 +47,9 @@ from team_harness.ui.console import ConsoleBase
 from team_harness.ui.console import make_console
 from team_harness.ui.prompt import make_prompt_session
 from team_harness.ui.prompt import read_user_input
+
+if TYPE_CHECKING:
+    from team_harness.protocol.mode_c import TeamHarnessAgentRunner
 
 
 @click.group()
@@ -675,6 +679,31 @@ def _print_compare_report(compare_path: str) -> None:
     click.echo("[protocol] ----- 비교 리포트 끝 -----")
 
 
+def _protocol_runner(
+    *, log_dir: Path, tmux_session: str | None, repo: str
+) -> "TeamHarnessAgentRunner":
+    """Build the protocol agent runner for a run on *repo*.
+
+    ``[context_graph]`` (TH-D22) is read from config.toml relative to the
+    target repo, like the protocol role tables, because the protocol runner
+    does not go through ``load_config``.
+    """
+
+    from team_harness.agents.context_graph import ContextGraph
+    from team_harness.config import load_context_graph_settings
+    from team_harness.protocol.mode_c import TeamHarnessAgentRunner
+
+    settings = load_context_graph_settings(Path(repo))
+    if settings.enabled:
+        click.echo(
+            "[protocol] context graph: on — worktree마다 코드 그래프를 한 번 빌드합니다 "
+            f"({settings.resolved_graphs_dir()})"
+        )
+    return TeamHarnessAgentRunner(
+        log_dir=log_dir, tmux_session=tmux_session, context_graph=ContextGraph(settings)
+    )
+
+
 @protocol.command("run")
 @click.argument("task")
 @click.option(
@@ -734,7 +763,6 @@ async def _protocol_run(
     from team_harness.protocol.config import load_protocol_config
     from team_harness.protocol.mode_a import run_mode_a
     from team_harness.protocol.mode_c import run_mode_c
-    from team_harness.protocol.mode_c import TeamHarnessAgentRunner
 
     task_id = _make_run_id()
     run_dir = RUNS_DIR / f"protocol-{task_id}"
@@ -748,7 +776,9 @@ async def _protocol_run(
     if session_name is not None:
         click.echo(f"[protocol] 실시간으로 보려면: tmux attach -t {session_name}")
 
-    runner = TeamHarnessAgentRunner(log_dir=run_dir, tmux_session=session_name)
+    runner = _protocol_runner(
+        log_dir=run_dir, tmux_session=session_name, repo=target_repo
+    )
     # --set-role goes in as the runtime layer so a flag typed for this run
     # beats a stale HARNESS_MODE_* variable left in the shell; config.toml is
     # read relative to the target repo so a repo-local .team-harness/config.toml
@@ -1045,7 +1075,6 @@ async def _protocol_resume(
     from team_harness.protocol.config import load_protocol_config
     from team_harness.protocol.mode_a import resume_mode_a
     from team_harness.protocol.mode_c import resume_mode_c
-    from team_harness.protocol.mode_c import TeamHarnessAgentRunner
     from team_harness.protocol.state import ProtocolStateManager
 
     resolved_run_dir = Path(run_dir).resolve()
@@ -1057,7 +1086,9 @@ async def _protocol_resume(
     session_name = _resolve_visibility(
         visible=visible, tmux_session=tmux_session, task_id=task_id
     )
-    runner = TeamHarnessAgentRunner(log_dir=resolved_run_dir, tmux_session=session_name)
+    runner = _protocol_runner(
+        log_dir=resolved_run_dir, tmux_session=session_name, repo=resolved_repo
+    )
     proto_cfg = load_protocol_config(
         runtime_roles=_parse_set_role(set_role), config_start_dir=resolved_repo
     )
@@ -1158,14 +1189,15 @@ async def _protocol_relay(
 ) -> None:
     from team_harness.protocol.config import load_protocol_config
     from team_harness.protocol.mode_b import run_mode_b
-    from team_harness.protocol.mode_c import TeamHarnessAgentRunner
 
     resolved_run_dir = Path(run_dir).resolve()
     resolved_repo = str(Path(repo).resolve())
     session_name = _resolve_visibility(
         visible=visible, tmux_session=tmux_session, task_id=task_id
     )
-    runner = TeamHarnessAgentRunner(log_dir=resolved_run_dir, tmux_session=session_name)
+    runner = _protocol_runner(
+        log_dir=resolved_run_dir, tmux_session=session_name, repo=resolved_repo
+    )
     state = await run_mode_b(
         task_id=task_id,
         next_agent=next_agent,

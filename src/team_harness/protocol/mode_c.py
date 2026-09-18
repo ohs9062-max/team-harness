@@ -21,6 +21,7 @@ import uuid
 
 from team_harness.agents import spawner
 from team_harness.agents.api_error_classifier import classify_agent_failure
+from team_harness.agents.context_graph import ContextGraph
 from team_harness.agents.manager import AgentManager
 from team_harness.agents.manager import AgentState
 from team_harness.agents.process_identity import signal_group
@@ -88,6 +89,7 @@ class TeamHarnessAgentRunner:
         tmux_session: str | None = None,
         verbose: bool = True,
         breaker: RateLimitCircuitBreaker | None = None,
+        context_graph: ContextGraph | None = None,
     ) -> None:
         self.config = config or Config()
         self.manager = manager or AgentManager()
@@ -102,6 +104,9 @@ class TeamHarnessAgentRunner:
             enabled=self.config.rate_limit_circuit_breaker,
             default_cooldown_s=self.config.rate_limit_default_cooldown_s,
         )
+        # Optional code graph (TH-D22): one build per worktree per run, shared
+        # by every stage that runs there. Off unless the config enables it.
+        self.context_graph = context_graph or ContextGraph(self.config.context_graph)
         # Print one line per worker completion (agent + effective model/effort)
         # so a person watching `th protocol` output always knows who actually
         # did each piece of work, not just the final stage/status summary.
@@ -148,6 +153,9 @@ class TeamHarnessAgentRunner:
         stdout_path = self.log_dir / f"{agent_id}_stdout.log"
         stderr_path = self.log_dir / f"{agent_id}_stderr.log"
 
+        prompt, graph_env = await self.context_graph.prepare_spawn(
+            agent_type=agent_type, prompt=prompt, cwd=cwd
+        )
         spawn_result = await spawner.spawn(
             agent_id=agent_id,
             agent_type=agent_type,
@@ -155,6 +163,7 @@ class TeamHarnessAgentRunner:
             cwd=Path(cwd),
             config=self.config,
             log_dir=self.log_dir,
+            extra_env=graph_env or None,
             model=model,
             effort=effort,
             stdout_path=stdout_path,

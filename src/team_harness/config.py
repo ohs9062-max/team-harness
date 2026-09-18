@@ -9,6 +9,7 @@ from typing import cast
 from typing import Literal
 import warnings
 
+from team_harness.agents.context_graph import ContextGraphSettings
 from team_harness.agents.template import AgentTemplate
 from team_harness.agents.template import DEFAULT_AGENT_TEMPLATES
 from team_harness.agents.template import SessionCapture
@@ -66,6 +67,8 @@ class Config:
     min_agent_lifetime_before_kill_s: float = 600.0
     allowed_agents: list[str] | None = None
     agent_templates: dict[str, AgentTemplate] = field(default_factory=dict)
+    # Optional prebuilt code graph for workers (TH-D22). Off by default.
+    context_graph: ContextGraphSettings = field(default_factory=ContextGraphSettings)
     cwd: str = "."
     run_dir: Path | None = None
     global_config_path: Path | None = None
@@ -942,20 +945,7 @@ def load_protocol_role_tables(start: Path | None = None) -> dict[str, dict[str, 
     typo in a rarely used table cannot break every protocol run; role and field
     names are validated by the protocol layer that consumes this.
     """
-    start_dir = (start or Path.cwd()).resolve()
-    global_path = CONFIG_PATH.resolve() if CONFIG_PATH.exists() else None
-    local_path = find_local_config(start_dir)
-    if (
-        global_path is not None
-        and local_path is not None
-        and local_path.resolve() == global_path.resolve()
-    ):
-        local_path = None
-
-    merged = _deep_merge(
-        base=_load_toml_file(global_path) if global_path else {},
-        override=_load_toml_file(local_path) if local_path else {},
-    )
+    merged = _merged_config_layers(start)
     roles = _get_section(_get_section(merged, "protocol"), "roles")
 
     tables: dict[str, dict[str, str]] = {}
@@ -970,6 +960,95 @@ def load_protocol_role_tables(start: Path | None = None) -> dict[str, dict[str, 
         if fields:
             tables[role_name] = fields
     return tables
+
+
+def _merged_config_layers(start: Path | None = None) -> dict[str, object]:
+    """Global-then-local config.toml data, merged, for readers outside load_config."""
+
+    start_dir = (start or Path.cwd()).resolve()
+    global_path = CONFIG_PATH.resolve() if CONFIG_PATH.exists() else None
+    local_path = find_local_config(start_dir)
+    if (
+        global_path is not None
+        and local_path is not None
+        and local_path.resolve() == global_path.resolve()
+    ):
+        local_path = None
+    return _deep_merge(
+        base=_load_toml_file(global_path) if global_path else {},
+        override=_load_toml_file(local_path) if local_path else {},
+    )
+
+
+_TRUE_STRINGS = frozenset({"1", "true", "yes", "on"})
+_FALSE_STRINGS = frozenset({"0", "false", "no", "off"})
+
+
+def _parse_context_graph(config_data: dict[str, object]) -> ContextGraphSettings:
+    """Parse the ``[context_graph]`` table plus ``TEAM_HARNESS_CONTEXT_GRAPH``.
+
+    The env var only toggles ``enabled`` (so a single run can try the feature
+    without editing config.toml); the other keys come from the table.
+    """
+
+    section = _get_section(config_data, "context_graph")
+    defaults = ContextGraphSettings()
+
+    enabled_raw = section.get("enabled", defaults.enabled)
+    if not isinstance(enabled_raw, bool):
+        raise SystemExit("context_graph.enabled must be true or false")
+    enabled = enabled_raw
+    env_enabled = os.environ.get("TEAM_HARNESS_CONTEXT_GRAPH")
+    if env_enabled is not None and env_enabled.strip():
+        value = env_enabled.strip().lower()
+        if value in _TRUE_STRINGS:
+            enabled = True
+        elif value in _FALSE_STRINGS:
+            enabled = False
+        else:
+            raise SystemExit(
+                "TEAM_HARNESS_CONTEXT_GRAPH must be one of 1/0, true/false, "
+                f"yes/no, on/off (got {env_enabled!r})"
+            )
+
+    command = defaults.command
+    if "command" in section:
+        command_raw = section["command"]
+        if (
+            not isinstance(command_raw, list)
+            or not command_raw
+            or not all(isinstance(item, str) and item for item in command_raw)
+        ):
+            raise SystemExit(
+                "context_graph.command must be a non-empty array of strings."
+            )
+        command = tuple(cast(list[str], command_raw))
+
+    timeout_raw = section.get("build_timeout_s", defaults.build_timeout_s)
+    if isinstance(timeout_raw, bool) or not isinstance(timeout_raw, int | float):
+        raise SystemExit("context_graph.build_timeout_s must be a number")
+
+    graphs_dir = section.get("graphs_dir", defaults.graphs_dir)
+    if not isinstance(graphs_dir, str):
+        raise SystemExit("context_graph.graphs_dir must be a string")
+
+    return ContextGraphSettings(
+        enabled=enabled,
+        command=command,
+        build_timeout_s=float(timeout_raw),
+        graphs_dir=graphs_dir,
+    )
+
+
+def load_context_graph_settings(start: Path | None = None) -> ContextGraphSettings:
+    """``[context_graph]`` from the config.toml layers relative to *start*.
+
+    For callers that do not go through ``load_config`` — the protocol runner
+    builds its own ``Config`` and reads config.toml relative to the target
+    repo, the same way ``load_protocol_role_tables`` does.
+    """
+
+    return _parse_context_graph(_merged_config_layers(start))
 
 
 def find_local_config(start: Path | None = None) -> Path | None:
@@ -1380,6 +1459,7 @@ def load_config(
             cast(str | list[str] | None, coordinator.get("allowed_agents"))
         ),
         agent_templates=agent_templates,
+        context_graph=_parse_context_graph(config_data),
         cwd=str(start_dir),
         global_config_path=global_path,
         local_config_path=local_path,

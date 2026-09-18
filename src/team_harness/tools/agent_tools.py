@@ -14,6 +14,7 @@ import uuid
 
 from team_harness.agents import spawner
 from team_harness.agents.api_error_classifier import classify_agent_failure
+from team_harness.agents.context_graph import ContextGraph
 from team_harness.agents.manager import AgentState
 from team_harness.agents.rate_limits import detect_rate_limit_from_path
 from team_harness.agents.rate_limits import RateLimitCircuitBreaker
@@ -45,6 +46,7 @@ _config: "Config | None" = None
 _ui: "ConsoleBase | None" = None
 _rate_limit_breaker: RateLimitCircuitBreaker | None = None
 _session_output_dir: str = ""
+_context_graph: ContextGraph = ContextGraph()
 
 _output_cursors: dict[str, int] = {}
 _output_locks: dict[str, asyncio.Lock] = {}
@@ -1003,6 +1005,7 @@ def setup(
     global _ui
     global _rate_limit_breaker
     global _session_output_dir
+    global _context_graph
     _manager = manager
     _run_log = run_log
     _config = config
@@ -1012,6 +1015,7 @@ def setup(
         default_cooldown_s=config.rate_limit_default_cooldown_s,
     )
     _session_output_dir = session_output_dir
+    _context_graph = ContextGraph(config.context_graph)
     _output_cursors.clear()
     _output_locks.clear()
     _wait_stdout_cursors.clear()
@@ -1309,6 +1313,12 @@ async def spawn_agent(**kwargs: object) -> str:
         caller_context=None,
         kwargs=kwargs,
     )
+    # Optional code graph (TH-D22): built once per cwd per run, hint first so
+    # the fixed text leads the prompt.
+    full_prompt, graph_env = await _context_graph.prepare_spawn(
+        agent_type=agent_type, prompt=full_prompt, cwd=cwd, mode=spawn_mode
+    )
+    extra_env = {**graph_env, **extra_env}
     stdout_log, stderr_log = _worker_log_paths(
         run_dir=run_dir,
         agent_id=agent_id,
@@ -1709,6 +1719,7 @@ def build_agent_tool_bindings(
         enabled=config.rate_limit_circuit_breaker,
         default_cooldown_s=config.rate_limit_default_cooldown_s,
     )
+    context_graph = ContextGraph(config.context_graph)
 
     async def _spawn_agent(**kwargs: object) -> str:
         """Validate, record, and launch one worker for this run-local binding."""
@@ -1798,6 +1809,12 @@ def build_agent_tool_bindings(
             parent_harness_run_id=run_log.run_id,
             assignment_path=assignment_path,
         )
+        # Optional code graph (TH-D22): built once per cwd per run, hint first
+        # so the fixed text leads the prompt.
+        full_prompt, graph_env = await context_graph.prepare_spawn(
+            agent_type=agent_type, prompt=full_prompt, cwd=cwd, mode=spawn_mode
+        )
+        extra_env = {**graph_env, **extra_env}
         stdout_log, stderr_log = _worker_log_paths(
             run_dir=run_dir,
             agent_id=agent_id,

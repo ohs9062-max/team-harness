@@ -415,6 +415,24 @@ rate_limit_default_cooldown_s = 900
 - `TEAM_HARNESS_API_BASE`
 - `TEAM_HARNESS_CODEX_AUTH_PATH`
 - `OPENROUTER_API_KEY` 또는 `OPENAI_API_KEY`
+- `TEAM_HARNESS_CONTEXT_GRAPH` (`1`/`0`) — 아래 작업자용 코드 그래프를 이번 실행에만 켜거나 끕니다
+
+### 작업자용 코드 그래프 (선택)
+
+작업자는 매번 빈 컨텍스트로 시작해 저장소를 grep과 파일 전체 읽기로 다시 탐색합니다. 이 기능을 켜면 하네스가 작업자를 띄우기 전에 [graft](https://github.com/trailhq/Graft)로 그 작업 디렉터리의 코드 그래프(심볼·import·호출 관계, LLM 호출 없음)를 한 번 빌드하고, 작업자 프롬프트 앞에 그래프를 조회하는 명령을 알려 줍니다. 작업자는 `graft ... callers <함수>`처럼 필요한 `파일:줄`만 받아 탐색 토큰을 줄일 수 있습니다.
+
+```toml
+[context_graph]
+enabled = true
+# command = ["npx", "-y", "@nanonets/graft"]   # 기본값. graft를 전역 설치했다면 ["graft"]
+# build_timeout_s = 300
+# graphs_dir = ""                               # 기본값 ~/.team-harness/graft
+```
+
+- Node.js(`npx`)가 필요합니다. 없거나 빌드가 실패하면 경고만 남기고 기능 없이 평소처럼 실행합니다.
+- 그래프는 작업 트리 밖에 저장되므로 저장소에 파일이 생기지 않습니다. `~/.team-harness/graft/`는 언제 지워도 됩니다.
+- 빌드는 실행당 작업 디렉터리당 한 번입니다(`th protocol`에서는 worktree당 한 번).
+- 효과는 저장소마다 다릅니다. 같은 작업을 켜고/끄고 실행해 `th protocol status`의 토큰 집계로 비교해 보십시오. 설계 근거는 `design/decisions.md`의 TH-D22에 있습니다.
 
 ### 커스텀 에이전트 유형 추가
 
