@@ -1,0 +1,35 @@
+{
+  "skill_name": "orca-harness-protocol",
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "th cord",
+      "expected_output": "현재 작업 트리, th protocol 사용 가능 여부와 최근 실행을 한 번 확인하고 이 에이전트 세션을 team-harness 진입 코디네이터로 선언한다. 이후 사용할 A/B/C/상태/토큰/종료 명령을 짧게 표시한다.",
+      "files": []
+    },
+    {
+      "id": 1,
+      "prompt": "이 Orca 작업 트리에서 A로 해: 로그인 갱신 경쟁 조건을 고치고 관련 테스트를 실행해줘",
+      "expected_output": "현재 작업 트리를 대상으로 Git preflight 후 MODE A를 --no-visible로 시작하고 TASK-ID/run-dir를 보존한다. 두 worker 완료 후 비교 결과를 제시하며 사용자 선택 전에는 통합하지 않는다.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "graft 켜고 C로 해. 설정 파서의 중복 검증 로직을 정리해줘. 끝나면 토큰도 알려줘",
+      "expected_output": "이번 실행에 context graph를 활성화하여 MODE C를 시작하고, 완료 상태와 검사 결과를 확인한 뒤 protocol status의 토큰 집계 및 집계 완전성을 보고한다.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "아까 막힌 작업 B로 Codex에게 이어서 해",
+      "expected_output": "대화의 TASK-ID/run-dir를 재사용하거나 현재 저장소의 protocol 후보를 조회한다. 대상을 고유하게 정할 수 있을 때만 MODE B relay를 Codex로 실행하며 기존 worktree와 상태를 유지한다.",
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "결제 화면의 A/B 테스트 문구를 수정해줘",
+      "expected_output": "A/B를 Harness Protocol MODE A로 오인하지 않고 일반 코드 작업으로 처리한다.",
+      "files": []
+    }
+  ]
+}

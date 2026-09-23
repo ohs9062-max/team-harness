@@ -261,3 +261,28 @@ team-harness를 구축하고 검토하는 과정에서 내린 결정들을 기�
 **맥락.** 작업자는 1회성 서브프로세스(TH-D2)라 매번 빈 컨텍스트로 시작해 grep/find와 파일 전체 읽기로 저장소를 다시 탐색합니다. MODE A는 워커를 최대 7번, MODE C는 stage를 최대 7번 띄우므로 이 탐색 비용이 실행마다 반복됩니다. graft의 공개 벤치마크(자체 측정)는 SWE-bench Verified 50건에서 토큰 23%, 툴 호출 25% 감소를 보고합니다. 효과는 저장소와 작업에 따라 다르므로 이 결정은 기능을 **켤 수 있게** 할 뿐 기본값으로 켜지 않습니다. 실제 절감은 같은 작업을 켜고/끄고 실행해 TH-D21의 사용량 집계(`th protocol status`)로 비교해야 합니다. 조율자(LLM)에게 "graft를 빌드하라"고 지시하는 방식은 택하지 않았습니다. 판단이 필요 없는 결정적 준비 작업을 LLM에 맡기면 매 턴 지시문 토큰을 쓰고, 빠뜨릴 수 있으며, 워커마다 빌드를 반복하게 됩니다(TH-D1: 조율자는 계획과 위임만 합니다).
 
 **결과.** `Config`에 기본값이 있는 `context_graph: ContextGraphSettings` 필드가 **추가**되었고, `TeamHarnessAgentRunner.__init__`에 기본값이 있는 `context_graph` 인자가 **추가**되었습니다. 기능이 꺼져 있으면 모든 경로의 동작은 이전과 바이트 단위로 같습니다. 켜면 워커 프롬프트가 힌트만큼(경로 길이에 따라 약 250~300토큰) 길어지고, 실행 로그의 `full_prompt`에도 그대로 기록됩니다(워커가 실제로 받은 것을 기록한다는 원칙). protocol CLI는 `load_config`를 거치지 않으므로 `load_context_graph_settings()`가 대상 저장소 기준으로 config.toml 계층을 따로 읽습니다(`load_protocol_role_tables`와 같은 방식). 그래프 디렉터리는 자동으로 지우지 않습니다. `~/.team-harness/graft/`는 언제 지워도 안전하며 다음 실행이 다시 빌드합니다.
+
+## TH-D23. Orca의 첫 대화형 진입점은 Protocol Runner를 감싸고, 실행 백엔드 교체는 분리한다
+
+**결정.** `skills/orca-harness-protocol/SKILL.md`는 Orca IDE의 Codex·Claude·Agy
+프롬프트에서 `th cord`를 받으면 현재 에이전트 세션을 Entry AI로 전환합니다. 이어지는
+`A`, `B`, `C`, `상태`, `토큰`, `종료`를 인식해 기존 `th protocol` 명령으로 변환하는
+대화형 진입점입니다. `th cord`는 이미 실행 중인 에이전트를 대화 맥락 안에서 전환하는
+명령이므로 raw shell의 CLI subcommand로 추가하지 않습니다. 이 단계에서는 Orca가 worker
+process를 직접 소유하지 않습니다. 코디네이터는 현재 Orca 작업 트리를 `--repo`로 넘기고
+tmux 관찰 창이 Orca UI와 중복되지 않도록 `--no-visible`을 사용합니다. MODE 상태, Git
+기준점, worker 결과, 사용량은 기존 `protocol_state.json`과 `protocol_events.jsonl`이 계속
+정본입니다.
+
+**맥락.** 자연어 명령 해석, MODE 상태 머신, worker 배치는 서로 다른 변경 축입니다. 세
+가지를 한 번에 Orca 전용 구현으로 복제하면 MODE A 선택 Gate, MODE B 재개, MODE C FIX
+loop와 TH-D21 사용량 집계가 기존 CLI 경로와 쉽게 달라집니다. 먼저 대화형 진입점을 기존
+Runner에 연결하면 사용자가 원하는 프롬프트 UX를 바로 검증하면서 프로토콜 의미를 하나로
+유지할 수 있습니다. 다음 단계의 Orca 실행 adapter는 이 저장 형식을 유지한 채
+`TeamHarnessAgentRunner`에 대응하는 worker 실행 경계만 교체할 수 있습니다.
+
+**결과.** 1단계만 설치한 환경에서도 자연어 MODE 실행, WAITING_USER 선택, 중단된 MODE C
+재개, MODE B 인계, graft 활성화와 토큰 조회를 사용할 수 있습니다. worker는 기존처럼
+일회성 배치 subprocess이므로 Orca의 개별 agent 창이나 Dispatch 목록에는 나타나지
+않습니다. 이 제한을 스킬과 사용자 안내에 명시해, 대화형 창이 생겼다는 이유로 실행
+소유권까지 Orca로 이동했다고 오해하지 않게 합니다.
