@@ -8,6 +8,7 @@ from typing import Any
 from team_harness.agents.process_identity import capture_starttime
 from team_harness.tracking.models import AgentRecord
 from team_harness.tracking.models import CoordinatorRetryRecord
+from team_harness.tracking.models import DecisionRecord
 from team_harness.tracking.models import RateLimitedFamilyRecord
 from team_harness.tracking.models import RunFailureRecord
 from team_harness.tracking.models import RunRecord
@@ -207,6 +208,10 @@ class RunLogWriter:
         """Append one observed worker-family circuit interval to run.json."""
 
         self._log.rate_limited_families.append(record)
+        self._flush()
+
+    def record_decision(self, record: DecisionRecord) -> None:
+        self._log.decisions.append(record)
         self._flush()
 
     def update_api_base(self, api_base: str) -> None:

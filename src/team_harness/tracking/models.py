@@ -175,6 +175,29 @@ class RateLimitedFamilyRecord(BaseModel):
     reason: str
 
 
+class DecisionRecord(BaseModel):
+    """One bounded decision and its measurable coordinator-token effect."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=False)
+
+    kind: str
+    choice: str
+    confidence: float | None = None
+    applied: bool
+    fallback_reason: str | None = None
+    backend: str
+    model: str
+    input_chars: int = 0
+    probabilities: dict[str, float] = Field(default_factory=dict)
+    usage: dict[str, Any] = Field(default_factory=dict)
+    latency_ms: int | None = None
+    selected_tools: list[str] = Field(default_factory=list)
+    tool_schema_chars_before: int = 0
+    tool_schema_chars_after: int = 0
+    estimated_coordinator_tokens_saved: int = 0
+    recorded_at: datetime
+
+
 class RunRecord(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=False)
 
@@ -201,5 +224,6 @@ class RunRecord(BaseModel):
     # Additive audit history. Expired entries remain queryable; resets_at makes
     # the interval boundary explicit without changing any existing run fields.
     rate_limited_families: list[RateLimitedFamilyRecord] = Field(default_factory=list)
+    decisions: list[DecisionRecord] = Field(default_factory=list)
     turns: list[TurnRecord] = Field(default_factory=list)
     agents: list[AgentRecord] = Field(default_factory=list)

@@ -22,6 +22,7 @@ from team_harness.coordinator.loop import run_one_turn
 from team_harness.coordinator.system_prompt import build_system_prompt
 from team_harness.coordinator.system_prompt import COORDINATOR_PROMPT
 from team_harness.coordinator.system_prompt import DEFAULT_WORKER_FOOTER
+from team_harness.decisions.router import DecisionRouter
 from team_harness.harness import _build_registry
 from team_harness.harness import _finalize_run
 from team_harness.harness import _graceful_shutdown
@@ -424,6 +425,7 @@ async def _repl(**kwargs: Any) -> None:
             run_dir=run_dir,
             session_output_dir=str(session_output_dir),
         )
+        decision_router = DecisionRouter(config.decision_router)
         system_prompt = build_system_prompt(
             config=config,
             allowed_types=allowed_types,
@@ -497,6 +499,7 @@ async def _repl(**kwargs: Any) -> None:
                                 ctx=ctx,
                                 turn_index=turn_index,
                                 last_logged_index=last_logged_index,
+                                decision_router=decision_router,
                             )
                             turn_index += 1
         finally:

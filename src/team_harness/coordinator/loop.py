@@ -9,8 +9,12 @@ from urllib.parse import urlparse
 from openai import APIStatusError
 
 from team_harness.coordinator.client import CoordinatorAPIError
+from team_harness.decisions.tool_routing import build_tool_selection_request
+from team_harness.decisions.tool_routing import schema_chars
+from team_harness.decisions.tool_routing import schemas_for_profile
 from team_harness.tracking.context import get_auto_compact_threshold
 from team_harness.tracking.models import CoordinatorRetryRecord
+from team_harness.tracking.models import DecisionRecord
 from team_harness.tracking.models import RunFailureRecord
 from team_harness.tracking.models import ToolCallRecord as RunLogToolCallRecord
 
@@ -18,6 +22,7 @@ if TYPE_CHECKING:
     from team_harness.config import Config
     from team_harness.coordinator.client import ChatResponse
     from team_harness.coordinator.protocols import CoordinatorLike
+    from team_harness.decisions.router import DecisionRouter
     from team_harness.tools.registry import ToolRegistry
     from team_harness.tracking.context import ContextTracker
     from team_harness.tracking.run_log import RunLogWriter
@@ -75,6 +80,7 @@ async def run(
     tool_registry: "ToolRegistry",
     client: "CoordinatorLike",
     ctx: "ContextTracker",
+    decision_router: "DecisionRouter | None" = None,
 ) -> None:
     turn_index = 0
     last_logged_index = 0
@@ -89,6 +95,7 @@ async def run(
             ctx=ctx,
             turn_index=turn_index,
             last_logged_index=last_logged_index,
+            decision_router=decision_router,
         )
         turn_index += 1
         if not should_continue:
@@ -105,6 +112,7 @@ async def run_one_turn(
     ctx: "ContextTracker",
     turn_index: int,
     last_logged_index: int,
+    decision_router: "DecisionRouter | None" = None,
 ) -> tuple[bool, int]:
     ui.begin_turn(turn_index)
     messages_before = last_logged_index
@@ -122,6 +130,44 @@ async def run_one_turn(
             messages_before = 0
 
     tools = tool_registry.get_all_schemas()
+    if (
+        decision_router is not None
+        and decision_router.settings.enabled
+        and decision_router.settings.tool_routing
+    ):
+        before_chars = schema_chars(tools)
+        decision = await decision_router.decide(
+            build_tool_selection_request(
+                messages=messages,
+                max_state_chars=decision_router.settings.max_state_chars,
+            )
+        )
+        tools = schemas_for_profile(schemas=tools, profile=decision.choice)
+        after_chars = schema_chars(tools)
+        run_log.record_decision(
+            DecisionRecord(
+                kind=decision.kind,
+                choice=decision.choice,
+                confidence=decision.confidence,
+                applied=decision.applied,
+                fallback_reason=decision.fallback_reason,
+                backend=decision.backend,
+                model=decision.model,
+                input_chars=decision.input_chars,
+                probabilities=decision.probabilities,
+                usage=decision.usage,
+                latency_ms=decision.latency_ms,
+                selected_tools=[
+                    str(schema.get("function", {}).get("name", "")) for schema in tools
+                ],
+                tool_schema_chars_before=before_chars,
+                tool_schema_chars_after=after_chars,
+                estimated_coordinator_tokens_saved=max(
+                    0, (before_chars - after_chars + 3) // 4
+                ),
+                recorded_at=datetime.now(timezone.utc),
+            )
+        )
     ui.begin_streaming()
     try:
         response = await _chat_with_retry(

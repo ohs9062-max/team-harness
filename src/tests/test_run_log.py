@@ -6,6 +6,7 @@ import json
 
 from team_harness.tracking.models import AgentRecord
 from team_harness.tracking.models import CoordinatorRetryRecord
+from team_harness.tracking.models import DecisionRecord
 from team_harness.tracking.models import RunFailureRecord
 from team_harness.tracking.models import ToolCallRecord
 from team_harness.tracking.run_log import RunLogWriter
@@ -27,6 +28,21 @@ def test_run_log_delta_replay_and_agent_update(tmp_path):
         ],
         response_text=None,
         usage={},
+    )
+    writer.record_decision(
+        DecisionRecord(
+            kind="tool_selection",
+            choice="DELEGATE",
+            confidence=0.97,
+            applied=True,
+            backend="jev",
+            model="jev-latest",
+            selected_tools=["spawn_agent"],
+            tool_schema_chars_before=800,
+            tool_schema_chars_after=400,
+            estimated_coordinator_tokens_saved=100,
+            recorded_at=datetime.now(timezone.utc),
+        )
     )
     writer.record_agent_spawn(
         AgentRecord(
@@ -74,6 +90,7 @@ def test_run_log_delta_replay_and_agent_update(tmp_path):
     assert data["agents"][0]["coordinator_turn_index"] == 1
     assert data["error"] == "boom"
     assert data["provider"] == "openai_compat"
+    assert data["decisions"][0]["estimated_coordinator_tokens_saved"] == 100
 
 
 def test_snapshot_agents_returns_copy(tmp_path):

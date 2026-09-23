@@ -150,5 +150,24 @@ th protocol run --mode c "복잡한 작업" --repo . \
 
 고정 설정은 `.team-harness/config.toml`의 `[protocol.roles.<역할>]`에 저장합니다.
 
+## 9. Jev로 coordinator 토큰 줄이기
+
+```bash
+export TYPESAFE_API_KEY="..."
+TEAM_HARNESS_JEV=1 th run "작업"       # 이번 실행만
+```
+
+항상 사용하려면 `.team-harness/config.toml`에 추가합니다.
+
+```toml
+[decision_router]
+enabled = true
+confidence_threshold = 0.85
+```
+
+Jev는 다음 턴의 도구 묶음만 고릅니다. 실패하거나 confidence가 낮으면 전체 도구를 쓰며,
+MODE 선택·worker 교체·리뷰 판정은 기존 계약을 유지합니다. 측정값은 해당 실행의
+`run.json` → `decisions`에서 확인합니다.
+
 문제가 생기면 먼저 `th protocol status --run-dir <DIR>`의 blocker와 실패 원인을
 확인하세요.

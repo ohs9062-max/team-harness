@@ -416,6 +416,8 @@ rate_limit_default_cooldown_s = 900
 - `TEAM_HARNESS_CODEX_AUTH_PATH`
 - `OPENROUTER_API_KEY` 또는 `OPENAI_API_KEY`
 - `TEAM_HARNESS_CONTEXT_GRAPH` (`1`/`0`) — 아래 작업자용 코드 그래프를 이번 실행에만 켜거나 끕니다
+- `TEAM_HARNESS_JEV` (`1`/`0`) — 아래 Jev decision router를 이번 실행에만 켜거나 끕니다
+- `TYPESAFE_API_KEY` 또는 `JEV_API_KEY` — Jev API 인증
 
 ### 작업자용 코드 그래프 (선택)
 
@@ -433,6 +435,38 @@ enabled = true
 - 그래프는 작업 트리 밖에 저장되므로 저장소에 파일이 생기지 않습니다. `~/.team-harness/graft/`는 언제 지워도 됩니다.
 - 빌드는 실행당 작업 디렉터리당 한 번입니다(`th protocol`에서는 worktree당 한 번).
 - 효과는 저장소마다 다릅니다. 같은 작업을 켜고/끄고 실행해 `th protocol status`의 토큰 집계로 비교해 보십시오. 설계 근거는 `design/decisions.md`의 TH-D22에 있습니다.
+
+### Jev decision router (선택)
+
+Jev는 코드를 생성하지 않고, coordinator의 다음 턴에 필요한 도구 묶음만 선택합니다. 전체
+도구 JSON schema를 매 턴 비싼 생성 모델에 다시 보내는 비용을 줄이는 기능이며 기본값은
+꺼짐입니다.
+
+```bash
+export TYPESAFE_API_KEY="..."
+TEAM_HARNESS_JEV=1 th run "작업"
+```
+
+프로젝트에서 항상 사용하려면:
+
+```toml
+[decision_router]
+enabled = true
+backend = "jev"
+api_url = "https://api.typesafe.ai/v1/systemone"
+model = "jev-latest"
+confidence_threshold = 0.85
+timeout_s = 3.0
+max_state_chars = 4000
+tool_routing = true
+```
+
+API key가 없거나, 호출 실패·타임아웃·잘못된 응답·낮은 confidence가 발생하면 기존처럼
+전체 도구를 전달합니다. 최근 대화 일부가 설정한 endpoint로 전송됩니다. 결과와 Jev usage,
+지연, `estimated_coordinator_tokens_saved`는 실행의 `run.json` 안 `decisions`에서 확인합니다.
+이 숫자는 제거한 schema 문자의 근사치이며 실제 청구 토큰은 coordinator provider usage로
+비교해야 합니다. MODE의 worker 자동 교체나 review 생략에는 사용하지 않습니다. API 형태는
+[TypeSafe API 문서](https://api.typesafe.ai/docs)를 따릅니다.
 
 ### 커스텀 에이전트 유형 추가
 

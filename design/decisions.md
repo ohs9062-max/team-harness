@@ -286,3 +286,26 @@ Runner에 연결하면 사용자가 원하는 프롬프트 UX를 바로 검증�
 일회성 배치 subprocess이므로 Orca의 개별 agent 창이나 Dispatch 목록에는 나타나지
 않습니다. 이 제한을 스킬과 사용자 안내에 명시해, 대화형 창이 생겼다는 이유로 실행
 소유권까지 Orca로 이동했다고 오해하지 않게 합니다.
+
+## TH-D24. Jev는 선택형 보조 계층으로만 쓰고 첫 적용은 coordinator 도구 스키마 축소로 제한한다
+
+**결정.** 선택적 `DecisionRouter`가 TypeSafe Jev의 `choice` 응답과 confidence를 받아
+코디네이터의 다음 턴에 전달할 도구 프로필을 고릅니다. 기본값은 꺼짐이며, 설정한 임계값
+미만의 confidence, API 오류·타임아웃, 응답 검증 실패, API key 부재는 모두 `FULL` 프로필로
+복귀합니다. `th run`/SDK와 `th repl`이 같은 경로를 사용합니다. 각 판단과 도구 스키마의
+전후 문자 수, 추정 절감 토큰은 `run.json.decisions`에 기록합니다. 자세한 데이터 흐름과
+설정은 `design/designs/jev-decision-router.md`가 정의합니다.
+
+**맥락.** Jev는 미리 정한 선택지에서 빠르게 고르는 모델이며 코드 생성이나 긴 계획을
+대체하지 않습니다. 현재 코디네이터는 매 턴 모든 도구 JSON schema를 생성 모델에 보내므로,
+다음 행동이 worker 대기처럼 좁아도 반복 입력 비용을 냅니다. 이 부분은 닫힌 선택으로 줄일 수
+있고 실제 절감량도 직접 기록할 수 있습니다. 반면 worker 실패 뒤 agent를 자동 교체하면
+TH-D18의 backend 비대체 결정과 protocol role 감사 계약이 바뀌며, review 생략은 MODE C의
+필수 Gate를 약화합니다. 따라서 `worker_failure`, `review_escalation`, `agent_selection`을
+Router의 타입으로 예약하되 이번 자동 실행 경로에서는 호출하지 않습니다.
+
+**결과.** Jev가 정상이고 충분히 확신할 때만 coordinator 입력 도구 schema가 줄어듭니다.
+Jev 요청 자체의 입력 비용과 지연이 추가되므로 `run.json.decisions`와 coordinator provider의
+실제 usage를 함께 비교해야 합니다. 기능을 켜면 최근 메시지의 제한된 부분이 설정한 외부
+endpoint로 전송됩니다. MODE A의 사용자 선택, MODE C의 CHECK/REVIEW, TH-D18의 agent family
+고정, TH-D2의 one-shot worker 수명은 유지됩니다.

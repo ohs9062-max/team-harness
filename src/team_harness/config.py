@@ -15,6 +15,7 @@ from team_harness.agents.template import DEFAULT_AGENT_TEMPLATES
 from team_harness.agents.template import SessionCapture
 from team_harness.coordinator.system_prompt import COORDINATOR_PROMPT
 from team_harness.coordinator.system_prompt import DEFAULT_WORKER_FOOTER
+from team_harness.decisions.models import DecisionRouterSettings
 
 LOCAL_CONFIG_DIR_NAME = ".team-harness"
 CONFIG_PATH = Path.home() / ".team-harness" / "config.toml"
@@ -69,6 +70,10 @@ class Config:
     agent_templates: dict[str, AgentTemplate] = field(default_factory=dict)
     # Optional prebuilt code graph for workers (TH-D22). Off by default.
     context_graph: ContextGraphSettings = field(default_factory=ContextGraphSettings)
+    # Optional System One decision layer for reducing coordinator tool schemas.
+    decision_router: DecisionRouterSettings = field(
+        default_factory=DecisionRouterSettings
+    )
     cwd: str = "."
     run_dir: Path | None = None
     global_config_path: Path | None = None
@@ -398,6 +403,19 @@ min_agent_lifetime_before_kill_s = 600.0
 # Restrict which agent types the coordinator can spawn. Leave commented to allow all.
 # allowed_agents = ["codex", "gemini", "claude", "grok", "antigravity", "openhands", "opencode", "pi", "harness"]
 
+# Optional Jev decision layer. It selects a smaller coordinator tool profile
+# before each model call. Missing keys, timeouts, invalid answers, and low
+# confidence all fall back to the full tool list.
+# [decision_router]
+# enabled = false
+# backend = "jev"
+# api_url = "https://api.typesafe.ai/v1/systemone"
+# model = "jev-latest"
+# confidence_threshold = 0.85
+# timeout_s = 3.0
+# max_state_chars = 4000
+# tool_routing = true
+
 # --- Experimental Codex subscription coordinator ---
 # provider = "codex"
 # model = "gpt-5.6-sol"   # codex-mini-latest is rejected for ChatGPT-account tokens
@@ -506,6 +524,17 @@ min_agent_lifetime_before_kill_s = 600.0
 
 # Restrict which agent types the coordinator can spawn. Leave commented to allow all.
 # allowed_agents = ["codex", "gemini", "claude", "grok", "antigravity", "openhands", "opencode", "pi", "harness"]
+
+# Optional Jev decision layer. Export TYPESAFE_API_KEY (or JEV_API_KEY).
+# [decision_router]
+# enabled = false
+# backend = "jev"
+# api_url = "https://api.typesafe.ai/v1/systemone"
+# model = "jev-latest"
+# confidence_threshold = 0.85
+# timeout_s = 3.0
+# max_state_chars = 4000
+# tool_routing = true
 
 # --- Experimental Codex subscription coordinator ---
 # provider = "codex"
@@ -1040,6 +1069,62 @@ def _parse_context_graph(config_data: dict[str, object]) -> ContextGraphSettings
     )
 
 
+def _parse_decision_router(config_data: dict[str, object]) -> DecisionRouterSettings:
+    section = _get_section(config_data, "decision_router")
+    defaults = DecisionRouterSettings()
+    values: dict[str, object] = {
+        "enabled": section.get("enabled", defaults.enabled),
+        "backend": section.get("backend", defaults.backend),
+        "api_url": section.get("api_url", defaults.api_url),
+        "model": section.get("model", defaults.model),
+        "confidence_threshold": section.get(
+            "confidence_threshold", defaults.confidence_threshold
+        ),
+        "timeout_s": section.get("timeout_s", defaults.timeout_s),
+        "max_state_chars": section.get("max_state_chars", defaults.max_state_chars),
+        "tool_routing": section.get("tool_routing", defaults.tool_routing),
+    }
+    env_enabled = os.environ.get("TEAM_HARNESS_JEV")
+    if env_enabled is not None and env_enabled.strip():
+        normalized = env_enabled.strip().lower()
+        if normalized in _TRUE_STRINGS:
+            values["enabled"] = True
+        elif normalized in _FALSE_STRINGS:
+            values["enabled"] = False
+        else:
+            raise SystemExit(
+                "TEAM_HARNESS_JEV must be one of 1/0, true/false, yes/no, on/off"
+            )
+    for key in ("enabled", "tool_routing"):
+        if not isinstance(values[key], bool):
+            raise SystemExit(f"decision_router.{key} must be true or false")
+    for key in ("backend", "api_url", "model"):
+        if not isinstance(values[key], str) or not values[key]:
+            raise SystemExit(f"decision_router.{key} must be a non-empty string")
+    for key in ("confidence_threshold", "timeout_s"):
+        if isinstance(values[key], bool) or not isinstance(values[key], int | float):
+            raise SystemExit(f"decision_router.{key} must be a number")
+    if isinstance(values["max_state_chars"], bool) or not isinstance(
+        values["max_state_chars"], int
+    ):
+        raise SystemExit("decision_router.max_state_chars must be an integer")
+    try:
+        return DecisionRouterSettings(
+            enabled=cast(bool, values["enabled"]),
+            backend=cast(str, values["backend"]),
+            api_url=cast(str, values["api_url"]),
+            model=cast(str, values["model"]),
+            confidence_threshold=float(
+                cast(int | float, values["confidence_threshold"])
+            ),
+            timeout_s=float(cast(int | float, values["timeout_s"])),
+            max_state_chars=cast(int, values["max_state_chars"]),
+            tool_routing=cast(bool, values["tool_routing"]),
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from None
+
+
 def load_context_graph_settings(start: Path | None = None) -> ContextGraphSettings:
     """``[context_graph]`` from the config.toml layers relative to *start*.
 
@@ -1467,6 +1552,7 @@ def load_config(
         ),
         agent_templates=agent_templates,
         context_graph=_parse_context_graph(config_data),
+        decision_router=_parse_decision_router(config_data),
         cwd=str(start_dir),
         global_config_path=global_path,
         local_config_path=local_path,

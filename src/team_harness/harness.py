@@ -34,6 +34,7 @@ from team_harness.coordinator.codex_client import CodexCoordinatorClient
 from team_harness.coordinator.loop import run
 from team_harness.coordinator.protocols import CoordinatorLike
 from team_harness.coordinator.system_prompt import build_system_prompt
+from team_harness.decisions.router import DecisionRouter
 from team_harness.skills.loader import load_skill_metadata
 from team_harness.tools import shell_tools
 from team_harness.tools.agent_tools import build_agent_tool_bindings
@@ -256,6 +257,11 @@ class TeamHarness:
                 caller_context=self._caller_context,
             )
             ui.start()
+            decision_kwargs: dict[str, Any] = {}
+            if config.decision_router.enabled:
+                decision_kwargs["decision_router"] = DecisionRouter(
+                    config.decision_router
+                )
             await run(
                 messages=messages,
                 config=config,
@@ -264,6 +270,7 @@ class TeamHarness:
                 tool_registry=registry,
                 client=client,
                 ctx=ctx,
+                **decision_kwargs,
             )
         except Exception as exc:
             if run_log is not None and not coordinator_input_path.exists():

@@ -19,6 +19,8 @@ from team_harness.coordinator.loop import _perform_manual_compaction
 from team_harness.coordinator.loop import _retry_sleep_seconds
 from team_harness.coordinator.loop import _should_compact
 from team_harness.coordinator.loop import run_one_turn
+from team_harness.decisions.models import DecisionResult
+from team_harness.decisions.models import DecisionRouterSettings
 from team_harness.tools import fs_tools
 from team_harness.tools.registry import ToolRegistry
 from team_harness.tracking.context import get_auto_compact_threshold
@@ -96,6 +98,53 @@ def compactable_messages():
         {"role": "assistant", "content": "after tool"},
         {"role": "user", "content": "pending user"},
     ]
+
+
+@pytest.mark.asyncio
+async def test_run_one_turn_uses_and_records_jev_tool_profile(
+    tmp_path, config, ctx, ui
+):
+    class FakeRouter:
+        settings = DecisionRouterSettings(enabled=True)
+
+        async def decide(self, request):
+            return DecisionResult(
+                kind="tool_selection", choice="MONITOR", confidence=0.98, applied=True
+            )
+
+    async def tool() -> str:
+        return "ok"
+
+    registry = ToolRegistry()
+    for name in ("read_file", "write_file"):
+        registry.register(
+            schema={
+                "type": "function",
+                "function": {"name": name, "parameters": {"type": "object"}},
+            },
+            fn=tool,
+        )
+    client = RecordingClient([make_response(content="done")])
+    run_log = make_run_log(tmp_path, config)
+    await run_one_turn(
+        messages=[{"role": "user", "content": "inspect progress"}],
+        config=config,
+        run_log=run_log,
+        ui=ui,
+        tool_registry=registry,
+        client=client,
+        ctx=ctx,
+        turn_index=0,
+        last_logged_index=0,
+        decision_router=FakeRouter(),
+    )
+
+    assert [item["function"]["name"] for item in client.calls[0]["tools"]] == [
+        "read_file"
+    ]
+    data = json.loads((tmp_path / "run.json").read_text())
+    assert data["decisions"][0]["choice"] == "MONITOR"
+    assert data["decisions"][0]["estimated_coordinator_tokens_saved"] > 0
 
 
 @pytest.mark.asyncio

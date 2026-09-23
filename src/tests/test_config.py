@@ -43,6 +43,35 @@ def test_default_model_is_gpt_5_6_sol():
     assert Config().worker_footer == DEFAULT_WORKER_FOOTER
     assert Config().rate_limit_circuit_breaker is True
     assert Config().rate_limit_default_cooldown_s == 900
+    assert Config().decision_router.enabled is False
+    assert Config().decision_router.model == "jev-latest"
+
+
+def test_loads_jev_decision_router_config(tmp_path, monkeypatch):
+    config_path = tmp_path / ".team-harness" / "config.toml"
+    config_path.parent.mkdir()
+    config_path.write_text(
+        """[decision_router]
+enabled = true
+confidence_threshold = 0.91
+timeout_s = 1.5
+max_state_chars = 1200
+tool_routing = true
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config_module, "CONFIG_PATH", tmp_path / "missing.toml")
+    config = load_config(cwd=str(tmp_path))
+    assert config.decision_router.enabled is True
+    assert config.decision_router.confidence_threshold == 0.91
+    assert config.decision_router.timeout_s == 1.5
+    assert config.decision_router.max_state_chars == 1200
+
+
+def test_team_harness_jev_env_enables_router(tmp_path, monkeypatch):
+    monkeypatch.setattr(config_module, "CONFIG_PATH", tmp_path / "missing.toml")
+    monkeypatch.setenv("TEAM_HARNESS_JEV", "1")
+    assert load_config(cwd=str(tmp_path)).decision_router.enabled is True
 
 
 def test_default_agent_templates_structured_shape():
