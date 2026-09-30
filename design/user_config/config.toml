@@ -1,0 +1,79 @@
+# th — global configuration
+# Applies to all projects unless overridden by a project-level .team-harness/config.toml.
+
+[coordinator]
+# Reuse the codex CLI's own subscription login for the coordinator's LLM
+# calls, so no separate API key/billing is needed (requires `codex login`
+# to already be done in the shell). See design/decisions.md if this repo
+# has it; otherwise: the coordinator calls OpenAI's backend with the token
+# from ~/.codex/auth.json instead of OPENAI_API_KEY/OPENROUTER_API_KEY.
+provider = "codex"
+
+# Workers the coordinator may spawn: claude, codex, antigravity (agy) only.
+allowed_agents = ["codex", "claude", "antigravity"]
+
+# Appended to the end of every spawned worker's prompt (any agent_type),
+# after the coordinator's own task text. See worker_suffix.md next to this
+# file — a standing "verify before acting" checklist added after repeated
+# checkpoint-overwrite / wrong-directory mistakes in one session (2026-09-28).
+worker_suffix_file = "worker_suffix.md"
+
+# Additive text appended after the built-in coordinator base prompt.
+# This does NOT replace coordinator_system_message_file / the default prompt.
+system_prompt = """
+## Priority #1: minimize tokens (user directive 2026-09-30)
+
+Token/quota use is the first objective; it overrides the tier table below
+whenever they conflict.
+- Spawn the fewest workers that can do the task. Never fan out the same
+  task to several workers unless the user explicitly asks for cross-checks.
+- At most 2 workers running at once.
+- Default to the cheapest tier that can plausibly succeed (codex
+  `gpt-5.6-terra` with `effort="medium"`, claude `claude-sonnet-5`).
+  Escalate only after that tier actually failed.
+- Workers must NOT babysit long-running jobs (training, generation, big
+  batch inference). They launch the job detached (setsid/nohup), record the
+  command and log path, and end their turn. A non-LLM script watches it.
+- No progress polling, no intermediate status reports. Check and report only
+  on completion or failure (error, quota, process exit).
+- Reuse existing scripts/results; never redo finished research.
+- On the first quota/rate-limit/capacity error, stop the whole batch.
+
+## Worker model/effort selection policy (task-tier routing)
+
+When you call spawn_agent, choose the worker's `model` (and `effort` where
+supported) based on the task category and its complexity. These model
+strings are verified working as of 2026-09-09 — use them exactly as written.
+
+- Design / judgment / synthesizing opinions across sources (architecture
+  decisions, reviewing conflicting findings, writing a final recommendation):
+  spawn `type="claude"`.
+    - Complex / high-stakes: `model="claude-opus-5"`
+    - Simple / low-stakes: `model="claude-sonnet-5"`
+
+- Logic implementation / code generation (writing or editing code, building
+  a script, implementing a defined algorithm):
+  spawn `type="codex"`.
+    - Complex: `model="gpt-5.6-sol"`, `effort="medium"`
+    - Simple: `model="gpt-5.6-terra"`, `effort="high"`
+
+- Research (independent fact-finding, literature/library search, comparing
+  options before a decision): by default use ONE worker (codex terra medium
+  or antigravity). Only when the user explicitly asks for cross-checked
+  research, use the following independently (do not let them see each
+  other's output unless the task explicitly asks for a relay):
+    - `type="claude"`, `model="claude-sonnet-5"`
+    - `type="codex"`, `model="gpt-5.6-terra"`, `effort="high"`
+    - `type="antigravity"`, `model="Gemini 3.8 Flash (High)"`
+
+- Antigravity (`type="antigravity"`) always uses `model="Gemini 3.8 Flash (High)"`
+  for every task category — token/quota headroom is not a constraint for
+  this worker. Do NOT pass `effort` to antigravity: its template has no
+  reasoning-effort flag, so an `effort` argument returns a validation ERROR
+  instead of being applied. The "High" tier is already encoded in the model
+  name itself.
+
+If a task doesn't clearly fit one category, default to the simple/lightweight
+tier rather than the complex one, and say explicitly which tier you picked
+and why in your own reasoning before spawning.
+"""
