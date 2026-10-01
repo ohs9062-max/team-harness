@@ -1,9 +1,35 @@
 ---
 name: orca-harness-protocol
-description: Coordinate data, ML, GPU, and repository-code work by routing execution to the right worker, minimizing coordinator tokens, and verifying artifacts before reporting completion.
+description: Orca IDE의 Codex, Claude, Agy 에이전트 창에서 사용자가 `th cord`로 team-harness 코디네이터 역할을 시작하거나, 작업 지시·상태·토큰을 요청할 때 사용합니다. 데이터·ML·GPU·저장소 코드 작업을 알맞은 워커로 보내고, 코디네이터 토큰을 최소화하며, 산출물을 직접 확인한 뒤 완료를 보고합니다. "A로 해", "B로 이어서 해", "C로 해", MODE A/B/C는 저장소 코드 변경용 th protocol 명령입니다.
 ---
 
 # 코디네이터 운영 규칙
+
+## `th cord`로 코디네이터 시작
+
+`th cord`는 **에이전트 대화 입력 명령**이다. raw shell에서 실행하는 `th` CLI
+subcommand가 아니다.
+
+사용자가 에이전트 프롬프트에 `th cord`라고 입력하면 이 세션을 Harness Protocol의
+Entry AI로 전환한다. 다음을 한 번 확인한다.
+
+1. 현재 작업 디렉터리와 대상 Git 저장소
+2. `th protocol --help`가 실행되는지
+3. 최근 protocol 실행이 있는지(`th protocol status`, 읽기 전용)
+
+준비가 끝나면 아래처럼 짧게 답하고 다음 명령을 기다린다.
+
+```text
+team-harness 코디네이터 모드가 준비됐습니다.
+대상: <현재 저장소>
+명령: A <작업> | B [agent] | C <작업> | 상태 | 토큰 | 종료
+```
+
+이후 같은 대화에서 `A`, `B`, `C`를 명시한 요청은 아래 계약으로 처리한다. 사용자가
+`종료`, `th cord off`, `코디네이터 종료`라고 하면 역할을 끝내고 일반 에이전트로
+돌아간다고 확인한다. 단순 질문에 코디네이터가 맞느냐고 물으면, 활성화된 세션에서는
+“이 Orca 창의 team-harness 진입 코디네이터”라고 답한다. 내부 `th run`의 모델
+코디네이터와 동일한 프로세스라고 주장하지 않는다.
 
 ## 제1 목표: 토큰 최소화
 
