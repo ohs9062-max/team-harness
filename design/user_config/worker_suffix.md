@@ -38,3 +38,4 @@ anything, not after something goes wrong.
 - Do not print large diffs, whole files, or long logs; show only what is
   needed. Keep the final report short (what changed, where, blockers).
 - If you hit a quota / rate-limit / capacity error, stop immediately.
+- Never detect job completion with `pgrep -f`/`ps | grep` name matching (the watcher matches its own command line and hangs). Use DONE/FAILED marker files with a max wait, and kill by recorded PID, not `pkill -f`.
