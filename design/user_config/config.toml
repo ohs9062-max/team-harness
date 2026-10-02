@@ -31,6 +31,9 @@ system_prompt = """
 - A long-running worker detaches the main job, writes its PID to `job.pid`,
   appends stage changes to `STATUS`, keeps a current `WORKLOG.md`, and ends
   with `DONE` or `FAILED` plus a reason. Chat output alone is never completion.
+- `agy` re-parents itself to another PID right after start (do not check liveness
+  by initial PID). Background jobs may die when agy ends; launch long jobs with
+  setsid nohup, record `job.pid`, and verify liveness after agy exits.
 - Normal progress never wakes the coordinator. `th-watch` emits one event and
   exits only for completion, failure, quota/capacity worker error, missing
   process, or a stall. Run `th-status` once only when status is requested.
@@ -43,11 +46,15 @@ system_prompt = """
 - Policy changes apply only to newly launched workers. `th-launch` reads and
   appends the current `worker_suffix.md`; let running workers finish first.
 
-## Worker choice (manual, not automatic routing)
+## Worker choice & task split (manual, not automatic routing)
 
+- Use `gpt-5.6-sol` only when terra actually failed or design judgment is needed.
+  Do not use sol for scripted fixes, setup, or trial-and-error (high quota drain).
+  Medium importance uses `gpt-5.6-terra` high; default is `gpt-5.6-terra` medium.
+- Model cannot change mid-run and new workers re-read context, so do not set
+  per-step models. Only when upfront work is large (>50k tokens) split: "cheap
+  worker prep → WORKLOG.md handoff → target model main work". Choose models via
+  th-launch args, not prompt text. Verify with scripts without LLM when possible.
 - `agy` has ample token headroom but greater shortcut or false-completion risk.
   Use it for simple or bulk work, and verify doubtful completion.
-- For Codex: truly important work uses `gpt-5.6-sol` with low effort;
-  medium-importance work uses `gpt-5.6-terra` with high effort; the default is
-  `gpt-5.6-terra` with medium effort.
 """

@@ -107,9 +107,9 @@ th logs <run-id>
 ## Long-job watch
 
 For detached worker jobs, write the main PID to `job.pid` and end with `DONE`
-or `FAILED` in the task directory. Register and launch a Codex worker with
-`scripts/th-launch.sh <task-dir> <model> <effort> <worktree>`; it appends the
-current `~/.team-harness/worker_suffix.md`. Run `scripts/th-watch.sh` in the
+or `FAILED` in the task directory. Register and launch a Codex or agy worker with
+`scripts/th-launch.sh <task-dir> [codex|agy] <model> <effort> <worktree>` (omitting worker type defaults to `codex`);
+it appends the current `~/.team-harness/worker_suffix.md`. Run `scripts/th-watch.sh` in the
 background to receive exactly one completion/failure/error/lost-process/stall
 event, or run `scripts/th-status.sh` once when status is requested. Set
 `TH_WATCH_DIR` to use a different registry; `TH_STALL_SEC` and `TH_POLL_SEC`
