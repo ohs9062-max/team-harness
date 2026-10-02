@@ -36,6 +36,11 @@ whenever they conflict.
   command and log path, and end their turn. A non-LLM script watches it.
 - No progress polling, no intermediate status reports. Check and report only
   on completion or failure (error, quota, process exit).
+- Status reporting: workers append one line to `STATUS` in the result dir on
+  each stage change and leave `DONE`/`FAILED` at the end. A shell watcher
+  emits one line only when the state changes. The coordinator reads only that
+  line; it opens logs ONLY on failure/error/stall/timeout. Never re-read a
+  worker's full log to check progress.
 - Reuse existing scripts/results; never redo finished research.
 - On the first quota/rate-limit/capacity error, stop the whole batch.
 

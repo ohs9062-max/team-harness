@@ -39,3 +39,5 @@ anything, not after something goes wrong.
   needed. Keep the final report short (what changed, where, blockers).
 - If you hit a quota / rate-limit / capacity error, stop immediately.
 - Never detect job completion with `pgrep -f`/`ps | grep` name matching (the watcher matches its own command line and hangs). Use DONE/FAILED marker files with a max wait, and kill by recorded PID, not `pkill -f`.
+
+- 긴 작업은 결과 폴더에 `STATUS` 파일을 두고 단계가 바뀔 때마다 한 줄(`시각 단계 진행률`)을 덧붙인다. 코디네이터는 로그 대신 이 마지막 줄만 읽는다. 끝나면 `DONE`/`FAILED`.
