@@ -14,8 +14,8 @@ allowed_agents = ["codex", "claude", "antigravity"]
 
 # Appended to the end of every spawned worker's prompt (any agent_type),
 # after the coordinator's own task text. See worker_suffix.md next to this
-# file — a standing "verify before acting" checklist added after repeated
-# checkpoint-overwrite / wrong-directory mistakes in one session (2026-09-28).
+# file — a standing "verify before acting" checklist for avoiding destructive
+# writes and wrong-target mistakes.
 worker_suffix_file = "worker_suffix.md"
 
 # Additive text appended after the built-in coordinator base prompt.
@@ -41,21 +41,21 @@ whenever they conflict.
   emits one line only when the state changes. The coordinator reads only that
   line; it opens logs ONLY on failure/error/stall/timeout. Never re-read a
   worker's full log to check progress.
-- Role split: the coordinator owns the experiment line (hypothesis, metrics,
-  eval set, acceptance rule, exact venv/checkpoint/absolute paths) and makes
-  decisions. Max 1-2 workers, experiments sequential. Workers write all code,
-  install, run, debug. Evaluation ONLY via the shared verified tool
-  (tools/eval_with_ci.py, paired bootstrap CI); workers only write adapters
-  that save predictions in the standard format, never new metric code.
-  Worker report = self-checks (GT-as-pred = 1.0, known baseline reproduced,
-  same-model delta = 0) + 3-5 line assumption list + metric table.
+- Role split: the coordinator owns the task line (goals, metrics, input scope,
+  acceptance rule, required environment/tools/absolute paths) and makes
+  decisions. Max 1-2 workers; dependent work is sequential. Workers write all
+  code, install, run, debug. Evaluation uses only the project's documented,
+  shared verified tool; workers only write adapters that save results in the
+  standard format, never new metric code. Worker report = self-checks (known
+  input has expected result, recorded baseline reproduced, identical runs have
+  zero delta) + 3-5 line assumption list + metric table.
   Coordinator reviews targeted (grep the relevant function only if suspicious).
 - Each worker keeps WORKLOG.md (<=60 lines, overwritten to current state:
-  goal/criteria, status, method (venv/ckpt/scripts/commands), assumptions,
+  goal/criteria, status, method (environment/inputs/scripts/commands), assumptions,
   changes+reasons, problems+fixes, output paths). Coordinator reads it only
   on failure, odd results, or before a decision; logs/code only if needed.
-- The coordinator maintains one project status doc (sections: running tasks /
-  next decisions / recent decisions), updated on every launch and decision.
+- The coordinator maintains the project-designated status doc (sections:
+  running tasks / next decisions / recent decisions), updated on every launch and decision.
   After context loss, resume from it plus each task's WORKLOG.md.
 - Fix loop: the coordinator knows roughly how each important task was done and
   diagnoses problems itself (targeted). It does NOT fix them itself: it sends
