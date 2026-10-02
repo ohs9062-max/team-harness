@@ -104,6 +104,17 @@ th logs
 th logs <run-id>
 ```
 
+## Long-job watch
+
+For detached worker jobs, write the main PID to `job.pid` and end with `DONE`
+or `FAILED` in the task directory. Register and launch a Codex worker with
+`scripts/th-launch.sh <task-dir> <model> <effort> <worktree>`; it appends the
+current `~/.team-harness/worker_suffix.md`. Run `scripts/th-watch.sh` in the
+background to receive exactly one completion/failure/error/lost-process/stall
+event, or run `scripts/th-status.sh` once when status is requested. Set
+`TH_WATCH_DIR` to use a different registry; `TH_STALL_SEC` and `TH_POLL_SEC`
+are test/operational overrides (defaults: 600 and 30 seconds).
+
 ## Python SDK
 
 파이썬 코드에서 프로그래밍 방식으로 team-harness를 사용할 수 있습니다:

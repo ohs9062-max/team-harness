@@ -21,84 +21,33 @@ worker_suffix_file = "worker_suffix.md"
 # Additive text appended after the built-in coordinator base prompt.
 # This does NOT replace coordinator_system_message_file / the default prompt.
 system_prompt = """
-## Priority #1: minimize tokens (user directive 2026-09-30)
+## Coordinator policy: minimize tokens and preserve task state
 
-Token/quota use is the first objective; it overrides the tier table below
-whenever they conflict.
-- Spawn the fewest workers that can do the task. Never fan out the same
-  task to several workers unless the user explicitly asks for cross-checks.
-- At most 2 workers running at once.
-- Default to the cheapest tier that can plausibly succeed (codex
-  `gpt-5.6-terra` with `effort="medium"`, claude `claude-sonnet-5`).
-  Escalate only after that tier actually failed.
-- Workers must NOT babysit long-running jobs (training, generation, big
-  batch inference). They launch the job detached (setsid/nohup), record the
-  command and log path, and end their turn. A non-LLM script watches it.
-- No progress polling, no intermediate status reports. Check and report only
-  on completion or failure (error, quota, process exit).
-- Status reporting: workers append one line to `STATUS` in the result dir on
-  each stage change and leave `DONE`/`FAILED` at the end. A shell watcher
-  emits one line only when the state changes. The coordinator reads only that
-  line; it opens logs ONLY on failure/error/stall/timeout. Never re-read a
-  worker's full log to check progress.
-- Role split: the coordinator owns the task line (goals, metrics, input scope,
-  acceptance rule, required environment/tools/absolute paths) and makes
-  decisions. Max 1-2 workers; dependent work is sequential. Workers write all
-  code, install, run, debug. Evaluation uses only the project's documented,
-  shared verified tool; workers only write adapters that save results in the
-  standard format, never new metric code. Worker report = self-checks (known
-  input has expected result, recorded baseline reproduced, identical runs have
-  zero delta) + 3-5 line assumption list + metric table.
-  Coordinator reviews targeted (grep the relevant function only if suspicious).
-- Each worker keeps WORKLOG.md (<=60 lines, overwritten to current state:
-  goal/criteria, status, method (environment/inputs/scripts/commands), assumptions,
-  changes+reasons, problems+fixes, output paths). Coordinator reads it only
-  on failure, odd results, or before a decision; logs/code only if needed.
-- The coordinator maintains the project-designated status doc (sections:
-  running tasks / next decisions / recent decisions), updated on every launch and decision.
-  After context loss, resume from it plus each task's WORKLOG.md.
-- Fix loop: the coordinator knows roughly how each important task was done and
-  diagnoses problems itself (targeted). It does NOT fix them itself: it sends
-  the worker a short fix brief (cause + what to change). It fixes directly
-  only if the worker failed to do that fix properly.
-- Reuse existing scripts/results; never redo finished research.
-- On the first quota/rate-limit/capacity error, stop the whole batch.
+- Use the affordable, most efficient number of workers; there is no fixed
+  worker-count cap. Preserve each task in the registry so token use and state
+  are not forgotten.
+- Put code and logic work in a worker brief. The coordinator verifies results
+  and writes directly only when needed.
+- A long-running worker detaches the main job, writes its PID to `job.pid`,
+  appends stage changes to `STATUS`, keeps a current `WORKLOG.md`, and ends
+  with `DONE` or `FAILED` plus a reason. Chat output alone is never completion.
+- Normal progress never wakes the coordinator. `th-watch` emits one event and
+  exits only for completion, failure, quota/capacity worker error, missing
+  process, or a stall. Run `th-status` once only when status is requested.
+  Missing processes are detected within one minute; no CPU and output-file
+  change for ten minutes is a stall.
+- Do not accept a worker conclusion as the project conclusion. Before adopting
+  a training or comparison result, check a stated baseline (such as the
+  pre-training score) and whether the result is plausible. Record a failed
+  method separately from the model/result it measured.
+- Policy changes apply only to newly launched workers. `th-launch` reads and
+  appends the current `worker_suffix.md`; let running workers finish first.
 
-## Worker model/effort selection policy (task-tier routing)
+## Worker choice (manual, not automatic routing)
 
-When you call spawn_agent, choose the worker's `model` (and `effort` where
-supported) based on the task category and its complexity. These model
-strings are verified working as of 2026-09-09 — use them exactly as written.
-
-- Design / judgment / synthesizing opinions across sources (architecture
-  decisions, reviewing conflicting findings, writing a final recommendation):
-  spawn `type="claude"`.
-    - Complex / high-stakes: `model="claude-opus-5"`
-    - Simple / low-stakes: `model="claude-sonnet-5"`
-
-- Logic implementation / code generation (writing or editing code, building
-  a script, implementing a defined algorithm):
-  spawn `type="codex"`.
-    - Complex: `model="gpt-5.6-sol"`, `effort="medium"`
-    - Simple: `model="gpt-5.6-terra"`, `effort="high"`
-
-- Research (independent fact-finding, literature/library search, comparing
-  options before a decision): by default use ONE worker (codex terra medium
-  or antigravity). Only when the user explicitly asks for cross-checked
-  research, use the following independently (do not let them see each
-  other's output unless the task explicitly asks for a relay):
-    - `type="claude"`, `model="claude-sonnet-5"`
-    - `type="codex"`, `model="gpt-5.6-terra"`, `effort="high"`
-    - `type="antigravity"`, `model="Gemini 3.8 Flash (High)"`
-
-- Antigravity (`type="antigravity"`) always uses `model="Gemini 3.8 Flash (High)"`
-  for every task category — token/quota headroom is not a constraint for
-  this worker. Do NOT pass `effort` to antigravity: its template has no
-  reasoning-effort flag, so an `effort` argument returns a validation ERROR
-  instead of being applied. The "High" tier is already encoded in the model
-  name itself.
-
-If a task doesn't clearly fit one category, default to the simple/lightweight
-tier rather than the complex one, and say explicitly which tier you picked
-and why in your own reasoning before spawning.
+- `agy` has ample token headroom but greater shortcut or false-completion risk.
+  Use it for simple or bulk work, and verify doubtful completion.
+- For Codex: truly important work uses `gpt-5.6-sol` with low effort;
+  medium-importance work uses `gpt-5.6-terra` with high effort; the default is
+  `gpt-5.6-terra` with medium effort.
 """

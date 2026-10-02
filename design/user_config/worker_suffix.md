@@ -1,43 +1,32 @@
-## Before you touch anything in this task, verify — don't assume
+## Worker operating policy
 
-These four checks are cheap and each one has directly prevented a real,
-already-happened mistake. Do them before writing or running
-anything, not after something goes wrong.
+Apply this policy when starting a new worker. A policy change affects only a
+new launch: let an already-running worker finish, then launch it again with
+the current suffix.
 
-1. **Confirm what a directory actually is before trusting its name.** Run
-   `git remote -v` (or equivalent) rather than trusting a path name or a
-   workspace/tab label to tell you what's checked out there — a worktree or
-   IDE workspace folder can be named after one project while containing a
-   completely different one.
-2. **List broadly before concluding something doesn't exist.** Use `ls` /
-   `find -type f` over the whole directory before concluding "there's no
-   script for X" from a narrow keyword search. An empty result from a
-   guessed filename pattern means the guess was wrong, not that the file is
-   absent.
-3. **Read the project's own existing docs before acting.** `CLAUDE.md`,
-   `AGENTS.md`, `reports/`, design docs — read these before writing or
-   running code in a project you have not already read them in this task.
-   A previous session's work does not carry over as memory for you; these
-   files are the only thing that does.
-4. **Back up shared, non-reproducible state before overwriting it.** Generated
-   artifacts, configuration state, and other irreplaceable files are often
-   ignored by Git and unrecoverable once overwritten. Before writing in place,
-   check whether a valuable artifact is already there and make a timestamped
-   backup when needed.
-
-## Token minimization is the first priority (user directive 2026-09-30)
-
-- Read each doc/config once; do not re-read unchanged files.
-- For anything that runs longer than a few minutes (training, image
-  generation, large batch inference): write the script, run a 1–3 item smoke
-  test, then launch the full run detached (`setsid nohup ... &`), write the
-  exact command and log path into your README, and END your turn. Do not
-  wait, sleep, or poll for it to finish.
-- Do not print large diffs, whole files, or long logs; show only what is
-  needed. Keep the final report short (what changed, where, blockers).
-- If you hit a quota / rate-limit / capacity error, stop immediately.
-- Never detect job completion with `pgrep -f`/`ps | grep` name matching (the watcher matches its own command line and hangs). Use DONE/FAILED marker files with a max wait, and kill by recorded PID, not `pkill -f`.
-
-- 긴 작업은 결과 폴더에 `STATUS` 파일을 두고 단계가 바뀔 때마다 한 줄(`시각 단계 진행률`)을 덧붙인다. 코디네이터는 로그 대신 이 마지막 줄만 읽는다. 끝나면 `DONE`/`FAILED`.
-
-- 작업 폴더마다 `WORKLOG.md`(60줄 이내)를 두고 단계가 바뀔 때마다 **덧붙이지 말고 최신 상태로 고쳐 쓴다**. 항목: 목표·성공 기준 / 현재 상태(끝난 단계·남은 단계) / 방법(실행 환경·입력·스크립트·실행 명령) / 가정(입력 매핑·데이터 출처·검증 범위) / 바꾼 것과 이유 / 문제와 해결 / 산출물 경로. 코디네이터와 다음 작업자는 로그·코드 대신 이 문서를 읽는다.
+- For a long task, run a small smoke test, then detach the main job. Record
+  that main job's PID in `job.pid`; when it ends, write `DONE`, or `FAILED`
+  with a short reason. Do not treat chat output as completion.
+- Append one timestamped line to `STATUS` when a stage changes. Keep a
+  `WORKLOG.md` of at most 60 lines by replacing it with the current state:
+  goal/criteria, completed and remaining work, method, assumptions, changes,
+  problems, and output paths.
+- The coordinator does not receive normal progress updates. `th-watch` wakes
+  it only for completion, failure, quota/capacity worker errors, a missing
+  process, or a stall. `th-status` is run once only when status is requested.
+  A missing process must be detected within one minute; a live process with no
+  CPU or output-file change is stalled after ten minutes.
+- A worker conclusion is not automatically a project conclusion. Before
+  accepting a learned or compared result, the coordinator checks the stated
+  baseline (for example, the pre-training score) and whether the result is
+  plausible. Keep a failed method separate from the model/result it measured.
+- Use as many workers as are affordable and efficient for the work. Preserve
+  token budget and task state in the registry; do not impose a fixed worker
+  count.
+- Agent choice is a judgment call, not an automatic router: `agy` has ample
+  token headroom but greater shortcut/false-completion risk, so use it for
+  simple or bulk work and verify doubtful completion. For Codex use
+  `gpt-5.6-sol` low for truly important work, `gpt-5.6-terra` high for
+  medium-importance work, and `gpt-5.6-terra` medium by default.
+- Put code and logic work in a concise worker brief. The coordinator verifies
+  results and writes code directly only when that is necessary.
