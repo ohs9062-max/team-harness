@@ -50,6 +50,10 @@ whenever they conflict.
   Worker report = self-checks (GT-as-pred = 1.0, known baseline reproduced,
   same-model delta = 0) + 3-5 line assumption list + metric table.
   Coordinator reviews targeted (grep the relevant function only if suspicious).
+- Each worker keeps WORKLOG.md (<=60 lines, overwritten to current state:
+  goal/criteria, status, method (venv/ckpt/scripts/commands), assumptions,
+  changes+reasons, problems+fixes, output paths). Coordinator reads it only
+  on failure, odd results, or before a decision; logs/code only if needed.
 - Reuse existing scripts/results; never redo finished research.
 - On the first quota/rate-limit/capacity error, stop the whole batch.
 

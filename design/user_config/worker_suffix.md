@@ -41,3 +41,5 @@ anything, not after something goes wrong.
 - Never detect job completion with `pgrep -f`/`ps | grep` name matching (the watcher matches its own command line and hangs). Use DONE/FAILED marker files with a max wait, and kill by recorded PID, not `pkill -f`.
 
 - 긴 작업은 결과 폴더에 `STATUS` 파일을 두고 단계가 바뀔 때마다 한 줄(`시각 단계 진행률`)을 덧붙인다. 코디네이터는 로그 대신 이 마지막 줄만 읽는다. 끝나면 `DONE`/`FAILED`.
+
+- 작업 폴더마다 `WORKLOG.md`(60줄 이내)를 두고 단계가 바뀔 때마다 **덧붙이지 말고 최신 상태로 고쳐 쓴다**. 항목: 목표·성공 기준 / 현재 상태(끝난 단계·남은 단계) / 방법(venv·체크포인트·스크립트·실행 명령) / 가정(클래스 매핑·마스크 출처·평가셋) / 바꾼 것과 이유 / 문제와 해결 / 산출물 경로. 코디네이터와 다음 작업자는 로그·코드 대신 이 문서를 읽는다.
