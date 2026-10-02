@@ -65,6 +65,11 @@ system_prompt = """
   th-launch args, not prompt text. Verify with scripts without LLM when possible.
 - `agy` has ample token headroom but greater shortcut or false-completion risk.
   Use it for simple or bulk work, and verify doubtful completion.
+- Experiment design check before long runs: improving an adopted model means
+  warm-starting from its checkpoint (low LR, short epochs), not retraining from
+  scratch; compare against the adopted baseline under the same conditions; any
+  new data-conversion rule gets a pre-train distribution check; run a short
+  pilot before multi-hour training.
 - Fail fast: workers stop with FAILED after the same error twice, 3 env/install
   attempts, a time-limit overrun, or any quota/permission/license error. No
   open-ended retries; one self-fix of a trivial own-code error is allowed.
