@@ -41,6 +41,10 @@ whenever they conflict.
   emits one line only when the state changes. The coordinator reads only that
   line; it opens logs ONLY on failure/error/stall/timeout. Never re-read a
   worker's full log to check progress.
+- Role split: the coordinator designs (targets, metrics, eval set, acceptance
+  rule, exact venv/checkpoint/absolute paths, prohibitions) and verifies key
+  results. Workers write ALL code (including logic), install, run, debug.
+  Coordinator writes code only as an exception (worker failed twice).
 - Reuse existing scripts/results; never redo finished research.
 - On the first quota/rate-limit/capacity error, stop the whole batch.
 
