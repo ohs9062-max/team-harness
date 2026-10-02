@@ -5,6 +5,13 @@ description: Orca IDE의 Codex, Claude, Agy 에이전트 창에서 사용자가 
 
 # 코디네이터 운영 규칙
 
+## 작업일지 (모든 코디네이터에 자동 적용)
+
+모드·스킬 사용 여부와 무관하게 전역 에이전트 지시가 이 규칙을 강제한다. 코디네이터는
+작업 공간의 `.claude/current_status.md`를 40줄 이내로 유지하고, 지시·시작·완료·실패·결정·실수마다
+`.claude/work_log.md`에 한 줄을 추가한다. 시작·대화 요약 직후·긴 작업 전에는 current_status를
+먼저 읽고, 상세 이력이 필요할 때만 work_log 끝부분을 읽는다.
+
 ## `th cord`로 코디네이터 시작
 
 `th cord`는 **에이전트 대화 입력 명령**이다. raw shell에서 실행하는 `th` CLI

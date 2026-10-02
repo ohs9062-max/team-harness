@@ -5,6 +5,23 @@
 # 작업 규약: 분리된 본 작업 PID는 job.pid, 워커 PID는 worker.pid, 종료는 DONE/FAILED.
 set -u
 
+journal_workspace=${TH_WORKSPACE:-}
+if [[ -z $journal_workspace ]]; then
+  journal_workspace=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null || printf '%s' "$PWD")
+fi
+journal_workspace=$(realpath "$journal_workspace")
+journal_log="$journal_workspace/.claude/work_log.md"
+rotate_journal_if_needed() {
+  [[ -f $journal_log ]] || return 0
+  local modified today archive
+  modified=$(date -r "$journal_log" +%Y%m%d)
+  today=$(date +%Y%m%d)
+  [[ $modified == "$today" ]] && return
+  archive="$(dirname "$journal_log")/work_log_${modified}.md"
+  [[ -e $archive ]] && archive="${archive}.$(date +%H%M%S)"
+  mv "$journal_log" "$archive"
+}
+
 watch_dir=${TH_WATCH_DIR:-"$HOME/.team-harness/watch"}
 registry="$watch_dir/tasks.txt"
 stall_sec=${TH_STALL_SEC:-600}
@@ -57,6 +74,12 @@ remove_task() {
 
 notify() {
   local task=$1 message=$2
+  local kind='실패'
+  [[ $message == 완료* ]] && kind='완료'
+  mkdir -p "$(dirname "$journal_log")"
+  rotate_journal_if_needed
+  touch "$journal_log"
+  printf '%s | %s | %s | %s | %s\n' "$(date '+%F %R')" "$kind" "$task" "$message" "$journal_workspace" >> "$journal_log"
   printf '%s %s: %s\n' "$(date '+%F %T')" "$task" "$message" >> "$watch_dir/events.log"
   printf '%s: %s\n' "$task" "$message"
   exit 0

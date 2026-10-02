@@ -23,6 +23,11 @@ worker_suffix_file = "worker_suffix.md"
 system_prompt = """
 ## Coordinator policy: minimize tokens and preserve task state
 
+- Coordinator journal is mandatory even without this skill: keep the workspace
+  `.claude/current_status.md` (40 lines maximum), append every instruction,
+  start, completion, failure, decision, and mistake to `.claude/work_log.md`,
+  and read current_status at startup, after compaction, and before long work.
+
 - Use the affordable, most efficient number of workers; there is no fixed
   worker-count cap. Preserve each task in the registry so token use and state
   are not forgotten.

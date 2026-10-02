@@ -5,6 +5,30 @@
 # 정책 변경은 다음 launch부터 적용하며 실행 중 워커는 교체하지 않는다.
 set -euo pipefail
 
+journal_workspace=${TH_WORKSPACE:-}
+if [[ -z $journal_workspace ]]; then
+  journal_workspace=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null || printf '%s' "$PWD")
+fi
+journal_workspace=$(realpath "$journal_workspace")
+journal_log="$journal_workspace/.claude/work_log.md"
+rotate_journal_if_needed() {
+  [[ -f $journal_log ]] || return 0
+  local modified today archive
+  modified=$(date -r "$journal_log" +%Y%m%d)
+  today=$(date +%Y%m%d)
+  [[ $modified == "$today" ]] && return
+  archive="$(dirname "$journal_log")/work_log_${modified}.md"
+  [[ -e $archive ]] && archive="${archive}.$(date +%H%M%S)"
+  mv "$journal_log" "$archive"
+}
+journal_append() {
+  mkdir -p "$(dirname "$journal_log")"
+  rotate_journal_if_needed
+  touch "$journal_log"
+  printf '%s | 지시 | %s | worker=%s model=%s task.md=%s | %s\n' \
+    "$(date '+%F %R')" "$task_dir" "$worker_type" "$model" "$task_dir/task.md" "$journal_workspace" >> "$journal_log"
+}
+
 (( $# >= 1 )) || { echo '사용: th-launch.sh <작업폴더> [codex|agy] <모델> <effort> <작업트리> [추가 인자]'; exit 2; }
 task_dir=$(realpath "$1"); shift
 
@@ -37,6 +61,7 @@ watch_dir=${TH_WATCH_DIR:-"$HOME/.team-harness/watch"}
 suffix=${TH_WORKER_SUFFIX:-"$HOME/.team-harness/worker_suffix.md"}
 [[ -f $task_dir/task.md ]] || { echo "task.md 없음: $task_dir"; exit 1; }
 [[ -f $suffix ]] || { echo "worker_suffix.md 없음(최신 정책을 붙일 수 없음): $suffix"; exit 1; }
+journal_append
 mkdir -p "$watch_dir"; touch "$watch_dir/tasks.txt"
 rm -f "$task_dir"/DONE "$task_dir"/FAILED "$task_dir"/.th_* "$task_dir"/job.pid
 prompt="$(<"$task_dir/task.md")
