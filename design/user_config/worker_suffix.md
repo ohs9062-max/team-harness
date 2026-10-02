@@ -42,3 +42,9 @@ the current suffix.
   use it for simple/bulk work and verify doubtful completion.
 - Put code and logic work in a concise worker brief. The coordinator verifies
   results and writes code directly only when that is necessary.
+
+- Fail fast (no open-ended retries): if the same error happens twice, write
+  `FAILED` with the error and what you tried, then stop. Environment/install
+  fixes: at most 3 attempts, then `FAILED` listing missing pieces. Respect the
+  task's time limit (default smoke test 15 min); on overrun write `FAILED`.
+  Quota, permission, or license errors: write `FAILED` immediately, no retry.
