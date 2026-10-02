@@ -57,6 +57,10 @@ whenever they conflict.
 - The coordinator maintains one project status doc (sections: running tasks /
   next decisions / recent decisions), updated on every launch and decision.
   After context loss, resume from it plus each task's WORKLOG.md.
+- Fix loop: the coordinator knows roughly how each important task was done and
+  diagnoses problems itself (targeted). It does NOT fix them itself: it sends
+  the worker a short fix brief (cause + what to change). It fixes directly
+  only if the worker failed to do that fix properly.
 - Reuse existing scripts/results; never redo finished research.
 - On the first quota/rate-limit/capacity error, stop the whole batch.
 
