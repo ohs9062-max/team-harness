@@ -56,24 +56,34 @@ elif [[ "$worker_type" == "agy" ]]; then
   fi
   setsid nohup agy --dangerously-skip-permissions --model "$model" "${add_dir_args[@]}" "$@" --print="$prompt" < /dev/null > agy.log 2>&1 &
   init_pid=$!
-  sleep 3
 
-  # 재부모화된 실제 agy PID 찾기 (같은 결과 폴더 인자를 가진 agy 프로세스)
+  # agy는 실행 직후 별도 PID로 재부모화될 수 있다. 최초 nohup PID는
+  # 그 전환 중 끝나므로, 그것을 제외하고 결과 폴더를 인자로 가진 agy를
+  # 최대 20초 동안 찾는다. 이 탐색은 launch 시 한 번만 수행한다.
   actual_pid=""
-  for p in /proc/[0-9]*/cmdline; do
-    cmd=$(tr '\0' ' ' < "$p" 2>/dev/null || true)
-    if [[ "$cmd" =~ (^|[[:space:]/])agy([[:space:]]|$) ]] && echo "$cmd" | grep -Fq "$task_dir"; then
-      pid=$(basename "$(dirname "$p")")
-      if [[ "$pid" != "$$" ]]; then
-        actual_pid="$pid"
-        break
-      fi
-    fi
+  deadline=$((SECONDS + 20))
+  while (( SECONDS < deadline )) && [[ -z $actual_pid ]]; do
+    for p in /proc/[0-9]*/cmdline; do
+      pid=${p#/proc/}
+      pid=${pid%/cmdline}
+      [[ $pid != "$$" && $pid != "$init_pid" ]] || continue
+      [[ -r $p ]] || continue
+      exe=""
+      IFS= read -r -d '' exe < "$p" || true
+      [[ ${exe##*/} == "agy" ]] || continue
+      cmd=$(tr '\0' ' ' < "$p" 2>/dev/null || true)
+      [[ $cmd == *"$task_dir"* ]] || continue
+      kill -0 "$pid" 2>/dev/null || continue
+      actual_pid="$pid"
+      break
+    done
+    [[ -n $actual_pid ]] || sleep 0.2
   done
 
   if [[ -n "$actual_pid" ]]; then
     printf '%s\n' "$actual_pid" > "$task_dir/worker.pid"
   else
+    printf 'warning: agy reparented PID not found within 20s; recording initial PID %s\n' "$init_pid" >&2
     printf '%s\n' "$init_pid" > "$task_dir/worker.pid"
   fi
 fi
