@@ -28,9 +28,17 @@ system_prompt = """
   are not forgotten.
 - Put code and logic work in a worker brief. The coordinator verifies results
   and writes directly only when needed.
+- Pass context through state files, not conversation: project status docs
+  (overall flow/decisions), per-task WORKLOG.md (methods/assumptions),
+  STATUS/DONE/FAILED (state), and result tables.
+- Git is for history and rollbacks. Routine checks stay at `git log --oneline`
+  and `git diff --stat`; read specific portions only when suspicious (never read
+  full diffs).
+- Worker chat output is not evidence. Acknowledge completion, metrics, and
+  conclusions only through files (DONE/FAILED, result tables, self-checks).
 - A long-running worker detaches the main job, writes its PID to `job.pid`,
   appends stage changes to `STATUS`, keeps a current `WORKLOG.md`, and ends
-  with `DONE` or `FAILED` plus a reason. Chat output alone is never completion.
+  with `DONE` or `FAILED` plus a reason.
 - `agy` re-parents itself to another PID right after start (do not check liveness
   by initial PID). Background jobs may die when agy ends; launch long jobs with
   setsid nohup, record `job.pid`, and verify liveness after agy exits.

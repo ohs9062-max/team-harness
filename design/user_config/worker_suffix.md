@@ -4,10 +4,18 @@ Apply this policy when starting a new worker. A policy change affects only a
 new launch: let an already-running worker finish, then launch it again with
 the current suffix.
 
+- Pass context through state files, not conversation: project status docs
+  (overall flow/decisions), per-task WORKLOG.md (methods/assumptions),
+  STATUS/DONE/FAILED (state), and result tables.
+- Git is for history and rollbacks. Routine checks stay at `git log --oneline`
+  and `git diff --stat`; read specific portions only when suspicious (never read
+  full diffs).
+- Worker chat output is not evidence. Record completion, metrics, and
+  conclusions only in files (DONE/FAILED, result tables, self-checks).
 - For a long task, run a small smoke test, then detach the main job using
   setsid nohup and record its PID in `job.pid`; when it ends, write `DONE`, or
-  `FAILED` with a short reason. Do not treat chat output as completion. Note that
-  background jobs detached by agy may die when agy exits; verify liveness after finish.
+  `FAILED` with a short reason. Note that background jobs detached by agy may
+  die when agy exits; verify liveness after finish.
 - Append one timestamped line to `STATUS` when a stage changes. Keep a
   `WORKLOG.md` of at most 60 lines by replacing it with the current state:
   goal/criteria, completed and remaining work, method, assumptions, changes,

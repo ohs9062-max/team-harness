@@ -114,20 +114,10 @@ while (( $(date +%s) < deadline )); do
     worker_pid=$(cat "$task/worker.pid" 2>/dev/null || true)
     alive_pids=()
 
-    if [[ -n $job_pid ]]; then
-      if pid_alive "$job_pid"; then
-        alive_pids+=("$job_pid")
-        pid_alive "$worker_pid" && alive_pids+=("$worker_pid")
-      else
-        if [[ -f $task/DONE || -f $task/FAILED ]]; then
-          continue
-        fi
-        [[ -f $marker.dead ]] || { touch "$marker.dead"; notify "$name" '중단 — job.pid 프로세스가 사라짐, DONE/FAILED 없음'; }
-        continue
-      fi
-    elif pid_alive "$worker_pid"; then
-      alive_pids+=("$worker_pid")
-    else
+    pid_alive "$job_pid" && alive_pids+=("$job_pid")
+    pid_alive "$worker_pid" && alive_pids+=("$worker_pid")
+
+    if (( ${#alive_pids[@]} == 0 )); then
       if [[ -f $task/DONE || -f $task/FAILED ]]; then
         continue
       fi
