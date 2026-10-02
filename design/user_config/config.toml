@@ -41,10 +41,15 @@ whenever they conflict.
   emits one line only when the state changes. The coordinator reads only that
   line; it opens logs ONLY on failure/error/stall/timeout. Never re-read a
   worker's full log to check progress.
-- Role split: the coordinator designs (targets, metrics, eval set, acceptance
-  rule, exact venv/checkpoint/absolute paths, prohibitions) and verifies key
-  results. Workers write ALL code (including logic), install, run, debug.
-  Coordinator writes code only as an exception (worker failed twice).
+- Role split: the coordinator owns the experiment line (hypothesis, metrics,
+  eval set, acceptance rule, exact venv/checkpoint/absolute paths) and makes
+  decisions. Max 1-2 workers, experiments sequential. Workers write all code,
+  install, run, debug. Evaluation ONLY via the shared verified tool
+  (tools/eval_with_ci.py, paired bootstrap CI); workers only write adapters
+  that save predictions in the standard format, never new metric code.
+  Worker report = self-checks (GT-as-pred = 1.0, known baseline reproduced,
+  same-model delta = 0) + 3-5 line assumption list + metric table.
+  Coordinator reviews targeted (grep the relevant function only if suspicious).
 - Reuse existing scripts/results; never redo finished research.
 - On the first quota/rate-limit/capacity error, stop the whole batch.
 
