@@ -54,6 +54,9 @@ whenever they conflict.
   goal/criteria, status, method (venv/ckpt/scripts/commands), assumptions,
   changes+reasons, problems+fixes, output paths). Coordinator reads it only
   on failure, odd results, or before a decision; logs/code only if needed.
+- The coordinator maintains one project status doc (sections: running tasks /
+  next decisions / recent decisions), updated on every launch and decision.
+  After context loss, resume from it plus each task's WORKLOG.md.
 - Reuse existing scripts/results; never redo finished research.
 - On the first quota/rate-limit/capacity error, stop the whole batch.
 
