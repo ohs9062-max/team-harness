@@ -72,7 +72,7 @@ $(<"$suffix")
 cd "$task_dir"
 
 if [[ "$worker_type" == "codex" ]]; then
-  setsid nohup codex exec -m "$model" -c "model_reasoning_effort=$effort" --dangerously-bypass-approvals-and-sandbox -C "$worktree" "$@" "$prompt" < /dev/null > codex.log 2>&1 &
+  setsid nohup codex exec -m "$model" -c "model_reasoning_effort=$effort" -c "mcp_servers={}" --dangerously-bypass-approvals-and-sandbox -C "$worktree" "$@" "$prompt" < /dev/null > codex.log 2>&1 &
   printf '%s\n' "$!" > "$task_dir/worker.pid"
 elif [[ "$worker_type" == "agy" ]]; then
   add_dir_args=("--add-dir" "$task_dir")

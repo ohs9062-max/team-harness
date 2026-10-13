@@ -81,7 +81,6 @@ def test_default_agent_templates_structured_shape():
         "--dangerously-bypass-approvals-and-sandbox",
         "--skip-git-repo-check",
         "--json",
-        "--ignore-user-config",
     )
     assert DEFAULT_AGENT_TEMPLATES["claude"].command == ("claude",)
     assert "--verbose" in DEFAULT_AGENT_TEMPLATES["claude"].shared_flags

@@ -24,7 +24,8 @@ def test_build_command_default_codex_fresh():
         "--dangerously-bypass-approvals-and-sandbox",
         "--skip-git-repo-check",
         "--json",
-        "--ignore-user-config",
+        "-c",
+        "mcp_servers={}",
         "--model",
         "gpt-5.6-sol",
         "do thing",
@@ -47,7 +48,8 @@ def test_build_command_default_codex_resume():
         "--dangerously-bypass-approvals-and-sandbox",
         "--skip-git-repo-check",
         "--json",
-        "--ignore-user-config",
+        "-c",
+        "mcp_servers={}",
         "--model",
         "gpt-5.6-sol",
         "sid-123",
@@ -128,9 +130,9 @@ def test_build_command_codex_with_reasoning_effort_high():
     config = Config(agent_templates={"codex": override})
     command = build_command(agent_type="codex", prompt="do thing", config=config)
 
-    assert "-c" in command
-    i = command.index("-c")
-    assert command[i + 1] == "model_reasoning_effort=high"
+    assert "model_reasoning_effort=high" in command
+    i = command.index("model_reasoning_effort=high")
+    assert command[i - 1] == "-c"
 
 
 def test_build_command_claude_with_reasoning_effort_high():
@@ -163,7 +165,7 @@ def test_build_command_codex_no_reasoning_effort_by_default():
 
     command = build_command(agent_type="codex", prompt="do thing", config=Config())
     assert "model_reasoning_effort=high" not in command
-    assert "-c" not in command
+    assert not any(t.startswith("model_reasoning_effort") for t in command)
 
 
 def test_build_command_effort_override_beats_template_level():

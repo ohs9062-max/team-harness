@@ -72,7 +72,8 @@ DEFAULT_AGENT_TEMPLATES: dict[str, AgentTemplate] = {
             "--dangerously-bypass-approvals-and-sandbox",
             "--skip-git-repo-check",
             "--json",
-            "--ignore-user-config",
+            "-c",
+            "mcp_servers={}",
         ),
         resume_prefix=("resume",),
         resume_flags=("{session_id}",),
@@ -82,7 +83,6 @@ DEFAULT_AGENT_TEMPLATES: dict[str, AgentTemplate] = {
             "--dangerously-bypass-approvals-and-sandbox",
             "--skip-git-repo-check",
             "--json",
-            "--ignore-user-config",
         ),
         # Codex expresses reasoning effort via its generic -c override.
         reasoning_effort_flag=("-c", "model_reasoning_effort={effort}"),
