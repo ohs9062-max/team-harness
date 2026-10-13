@@ -427,9 +427,9 @@ async def test_mode_c_git_safety_dirty_base(tmp_path: Path) -> None:
     repo.mkdir()
     _init_git_repo(repo)
 
-    # Make repo dirty
-    dirty_file = repo / "uncommitted.py"
-    dirty_file.write_text("# work in progress", encoding="utf-8")
+    # Modify a tracked file
+    readme = repo / "README.md"
+    readme.write_text("# Modified Work in progress\n", encoding="utf-8")
 
     runner = MockAgentRunner()
     state = await run_mode_c(
@@ -441,13 +441,37 @@ async def test_mode_c_git_safety_dirty_base(tmp_path: Path) -> None:
         auto_discover_checks=False,
     )
 
-    assert state.stage == Stage.GIT_PREFLIGHT.value
-    assert state.status == StageStatus.BLOCKED.value
-    assert "uncommitted changes" in (state.blocker or "")
-    # No workers should have been spawned
-    assert len(runner.calls) == 0
-    # Dirty file must remain untouched (no reset/clean/stash)
-    assert dirty_file.exists()
+    assert state.stage_statuses[Stage.GIT_PREFLIGHT.value] == StageStatus.DONE.value
+    assert any("tracked uncommitted changes" in w for w in state.warnings)
+    assert len(runner.calls) > 0
+    # Dirty file must remain untouched
+    assert readme.read_text(encoding="utf-8") == "# Modified Work in progress\n"
+
+
+@pytest.mark.asyncio
+async def test_mode_c_git_safety_ignores_untracked_files(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+
+    # Add an untracked file
+    untracked_file = repo / "uncommitted.py"
+    untracked_file.write_text("# work in progress", encoding="utf-8")
+
+    runner = MockAgentRunner()
+    state = await run_mode_c(
+        task_id="T-UNTRACKED",
+        user_request="x",
+        target_repo=str(repo),
+        run_dir=tmp_path / "run_untracked",
+        agent_runner=runner,
+        auto_discover_checks=False,
+    )
+
+    assert state.stage_statuses[Stage.GIT_PREFLIGHT.value] == StageStatus.DONE.value
+    assert len(state.warnings) == 0
+    assert len(runner.calls) > 0
+    assert untracked_file.exists()
 
 
 @pytest.mark.asyncio

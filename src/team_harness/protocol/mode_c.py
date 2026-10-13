@@ -463,11 +463,15 @@ async def run_mode_c(
     state.base_branch = preflight.branch
     state.base_commit = preflight.head
     if preflight.dirty:
-        return _block(
-            state,
-            state_mgr,
-            Stage.GIT_PREFLIGHT.value,
-            f"Repository has uncommitted changes: {preflight.status_lines[:5]}",
+        warning_msg = (
+            f"Repository has tracked uncommitted changes (proceeding from HEAD): "
+            f"{preflight.status_lines[:5]}"
+        )
+        state.warnings.append(warning_msg)
+        state_mgr.append_event(
+            "git_preflight.warning",
+            warning=warning_msg,
+            status_lines=preflight.status_lines[:5],
         )
     state.stage_statuses[Stage.GIT_PREFLIGHT.value] = StageStatus.DONE.value
     state_mgr.save_state(state)

@@ -87,13 +87,13 @@ def test_git_preflight_dirty_detection_untracked_file(tmp_path: Path) -> None:
     repo.mkdir()
     _init_repo(repo)
 
-    # Add an untracked file
+    # Add an untracked file - should be ignored by preflight
     new_file = repo / "scratch.txt"
     new_file.write_text("untracked work", encoding="utf-8")
 
     pf = git_preflight(repo)
-    assert pf.dirty is True
-    assert any("scratch.txt" in line for line in pf.status_lines)
+    assert pf.dirty is False
+    assert pf.status_lines == []
 
 
 def test_git_preflight_dirty_detection_modified_file(tmp_path: Path) -> None:
@@ -101,7 +101,7 @@ def test_git_preflight_dirty_detection_modified_file(tmp_path: Path) -> None:
     repo.mkdir()
     _init_repo(repo)
 
-    # Modify existing file
+    # Modify existing file - tracked modification makes it dirty
     readme = repo / "README.md"
     readme.write_text("# Modified Content\n", encoding="utf-8")
 
@@ -118,12 +118,15 @@ def test_git_preflight_is_strictly_read_only(tmp_path: Path) -> None:
 
     dirty_file = repo / "dirty.txt"
     dirty_file.write_text("should remain unchanged", encoding="utf-8")
+    readme = repo / "README.md"
+    readme.write_text("# Modified Content\n", encoding="utf-8")
 
     pf = git_preflight(repo)
     assert pf.dirty is True
-    # File must still exist and be intact
+    # Files must still exist and be intact
     assert dirty_file.exists()
     assert dirty_file.read_text(encoding="utf-8") == "should remain unchanged"
+    assert readme.read_text(encoding="utf-8") == "# Modified Content\n"
 
 
 def test_list_worktrees(tmp_path: Path) -> None:

@@ -33,7 +33,7 @@
    - repository root
    - current branch
    - base branch / base commit
-   - dirty state (uncommitted changes)
+   - dirty state (tracked uncommitted changes: untracked(??) 파일은 무시, tracked 수정은 경고 후 HEAD 기준 진행)
    - existing worktrees
 3. Git이 아니면:
    - STATUS: BLOCKED
@@ -79,7 +79,7 @@ DEFINE
   Entry AI가 TASK 정의, MODE A 기록
   ↓
 GIT_PREFLIGHT
-  대상 repository, base branch, base commit 확인
+  대상 repository, base branch, base commit 확인 (untracked 무시, tracked 수정은 경고 후 HEAD 기준 진행)
   ↓
 WORKTREE_SETUP
   base commit freeze
@@ -257,6 +257,7 @@ DEFINE
   Entry AI가 TASK 정의, MODE C 기록
   ↓
 GIT_PREFLIGHT
+  untracked 무시, tracked 수정은 경고 후 HEAD 기준 진행
   ↓
 DESIGN (Claude)
   요구사항 분석, 설계, 제약, 검증 기준

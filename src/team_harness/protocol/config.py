@@ -8,9 +8,33 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from dotenv import dotenv_values
-
 from team_harness.protocol.models import normalize_agent_type
+
+
+def _parse_dotenv(path: Path) -> dict[str, str]:
+    """Parse a simple KEY=VALUE dotenv file without external dependencies."""
+    vals: dict[str, str] = {}
+    if not path.is_file():
+        return vals
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError:
+        return vals
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" in line:
+            k, v = line.split("=", 1)
+            k = k.strip()
+            v = v.strip()
+            if (v.startswith('"') and v.endswith('"')) or (
+                v.startswith("'") and v.endswith("'")
+            ):
+                v = v[1:-1]
+            vals[k] = v
+    return vals
+
 
 if TYPE_CHECKING:
     from team_harness.config import Config
@@ -271,10 +295,8 @@ def load_protocol_config(
         merged_env = {}
         target_file = Path(env_file) if env_file else Path(".env")
         if target_file.exists():
-            file_vals = dotenv_values(target_file)
-            for k, v in file_vals.items():
-                if v is not None:
-                    merged_env[k] = v
+            file_vals = _parse_dotenv(target_file)
+            merged_env.update(file_vals)
         for k, v in os.environ.items():
             merged_env[k] = v
 

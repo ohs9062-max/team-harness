@@ -179,11 +179,15 @@ async def run_mode_a(
     state.base_branch = preflight.branch
     state.base_commit = preflight.head
     if preflight.dirty:
-        return _block(
-            state,
-            state_mgr,
-            Stage.GIT_PREFLIGHT.value,
-            f"Repository has uncommitted changes: {preflight.status_lines[:5]}",
+        warning_msg = (
+            f"Repository has tracked uncommitted changes (proceeding from HEAD): "
+            f"{preflight.status_lines[:5]}"
+        )
+        state.warnings.append(warning_msg)
+        state_mgr.append_event(
+            "git_preflight.warning",
+            warning=warning_msg,
+            status_lines=preflight.status_lines[:5],
         )
     state.stage_statuses[Stage.GIT_PREFLIGHT.value] = StageStatus.DONE.value
     state_mgr.save_state(state)
@@ -658,16 +662,23 @@ async def resume_mode_a(
     except Exception as exc:
         return _block(state, state_mgr, Stage.CODEX_MERGE.value, str(exc))
 
-    if (
-        preflight.branch != state.base_branch
-        or preflight.head != state.base_commit
-        or preflight.dirty
-    ):
+    if preflight.dirty:
+        warning_msg = (
+            f"Repository has tracked uncommitted changes: {preflight.status_lines[:5]}"
+        )
+        state.warnings.append(warning_msg)
+        state_mgr.append_event(
+            "git_preflight.warning",
+            warning=warning_msg,
+            status_lines=preflight.status_lines[:5],
+        )
+
+    if preflight.branch != state.base_branch or preflight.head != state.base_commit:
         return _block(
             state,
             state_mgr,
             Stage.CODEX_MERGE.value,
-            "Base branch/HEAD/dirty state changed since MODE A started",
+            "Base branch/HEAD changed since MODE A started",
         )
 
     # Verify checkpoints
