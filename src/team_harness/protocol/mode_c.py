@@ -77,6 +77,19 @@ class AgentRunner(TypingProtocol):
     ) -> AgentResult: ...
 
 
+def _safe_cleanup(runner: Any) -> None:
+    """Safely terminate all worker processes registered in runner."""
+    cleanup_fn = getattr(runner, "cleanup", None)
+    if callable(cleanup_fn):
+        cleanup_fn()
+        return
+    manager = getattr(runner, "manager", None)
+    if manager is not None:
+        kill_all_fn = getattr(manager, "kill_all", None)
+        if callable(kill_all_fn):
+            kill_all_fn()
+
+
 class TeamHarnessAgentRunner:
     """AgentRunner implementation that delegates to team_harness execution engine."""
 
@@ -198,6 +211,16 @@ class TeamHarnessAgentRunner:
             elif spawn_result.proc.returncode is None:
                 spawn_result.proc.kill()
             await spawn_result.proc.wait()
+        except BaseException:
+            if spawn_result.pgid:
+                signal_group(spawn_result.pgid, signal.SIGKILL)
+            elif spawn_result.proc.returncode is None:
+                spawn_result.proc.kill()
+            try:
+                await spawn_result.proc.wait()
+            except Exception:
+                pass
+            raise
 
         duration = time.monotonic() - started
         returncode = spawn_result.proc.returncode or 0
@@ -265,6 +288,10 @@ class TeamHarnessAgentRunner:
             failure_classification=classification,
             usage=(usage.to_dict() if (usage := extract_usage(stdout_text)) else None),
         )
+
+    def cleanup(self) -> None:
+        """Terminate all workers registered in the manager."""
+        self.manager.kill_all()
 
     def _classify_failure(
         self,
@@ -1186,19 +1213,32 @@ async def _run_stage(
         requested_model=spec.model,
     )
 
-    result = await agent_runner.run_agent(
-        agent_type=agent_type,
-        prompt=prompt,
-        cwd=cwd,
-        timeout_sec=timeout_sec,
-        model=spec.model,
-        effort=spec.effort,
-        # agent_type (codex/claude/antigravity), not role_name — role_name is
-        # nearly always identical to stage (see callers), which made this
-        # window name redundant ("DESIGN-DESIGN") without ever showing which
-        # actual AI backend is running.
-        label=f"{agent_type}-{stage}",
-    )
+    try:
+        result = await agent_runner.run_agent(
+            agent_type=agent_type,
+            prompt=prompt,
+            cwd=cwd,
+            timeout_sec=timeout_sec,
+            model=spec.model,
+            effort=spec.effort,
+            # agent_type (codex/claude/antigravity), not role_name — role_name is
+            # nearly always identical to stage (see callers), which made this
+            # window name redundant ("DESIGN-DESIGN") without ever showing which
+            # actual AI backend is running.
+            label=f"{agent_type}-{stage}",
+        )
+    except BaseException as exc:
+        state.status = StageStatus.BLOCKED.value
+        state.stage_statuses[stage] = StageStatus.BLOCKED.value
+        state.blocker = (
+            f"Cancelled or failed during {stage}: {type(exc).__name__}: {exc}"
+        )
+        state_mgr.save_state(state)
+        state_mgr.append_event(
+            f"{stage}_INTERRUPTED", stage=stage, error=f"{type(exc).__name__}: {exc}"
+        )
+        _safe_cleanup(agent_runner)
+        raise
     result.agent = spec.agent_type
     result.agent_type = agent_type
     result.stage = stage

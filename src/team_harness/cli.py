@@ -765,7 +765,10 @@ async def _protocol_run(
 ) -> None:
     from team_harness.protocol.config import load_protocol_config
     from team_harness.protocol.mode_a import run_mode_a
+    from team_harness.protocol.mode_c import _safe_cleanup
     from team_harness.protocol.mode_c import run_mode_c
+    from team_harness.protocol.models import StageStatus
+    from team_harness.protocol.state import ProtocolStateManager
 
     task_id = _make_run_id()
     run_dir = RUNS_DIR / f"protocol-{task_id}"
@@ -790,16 +793,32 @@ async def _protocol_run(
         runtime_roles=_parse_set_role(set_role), config_start_dir=target_repo
     )
     mode_fn = run_mode_a if mode == "a" else run_mode_c
-    state = await mode_fn(
-        task_id=task_id,
-        user_request=task,
-        target_repo=target_repo,
-        run_dir=run_dir,
-        agent_runner=runner,
-        protocol_config=proto_cfg,
-        agent_timeout_sec=agent_timeout_sec,
-        check_timeout_sec=check_timeout_sec,
-    )
+    try:
+        state = await mode_fn(
+            task_id=task_id,
+            user_request=task,
+            target_repo=target_repo,
+            run_dir=run_dir,
+            agent_runner=runner,
+            protocol_config=proto_cfg,
+            agent_timeout_sec=agent_timeout_sec,
+            check_timeout_sec=check_timeout_sec,
+        )
+    except BaseException as exc:
+        _safe_cleanup(runner)
+        mgr = ProtocolStateManager(run_dir)
+        cur_state = mgr.load_state()
+        if cur_state is not None and cur_state.status not in (
+            StageStatus.DONE.value,
+            StageStatus.BLOCKED.value,
+        ):
+            cur_state.status = StageStatus.BLOCKED.value
+            if cur_state.stage:
+                cur_state.stage_statuses[cur_state.stage] = StageStatus.BLOCKED.value
+            cur_state.blocker = f"Interrupted/failed: {type(exc).__name__}: {exc}"
+            mgr.save_state(cur_state)
+            mgr.append_event("RUN_INTERRUPTED", reason=str(exc))
+        raise
     _print_protocol_state(state, run_dir=run_dir)
     if mode == "a" and state.status == "WAITING_USER":
         click.echo(
@@ -1077,7 +1096,9 @@ async def _protocol_resume(
 ) -> None:
     from team_harness.protocol.config import load_protocol_config
     from team_harness.protocol.mode_a import resume_mode_a
+    from team_harness.protocol.mode_c import _safe_cleanup
     from team_harness.protocol.mode_c import resume_mode_c
+    from team_harness.protocol.models import StageStatus
     from team_harness.protocol.state import ProtocolStateManager
 
     resolved_run_dir = Path(run_dir).resolve()
@@ -1096,44 +1117,60 @@ async def _protocol_resume(
         runtime_roles=_parse_set_role(set_role), config_start_dir=resolved_repo
     )
 
-    if saved.mode == "C":
-        if selection is not None:
-            raise click.ClickException(
-                "--selection applies to MODE A runs; this run is MODE C. "
-                "Use --from-stage instead."
+    try:
+        if saved.mode == "C":
+            if selection is not None:
+                raise click.ClickException(
+                    "--selection applies to MODE A runs; this run is MODE C. "
+                    "Use --from-stage instead."
+                )
+            state = await resume_mode_c(
+                run_dir=resolved_run_dir,
+                agent_runner=runner,
+                from_stage=from_stage,
+                protocol_config=proto_cfg,
+                agent_timeout_sec=agent_timeout_sec,
+                check_timeout_sec=check_timeout_sec,
             )
-        state = await resume_mode_c(
+            _print_protocol_state(state, run_dir=resolved_run_dir)
+            return
+
+        if selection is None:
+            raise click.ClickException(
+                "--selection is required to resume a MODE A run "
+                "(SELECT_WORKER_1|SELECT_WORKER_2|SELECT_HYBRID|REWORK|CANCEL)."
+            )
+        if from_stage is not None:
+            raise click.ClickException(
+                "--from-stage applies to MODE C runs; this run is MODE A."
+            )
+        state = await resume_mode_a(
+            task_id=task_id,
+            selection=selection,
+            user_instruction=note,
             run_dir=resolved_run_dir,
+            target_repo=resolved_repo,
             agent_runner=runner,
-            from_stage=from_stage,
             protocol_config=proto_cfg,
             agent_timeout_sec=agent_timeout_sec,
             check_timeout_sec=check_timeout_sec,
         )
         _print_protocol_state(state, run_dir=resolved_run_dir)
-        return
-
-    if selection is None:
-        raise click.ClickException(
-            "--selection is required to resume a MODE A run "
-            "(SELECT_WORKER_1|SELECT_WORKER_2|SELECT_HYBRID|REWORK|CANCEL)."
-        )
-    if from_stage is not None:
-        raise click.ClickException(
-            "--from-stage applies to MODE C runs; this run is MODE A."
-        )
-    state = await resume_mode_a(
-        task_id=task_id,
-        selection=selection,
-        user_instruction=note,
-        run_dir=resolved_run_dir,
-        target_repo=resolved_repo,
-        agent_runner=runner,
-        protocol_config=proto_cfg,
-        agent_timeout_sec=agent_timeout_sec,
-        check_timeout_sec=check_timeout_sec,
-    )
-    _print_protocol_state(state, run_dir=resolved_run_dir)
+    except BaseException as exc:
+        _safe_cleanup(runner)
+        mgr = ProtocolStateManager(resolved_run_dir)
+        cur_state = mgr.load_state()
+        if cur_state is not None and cur_state.status not in (
+            StageStatus.DONE.value,
+            StageStatus.BLOCKED.value,
+        ):
+            cur_state.status = StageStatus.BLOCKED.value
+            if cur_state.stage:
+                cur_state.stage_statuses[cur_state.stage] = StageStatus.BLOCKED.value
+            cur_state.blocker = f"Interrupted/failed: {type(exc).__name__}: {exc}"
+            mgr.save_state(cur_state)
+            mgr.append_event("RESUME_INTERRUPTED", reason=str(exc))
+        raise
 
 
 @protocol.command("relay")

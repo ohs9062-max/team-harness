@@ -761,3 +761,35 @@ async def test_legacy_selection_aliases_still_pick_worker_1_and_2(tmp_path: Path
             waiting.worker_branches[expected_branch_worker]
             in runner.calls[-1]["prompt"]
         )
+
+
+async def test_mode_a_handles_worker_exception_via_gather_return_exceptions(
+    tmp_path: Path,
+):
+    repo, _ = _repo(tmp_path)
+    runner = ModeARunner()
+    orig_run_agent = runner.run_agent
+
+    async def faulty_run_agent(**kwargs: Any) -> AgentResult:
+        if "independent_work" in kwargs.get("label", "") and "codex" in kwargs.get(
+            "label", ""
+        ):
+            raise RuntimeError("Unexpected worker explosion")
+        return await orig_run_agent(**kwargs)
+
+    runner.run_agent = faulty_run_agent  # type: ignore
+
+    run_dir = tmp_path / "run_faulty"
+    state = await run_mode_a(
+        task_id="TASK-A-FAULTY",
+        user_request="Implement value()",
+        target_repo=str(repo),
+        run_dir=run_dir,
+        agent_runner=runner,
+        protocol_config=_CHEAP_CONFIG,
+    )
+
+    assert state.status == StageStatus.BLOCKED.value
+    assert state.stage_statuses[Stage.WORKER_GATE.value] == StageStatus.BLOCKED.value
+    assert state.worker_status["worker_1"] == StageStatus.FAILED.value
+    assert any(h["lane"] == "worker_1" and not h["success"] for h in state.handoffs)

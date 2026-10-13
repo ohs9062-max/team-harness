@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 import subprocess
 import sys
@@ -13,6 +14,7 @@ from team_harness.protocol.models import CheckStatus
 from team_harness.protocol.models import ReviewVerdict
 from team_harness.protocol.models import Stage
 from team_harness.protocol.models import StageStatus
+from team_harness.protocol.state import ProtocolStateManager
 
 
 def _init_git_repo(path: Path) -> str:
@@ -597,3 +599,41 @@ async def test_mode_c_waived_checks_allows_final(tmp_path: Path) -> None:
     assert state.status == StageStatus.DONE.value
     assert state.test_status == CheckStatus.WAIVED.value
     assert state.checkpoint is not None
+
+
+@pytest.mark.asyncio
+async def test_mode_c_records_blocked_on_cancellation_or_interrupt(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+
+    class CancellingRunner:
+        def __init__(self) -> None:
+            self.cleaned_up = False
+
+        async def run_agent(self, **kwargs: Any) -> AgentResult:
+            raise asyncio.CancelledError("User cancelled")
+
+        def cleanup(self) -> None:
+            self.cleaned_up = True
+
+    runner = CancellingRunner()
+    run_dir = tmp_path / "run_cancel"
+
+    with pytest.raises(asyncio.CancelledError):
+        await run_mode_c(
+            task_id="T-CANCEL",
+            user_request="test",
+            target_repo=str(repo),
+            run_dir=run_dir,
+            agent_runner=runner,  # type: ignore
+        )
+
+    saved = ProtocolStateManager(run_dir).load_state()
+    assert saved is not None
+    assert saved.status == StageStatus.BLOCKED.value
+    assert saved.stage_statuses[saved.stage] == StageStatus.BLOCKED.value
+    assert "User cancelled" in (saved.blocker or "")
+    assert runner.cleaned_up is True
