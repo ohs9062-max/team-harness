@@ -6,6 +6,7 @@
 
 | # | 기능 | 언제 쓰나 | 핵심 명령 |
 |---|---|---|---|
+| 0 | 붙어 있는 도구 목록 | 무엇이 붙어 있나 볼 때 | — |
 | 1 | 설치·설정 | 처음 한 번 | `uv tool install -e`, `th init` |
 | 2 | Orca 코디네이터 (`th cord`) | 평소 작업의 기본 진입점 | 에이전트 창에 `th cord` |
 | 3 | 워커 실행·감시 스크립트 | 데이터·GPU·장시간 작업 위임 | `th-launch.sh`, `th-watch.sh`, `th-status.sh` |
@@ -20,6 +21,54 @@
 | 12 | 코디네이터 작업일지 | 상태·이력 보존 | `.claude/current_status.md`, `work_log.md` |
 
 ---
+
+## 0. team-harness가 붙이는 것 (도구 목록)
+
+하네스(마구)는 모델에 도구와 실행 환경을 붙여 일을 시키는 틀입니다. team-harness는 세 층을 붙입니다.
+
+### 0-1. 조율자 LLM의 도구 21개 (`th run`, `th repl`)
+
+| 묶음 | 도구 | 하는 일 |
+|---|---|---|
+| 워커 부리기 | `spawn_agent` | codex·claude·agy 등 워커 CLI를 하위 프로세스로 띄워 일을 맡김 |
+| | `wait_for_agents`, `wait_for_any` | 워커가 전부 / 하나라도 끝날 때까지 대기 |
+| | `read_agent_output`, `read_new_agent_output` | 워커 출력 읽기(전체 / 지난번 이후 새 부분만) |
+| | `agent_status`, `list_agents`, `agent_availability` | 워커 상태·목록·사용 가능한 워커 종류 |
+| | `kill_agent` | 워커 강제 종료 |
+| 파일 | `read_file`, `read_new_file_content` | 파일 읽기(전체 / 바뀐 부분만) |
+| | `write_file`, `append_file`, `edit_file`, `multi_edit_file` | 파일 쓰기·추가·수정 |
+| | `ls`, `glob`, `grep` | 목록·파일 찾기·내용 검색(결과 길이 상한, grep 타임아웃) |
+| 셸 | `bash` | 명령 실행 |
+| 계획 | `todo_write`, `todo_read` | 할 일 목록 관리 |
+
+정의 위치: `src/team_harness/tools/` (`agent_tools.py`, `fs_tools.py`, `shell_tools.py`, `todo_tools.py`).
+
+### 0-2. 도구 바깥에서 조율자를 받치는 장치
+
+| 장치 | 역할 |
+|---|---|
+| 자동 압축 | 대화가 길어지면 이전 기록을 요약해 줄임 (`tracking/context.py`) |
+| Jev 결정 라우터 | 매 턴 필요한 도구 묶음만 골라 보냄 (11절) |
+| 쿼터 차단기 | 워커 rate limit 시 같은 종류 워커 실행을 멈춤 |
+| 스킬 | `.agents/skills/`의 지침 문서를 조율자가 읽고 따름 |
+| graft | 워커에게 코드 심볼·호출 관계 그래프 제공(기본 꺼짐, 10절) |
+| 워커 템플릿 | 워커 CLI별 실행 플래그·모델·세션 재개, MCP 격리 (`agents/template.py`) |
+| 실행 기록·reaper | 실행마다 `run.json`, 비정상 종료 뒤 남은 워커 정리 (`th reap`) |
+| Harness Protocol | A 경쟁 / B 인계 / C 파이프라인 작업 절차 (6절) |
+
+### 0-3. `th cord`로 일할 때 붙는 것
+
+이때 조율자는 Claude Code·Codex 자체이고(자기 도구를 이미 가짐), team-harness는 그 위에
+여러 워커를 묶는 고삐와 감시 장치를 덧붙입니다.
+
+| 붙이는 것 | 역할 |
+|---|---|
+| `orca-harness-protocol` 스킬 | 코디네이터 운영 규칙(워커 선택, 검증, 작업일지, 폴링 금지) |
+| `th-launch.sh` | 워커 분리 실행 + 공통 규칙(`worker_suffix.md`) 부착 (3절) |
+| `th-watch.sh`, `th-status.sh` | 사건 감시와 상태 표 — 셸 스크립트, LLM 토큰 0 (3절) |
+| 작업 폴더 규약 | `task.md`, `STATUS`, `WORKLOG.md`, `DONE`/`FAILED` (3절) |
+| 작업일지 | `.claude/current_status.md`, `work_log.md` (12절) |
+| `th protocol` | 코드 변경일 때 A/B/C 절차 (6절) |
 
 ## 1. 설치·설정
 
