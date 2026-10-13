@@ -1864,3 +1864,21 @@ async def test_initial_task_survives_repeated_compactions(ctx, ui):
     # Same original assignment, not the intermediate summary, is still pinned.
     assert messages[1] == {"role": "user", "content": "first request"}
     assert messages[-1] == {"role": "user", "content": "second pending"}
+
+
+@pytest.mark.asyncio
+async def test_perform_compaction_updates_context_token_estimate(ctx, ui):
+    messages = compactable_messages()
+    # Simulate turn where ctx recorded high tokens from API
+    ctx.update({"prompt_tokens": 900_000, "completion_tokens": 80_000})
+    threshold = 950_000
+    assert _should_compact(messages, ctx, threshold) is True
+
+    client = SequenceClient([make_response(content="short summary")])
+    compacted = await _perform_compaction(
+        messages=messages, client=client, ctx=ctx, ui=ui
+    )
+    assert compacted is True
+    assert ctx.has_estimate is True
+    assert ctx.total < threshold
+    assert _should_compact(messages, ctx, threshold) is False
