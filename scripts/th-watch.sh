@@ -40,25 +40,36 @@ deadline=$(( $(date +%s) + max_wait ))
 pid_alive() { [[ $1 =~ ^[1-9][0-9]*$ ]] && kill -0 "$1" 2>/dev/null; }
 
 cpu_ticks() {
-  local pid=$1 proc total=0 ticks
+  local pid=$1 proc total=0 ticks child index=0
   [[ $pid =~ ^[1-9][0-9]*$ ]] || { echo 0; return; }
   local procs=("$pid")
-  local children
-  children=$(ps -o pid= --ppid "$pid" 2>/dev/null) || true
-  for c in $children; do
-    [[ $c =~ ^[1-9][0-9]*$ ]] && procs+=("$c")
-  done
+  local seen=" $pid "
   local sid
   sid=$(ps -o sid= -p "$pid" 2>/dev/null | tr -d ' ') || true
   if [[ -n $sid && $sid == "$pid" ]]; then
     while IFS= read -r sproc; do
-      [[ $sproc =~ ^[1-9][0-9]*$ ]] && procs+=("$sproc")
+      sproc=${sproc//[[:space:]]/}
+      [[ $sproc =~ ^[1-9][0-9]*$ && $seen != *" $sproc "* ]] || continue
+      seen="$seen$sproc "
+      procs+=("$sproc")
     done < <(ps -o pid= -s "$sid" 2>/dev/null)
   fi
-  local seen=" "
+
+  # Direct children are not enough: worker launchers commonly introduce an
+  # intermediate shell or Python parent before starting CPU-bound descendants.
+  # Walk every process in the collected tree, adding each child once.
+  while (( index < ${#procs[@]} )); do
+    proc=${procs[index]}
+    while IFS= read -r child; do
+      child=${child//[[:space:]]/}
+      [[ $child =~ ^[1-9][0-9]*$ && $seen != *" $child "* ]] || continue
+      seen="$seen$child "
+      procs+=("$child")
+    done < <(ps -o pid= --ppid "$proc" 2>/dev/null)
+    ((index += 1))
+  done
+
   for proc in "${procs[@]}"; do
-    [[ $seen == *" $proc "* ]] && continue
-    seen="$seen$proc "
     ticks=$(awk -F') ' '{split($2, a, " "); print a[12] + a[13]}' "/proc/$proc/stat" 2>/dev/null) || continue
     [[ $ticks =~ ^[0-9]+$ ]] || continue
     total=$(( total + ticks ))

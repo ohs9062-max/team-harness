@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import signal
 import stat
 import subprocess
 import time
@@ -430,6 +431,47 @@ def test_th_status_recognizes_claude_log_quota(test_env: dict):
     res = subprocess.run([str(status_script)], env=test_env["env"], capture_output=True, text=True)
     assert res.returncode == 0
     assert "워커 오" in res.stdout
+
+
+def test_th_watch_cpu_ticks_includes_grandchild_processes():
+    """ops-14: cpu_ticks counts CPU used by a descendant outside the root session."""
+    root = subprocess.Popen(
+        ["bash", "-c", "setsid bash -c 'yes > /dev/null & wait' & wait"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    child_pid = None
+    hog_pid = None
+    try:
+        time.sleep(0.2)
+        child_pid = int(
+            subprocess.check_output(["pgrep", "-P", str(root.pid)], text=True).splitlines()[0]
+        )
+        hog_pid = int(
+            subprocess.check_output(["pgrep", "-P", str(child_pid)], text=True).splitlines()[0]
+        )
+        hog_ticks = int(Path(f"/proc/{hog_pid}/stat").read_text().split(") ", 1)[1].split()[11])
+
+        command = (
+            'source <(sed -n \'/^cpu_ticks() {/,/^}$/p\' "$1"); '
+            'cpu_ticks "$2"'
+        )
+        result = subprocess.run(
+            ["bash", "-c", command, "bash", str(SCRIPTS_DIR / "th-watch.sh"), str(root.pid)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        assert int(result.stdout.strip()) >= hog_ticks
+    finally:
+        for pid in (hog_pid, child_pid, root.pid):
+            if pid is not None:
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+        root.wait(timeout=5)
 
 
 
