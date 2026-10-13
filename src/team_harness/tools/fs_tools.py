@@ -4,6 +4,7 @@ from collections.abc import Awaitable
 from collections.abc import Callable
 import os
 from pathlib import Path
+import signal
 
 _file_cursors: dict[str, int] = {}
 _file_locks: dict[str, asyncio.Lock] = {}
@@ -13,6 +14,7 @@ READ_FILE_MAX_LIMIT_CHARS = 32_768
 READ_FILE_MAX_CONTENT_BYTES = 32 * 1024
 LS_MAX_ENTRIES = 500
 GLOB_MAX_ENTRIES = 500
+GREP_DEFAULT_TIMEOUT_SECONDS = 30.0
 
 READ_FILE_SCHEMA = {
     "type": "function",
@@ -137,7 +139,14 @@ GREP_SCHEMA = {
         "description": "Search file contents for a regex pattern.",
         "parameters": {
             "type": "object",
-            "properties": {"pattern": {"type": "string"}, "path": {"type": "string"}},
+            "properties": {
+                "pattern": {"type": "string"},
+                "path": {"type": "string"},
+                "timeout_seconds": {
+                    "type": "number",
+                    "description": "Maximum execution time in seconds.",
+                },
+            },
             "required": ["pattern", "path"],
         },
     },
@@ -338,16 +347,35 @@ async def glob(pattern: str, cwd: str = ".") -> str:
     return await asyncio.to_thread(_glob)
 
 
-async def grep(pattern: str, path: str) -> str:
+async def grep(
+    pattern: str, path: str, timeout_seconds: float = GREP_DEFAULT_TIMEOUT_SECONDS
+) -> str:
     proc = await asyncio.create_subprocess_exec(
         "grep",
-        "-rn",
+        "-rnI",
         pattern,
         path,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.DEVNULL,
+        start_new_session=True,
     )
-    stdout, _ = await proc.communicate()
+    try:
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
+    except TimeoutError:
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=1.0)
+        except TimeoutError:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            await proc.wait()
+        return f"ERROR: grep timed out after {timeout_seconds} seconds"
+
     text = stdout.decode(errors="replace")
     if not text:
         return "(no matches)"

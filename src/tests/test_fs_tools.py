@@ -281,3 +281,26 @@ async def test_ls_and_glob_bounded_truncation(tmp_path):
     glob_result = await fs_tools.glob(pattern="*.txt", cwd=str(folder))
     assert "[output truncated: 50 items omitted]" in glob_result
     assert glob_result.count("\n") == 500
+
+
+@pytest.mark.asyncio
+async def test_grep_ignores_binary_files(tmp_path):
+    fs_tools.setup_fs()
+    bin_file = tmp_path / "model.bin"
+    bin_file.write_bytes(b"\x00\x01\x02needle\x00\xff")
+    txt_file = tmp_path / "readme.txt"
+    txt_file.write_text("needle in text")
+
+    result = await fs_tools.grep("needle", str(tmp_path))
+    assert "readme.txt" in result
+    assert "model.bin" not in result
+
+
+@pytest.mark.asyncio
+async def test_grep_timeout_and_process_cleanup(tmp_path, monkeypatch):
+    fs_tools.setup_fs()
+    (tmp_path / "file.txt").write_text("hello")
+
+    # Grep with a very small timeout on a slow command should time out cleanly
+    result = await fs_tools.grep("hello", str(tmp_path), timeout_seconds=0.0001)
+    assert "ERROR: grep timed out" in result
