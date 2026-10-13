@@ -174,3 +174,29 @@ def test_system_prompt_respawn_prohibition_references_failover():
     )
 
     assert "Exception: API error failovers" in prompt
+
+
+def test_build_system_prompt_prefix_invariant_across_runs():
+    config = Config(cwd="/repo")
+    allowed_types = ["codex", "gemini"]
+    skills = []
+
+    prompt1 = build_system_prompt(
+        config, allowed_types, skills, session_output_dir="/repo/run_1"
+    )
+    prompt2 = build_system_prompt(
+        config, allowed_types, skills, session_output_dir="/repo/run_2"
+    )
+
+    # Split by the trailing Run context section
+    prefix1 = prompt1.split("## Run context")[0]
+    prefix2 = prompt2.split("## Run context")[0]
+
+    assert prefix1 == prefix2
+    assert "## Run context" in prompt1
+    assert "## Run context" in prompt2
+    assert "/repo/run_1" in prompt1
+    assert "/repo/run_2" in prompt2
+    # Ensure session_output_dir is NOT in the invariant prefix
+    assert "/repo/run_1" not in prefix1
+    assert "/repo/run_2" not in prefix2

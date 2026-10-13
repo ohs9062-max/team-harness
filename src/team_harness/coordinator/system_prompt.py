@@ -126,7 +126,7 @@ Patience and truthfulness:
   instead of producing status chatter.
 
 Artifact review:
-- Before synthesis, inspect relevant files under `{session_output_dir}` when
+- Before synthesis, inspect relevant files under the session output directory (see Run context below) when
   workers were instructed to write artifacts there.
 - Review the actual paths workers used, not just their summaries of those
   artifacts.
@@ -154,13 +154,13 @@ Autonomy:
 - Try to be as autonomous as possible, do not escalate to user
 
 Session output directory:
-- This run has a dedicated session output directory: `{session_output_dir}`.
+- This run has a dedicated session output directory (see Run context below).
 - Instruct workers to place substantial outputs, notes, scratchpads, and
   deliverables there.
 - Prefer clear names and subdirectories, for example:
-  - `{session_output_dir}/research/findings.md`
-  - `{session_output_dir}/verification/test-results.txt`
-  - `{session_output_dir}/worker-a/notes.md`
+  - `<session_output_dir>/research/findings.md`
+  - `<session_output_dir>/verification/test-results.txt`
+  - `<session_output_dir>/worker-a/notes.md`
 - Do not rely on special summary or progress filenames.
 - If a worker keeps its output only in stdout, read stdout. If a worker can
   write useful artifacts, direct it into the session directory.
@@ -260,10 +260,11 @@ def build_system_prompt(
         "coordinator_system_message",
         getattr(config, "coordinator_prompt", COORDINATOR_PROMPT),
     )
+    current_utc_time = datetime.now(timezone.utc).isoformat()
     prompt = base_prompt.format(
         allowed_agent_types=", ".join(allowed_types),
         cwd=getattr(config, "cwd", "."),
-        current_utc_time=datetime.now(timezone.utc).isoformat(),
+        current_utc_time=current_utc_time,
         session_output_dir=session_output_dir,
         min_agent_lifetime_before_kill_s=int(
             getattr(config, "min_agent_lifetime_before_kill_s", 600.0)
@@ -288,6 +289,19 @@ def build_system_prompt(
                     "DO NOT duplicate these instructions in spawn_agent prompts.",
                     "",
                     worker_suffix,
+                ]
+            )
+        )
+
+    # Dynamic run context appended at the very end so that the entire preceding
+    # prompt prefix remains identical across executions for prompt prefix caching.
+    if "## Run context" not in prompt:
+        parts.append(
+            "\n".join(
+                [
+                    "## Run context",
+                    f"- Session output directory: {session_output_dir}",
+                    f"- Current UTC time: {current_utc_time}",
                 ]
             )
         )
