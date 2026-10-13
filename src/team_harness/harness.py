@@ -1038,7 +1038,7 @@ def _build_registry(
         registry.register(schema=schema, fn=fn)
 
     # File system tools (per-run closures for stateful tools)
-    fs_bindings = build_fs_tool_bindings()
+    fs_bindings = build_fs_tool_bindings(workspace_dir=config.cwd, run_dir=run_dir)
     for schema, fn in fs_bindings:
         registry.register(schema=schema, fn=fn)
 

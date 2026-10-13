@@ -52,6 +52,23 @@ def test_system_prompt_includes_runtime_context_and_output_directory():
     assert "Artifact review:" in prompt
 
 
+def test_system_prompt_directs_journal_writes_to_the_run_directory():
+    config = Config(cwd="/repo")
+    config.run_dir = Path("/runs/run_123")
+
+    prompt = build_system_prompt(
+        config=config,
+        allowed_types=["codex"],
+        skills=[],
+        session_output_dir="/artifacts/run_123",
+    )
+
+    assert "/runs/run_123/journal/current_status.md" in prompt
+    assert "/runs/run_123/journal/work_log.md" in prompt
+    assert "/repo/.claude/current_status.md" in prompt
+    assert "Never write, edit, append, or replace them." in prompt
+
+
 def test_system_prompt_excludes_legacy_agent_summary_filenames():
     prompt = build_system_prompt(
         config=Config(cwd="/repo"),

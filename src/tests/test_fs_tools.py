@@ -26,6 +26,35 @@ async def test_fs_tools_round_trip(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_run_fs_bindings_protect_workspace_journal_and_allow_run_journal(tmp_path):
+    workspace_dir = tmp_path / "workspace"
+    run_dir = tmp_path / "runs" / "run_123"
+    protected = workspace_dir / ".claude" / "current_status.md"
+    protected.parent.mkdir(parents=True)
+    protected.write_text("outer coordinator state")
+    bindings = fs_tools.build_fs_tool_bindings(
+        workspace_dir=workspace_dir, run_dir=run_dir
+    )
+    by_name = {schema["function"]["name"]: fn for schema, fn in bindings}
+
+    for name, arguments in (
+        ("write_file", {"content": "replacement"}),
+        ("append_file", {"content": " appended"}),
+        ("edit_file", {"old": "outer", "new": "inner"}),
+        ("multi_edit_file", {"edits": [{"old": "outer", "new": "inner"}]}),
+    ):
+        result = await by_name[name](path=str(protected), **arguments)
+        assert result.startswith("ERROR: refusing to write the workspace coordinator journal")
+    assert protected.read_text() == "outer coordinator state"
+
+    run_journal = run_dir / "journal" / "current_status.md"
+    assert await by_name["write_file"](path=str(run_journal), content="run state") == (
+        f"Written 9 bytes to {run_journal}."
+    )
+    assert run_journal.read_text() == "run state"
+
+
+@pytest.mark.asyncio
 async def test_read_file_preserves_empty_and_exact_limit_files(tmp_path):
     """Empty and exact-boundary files retain the historical unwrapped result."""
     path = tmp_path / "boundary.txt"

@@ -483,14 +483,60 @@ FS_TOOL_SCHEMAS = [
 ]
 
 
-def build_fs_tool_bindings() -> list[tuple[dict, Callable[..., Awaitable[str]]]]:
+def build_fs_tool_bindings(
+    *, workspace_dir: str | Path | None = None, run_dir: str | Path | None = None
+) -> list[tuple[dict, Callable[..., Awaitable[str]]]]:
     """Build per-run file system tool bindings.
 
-    Only read_new_file_content needs per-run closure state (cursor tracking).
-    All other tools are stateless and reuse the module-level functions.
+    The write bindings also protect the outer coordinator's three workspace
+    journal files. A run may write its own journal below ``run_dir``.
     """
     file_cursors: dict[str, int] = {}
     file_locks: dict[str, asyncio.Lock] = {}
+    protected_paths = (
+        {
+            Path(workspace_dir).expanduser().resolve() / ".claude" / filename
+            for filename in ("current_status.md", "work_log.md", "inbox.md")
+        }
+        if workspace_dir is not None
+        else set()
+    )
+    resolved_run_dir = (
+        Path(run_dir).expanduser().resolve() if run_dir is not None else None
+    )
+
+    def _write_is_allowed(path: str) -> str | None:
+        target = Path(path).expanduser().resolve()
+        if resolved_run_dir is not None and target.is_relative_to(resolved_run_dir):
+            return None
+        if target in protected_paths:
+            journal_dir = (
+                resolved_run_dir / "journal"
+                if resolved_run_dir is not None
+                else "the run journal directory"
+            )
+            return (
+                "ERROR: refusing to write the workspace coordinator journal "
+                f"file {target}; it is read-only for this th run. Write the "
+                f"run journal under {journal_dir} instead."
+            )
+        return None
+
+    async def _write_file(path: str, content: str) -> str:
+        error = _write_is_allowed(path)
+        return error if error else await write_file(path=path, content=content)
+
+    async def _append_file(path: str, content: str) -> str:
+        error = _write_is_allowed(path)
+        return error if error else await append_file(path=path, content=content)
+
+    async def _edit_file(path: str, old: str, new: str) -> str:
+        error = _write_is_allowed(path)
+        return error if error else await edit_file(path=path, old=old, new=new)
+
+    async def _multi_edit_file(path: str, edits: list[dict]) -> str:
+        error = _write_is_allowed(path)
+        return error if error else await multi_edit_file(path=path, edits=edits)
 
     async def _read_new_file_content(path: str) -> str:
         """Read one bounded incremental page using this binding set's state."""
@@ -500,10 +546,10 @@ def build_fs_tool_bindings() -> list[tuple[dict, Callable[..., Awaitable[str]]]]
 
     return [
         (READ_FILE_SCHEMA, read_file),
-        (WRITE_FILE_SCHEMA, write_file),
-        (APPEND_FILE_SCHEMA, append_file),
-        (EDIT_FILE_SCHEMA, edit_file),
-        (MULTI_EDIT_FILE_SCHEMA, multi_edit_file),
+        (WRITE_FILE_SCHEMA, _write_file),
+        (APPEND_FILE_SCHEMA, _append_file),
+        (EDIT_FILE_SCHEMA, _edit_file),
+        (MULTI_EDIT_FILE_SCHEMA, _multi_edit_file),
         (LS_SCHEMA, ls),
         (GLOB_SCHEMA, glob),
         (GREP_SCHEMA, grep),

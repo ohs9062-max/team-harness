@@ -288,6 +288,7 @@ def build_system_prompt(
         getattr(config, "coordinator_prompt", COORDINATOR_PROMPT),
     )
     current_utc_time = datetime.now(timezone.utc).isoformat()
+    run_dir = str(getattr(config, "run_dir", session_output_dir))
     replacements = {
         "allowed_agent_types": ", ".join(allowed_types),
         "cwd": str(getattr(config, "cwd", ".")),
@@ -323,15 +324,27 @@ def build_system_prompt(
 
     # Dynamic run context appended at the very end so that the entire preceding
     # prompt prefix remains identical across executions for prompt prefix caching.
-    if "## Run context" not in prompt:
-        parts.append(
-            "\n".join(
-                [
-                    "## Run context",
-                    f"- Session output directory: {session_output_dir}",
-                    f"- Current UTC time: {current_utc_time}",
-                ]
-            )
+    parts.append(
+        "\n".join(
+            [
+                "## Run context",
+                f"- Session output directory: {session_output_dir}",
+                f"- Coordinator journal directory: {run_dir}/journal",
+                (
+                    "- Write the coordinator journal only to "
+                    f"{run_dir}/journal/current_status.md and "
+                    f"{run_dir}/journal/work_log.md."
+                ),
+                (
+                    "- The workspace journal files "
+                    f"{getattr(config, 'cwd', '.')}/.claude/current_status.md, "
+                    f"{getattr(config, 'cwd', '.')}/.claude/work_log.md, and "
+                    f"{getattr(config, 'cwd', '.')}/.claude/inbox.md are read-only. "
+                    "Never write, edit, append, or replace them."
+                ),
+                f"- Current UTC time: {current_utc_time}",
+            ]
         )
+    )
 
     return "\n\n---\n\n".join(part for part in parts if part)
