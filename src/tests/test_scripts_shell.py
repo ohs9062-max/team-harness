@@ -608,3 +608,237 @@ def test_th_watch_skips_owner_inference_without_work_logs(test_env: dict):
     )
 
     assert not grep_args.exists()
+
+
+def test_th_launch_extracts_verify_sh(test_env: dict):
+    """B. 보조 검수: task.md의 ## 검수 블록을 verify.sh로 저장하고 .th_worktree를 기록."""
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_verify_extract")
+    task_md = task_dir / "task.md"
+    task_md.write_text(
+        "# Test Task\nSome description.\n\n## 검수\n```bash\npytest -q\n```\n",
+        encoding="utf-8",
+    )
+    worktree_dir = test_env["tmp_path"] / "fake_worktree"
+    worktree_dir.mkdir(parents=True, exist_ok=True)
+
+    launch_script = SCRIPTS_DIR / "th-launch.sh"
+    cmd = [
+        str(launch_script),
+        str(task_dir),
+        "codex",
+        "gpt-5.6-terra",
+        "medium",
+        str(worktree_dir),
+    ]
+    res = subprocess.run(cmd, env=test_env["env"], capture_output=True, text=True)
+    assert res.returncode == 0, f"launch failed: {res.stderr}\n{res.stdout}"
+
+    verify_sh = task_dir / "verify.sh"
+    assert verify_sh.is_file(), "verify.sh must be extracted from task.md"
+    assert "pytest -q" in verify_sh.read_text(encoding="utf-8")
+    assert bool(verify_sh.stat().st_mode & stat.S_IXUSR), "verify.sh must be executable"
+
+    worktree_file = task_dir / ".th_worktree"
+    assert worktree_file.is_file()
+    assert worktree_file.read_text(encoding="utf-8").strip() == str(worktree_dir)
+
+
+def test_th_launch_warns_when_no_verify_block(test_env: dict):
+    """B. 보조 검수: ## 검수 블록이 없으면 경고만 하고 정상 진행."""
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_no_verify")
+    launch_script = SCRIPTS_DIR / "th-launch.sh"
+    cmd = [
+        str(launch_script),
+        str(task_dir),
+        "codex",
+        "gpt-5.6-terra",
+        "medium",
+        str(task_dir),
+    ]
+    res = subprocess.run(cmd, env=test_env["env"], capture_output=True, text=True)
+    assert res.returncode == 0
+    assert not (task_dir / "verify.sh").exists()
+    assert "경고" in res.stderr or "warning" in res.stderr.lower()
+
+
+def test_th_watch_runs_verify_success(test_env: dict):
+    """B. 보조 검수: DONE 시 verify.sh 성공하면 VERIFIED 생성 및 알림 문구에 검수 통과 반영."""
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_verify_ok")
+    (task_dir / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
+    (task_dir / ".th_worktree").write_text(str(test_env["workspace"]), encoding="utf-8")
+    (task_dir / "DONE").write_text("Completed\n", encoding="utf-8")
+
+    verify_sh = task_dir / "verify.sh"
+    verify_sh.write_text(
+        "#!/usr/bin/env bash\necho 'tests passed'\nexit 0\n", encoding="utf-8"
+    )
+    verify_sh.chmod(verify_sh.stat().st_mode | stat.S_IEXEC)
+
+    (test_env["watch_dir"] / "tasks.txt").write_text(f"{task_dir}\n", encoding="utf-8")
+
+    watch_script = SCRIPTS_DIR / "th-watch.sh"
+    env = dict(test_env["env"])
+    env["TH_POLL_SEC"] = "1"
+    res = subprocess.run(
+        [str(watch_script), "2"], env=env, capture_output=True, text=True
+    )
+    assert res.returncode == 0
+    assert "완료" in res.stdout
+    assert "검수 통과" in res.stdout
+    assert (task_dir / "VERIFIED").is_file()
+    assert not (task_dir / "VERIFY_FAILED").exists()
+
+
+def test_th_watch_runs_verify_failure(test_env: dict):
+    """B. 보조 검수: DONE 시 verify.sh 실패하면 VERIFY_FAILED 생성 및 알림 문구에 검수 실패 반영."""
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_verify_fail")
+    (task_dir / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
+    (task_dir / ".th_worktree").write_text(str(test_env["workspace"]), encoding="utf-8")
+    (task_dir / "DONE").write_text("Completed\n", encoding="utf-8")
+
+    verify_sh = task_dir / "verify.sh"
+    verify_sh.write_text(
+        "#!/usr/bin/env bash\necho 'assertion error'\nexit 1\n", encoding="utf-8"
+    )
+    verify_sh.chmod(verify_sh.stat().st_mode | stat.S_IEXEC)
+
+    (test_env["watch_dir"] / "tasks.txt").write_text(f"{task_dir}\n", encoding="utf-8")
+
+    watch_script = SCRIPTS_DIR / "th-watch.sh"
+    env = dict(test_env["env"])
+    env["TH_POLL_SEC"] = "1"
+    res = subprocess.run(
+        [str(watch_script), "2"], env=env, capture_output=True, text=True
+    )
+    assert res.returncode == 0
+    assert "완료" in res.stdout
+    assert "검수 실패" in res.stdout
+    assert (task_dir / "VERIFY_FAILED").is_file()
+    content = (task_dir / "VERIFY_FAILED").read_text(encoding="utf-8")
+    assert "assertion error" in content
+
+
+def test_th_watch_runs_verify_none(test_env: dict):
+    """B. 보조 검수: verify.sh가 없으면 알림 문구에 검수 없음 반영."""
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_verify_none")
+    (task_dir / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
+    (task_dir / "DONE").write_text("Completed\n", encoding="utf-8")
+    (test_env["watch_dir"] / "tasks.txt").write_text(f"{task_dir}\n", encoding="utf-8")
+
+    watch_script = SCRIPTS_DIR / "th-watch.sh"
+    env = dict(test_env["env"])
+    env["TH_POLL_SEC"] = "1"
+    res = subprocess.run(
+        [str(watch_script), "2"], env=env, capture_output=True, text=True
+    )
+    assert res.returncode == 0
+    assert "완료" in res.stdout
+    assert "검수 없음" in res.stdout
+
+
+def test_th_watch_verify_common_checks_root_md(test_env: dict):
+    """B. 보조 검수 공통 검사: 저장소 루트에 새 *.md/RESULTS.md/WORKLOG.md 생성 시 VERIFY_FAILED."""
+    repo_dir = test_env["tmp_path"] / "git_repo"
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["git", "init", "-b", "main", str(repo_dir)], check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "-C", str(repo_dir), "commit", "--allow-empty", "-m", "init"],
+        check=True,
+        capture_output=True,
+    )
+
+    # Place untracked RESULTS.md at repository root
+    (repo_dir / "RESULTS.md").write_text("leak at root\n", encoding="utf-8")
+
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_verify_leak")
+    (task_dir / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
+    (task_dir / ".th_worktree").write_text(str(repo_dir), encoding="utf-8")
+    (task_dir / "DONE").write_text("Completed\n", encoding="utf-8")
+
+    verify_sh = task_dir / "verify.sh"
+    verify_sh.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    verify_sh.chmod(verify_sh.stat().st_mode | stat.S_IEXEC)
+
+    (test_env["watch_dir"] / "tasks.txt").write_text(f"{task_dir}\n", encoding="utf-8")
+
+    watch_script = SCRIPTS_DIR / "th-watch.sh"
+    env = dict(test_env["env"])
+    env["TH_POLL_SEC"] = "1"
+    res = subprocess.run(
+        [str(watch_script), "2"], env=env, capture_output=True, text=True
+    )
+    assert res.returncode == 0
+    assert "검수 실패" in res.stdout
+    assert (task_dir / "VERIFY_FAILED").is_file()
+    content = (task_dir / "VERIFY_FAILED").read_text(encoding="utf-8")
+    assert "RESULTS.md" in content
+
+
+def test_th_watch_verify_uv_lock_warning_not_failure(test_env: dict):
+    """B. 보조 검수 공통 검사: uv.lock 변경은 금지가 아니라 '검토 필요' 경고로 VERIFIED 처리."""
+    repo_dir = test_env["tmp_path"] / "git_repo_lock"
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["git", "init", "-b", "main", str(repo_dir)], check=True, capture_output=True
+    )
+    (repo_dir / "uv.lock").write_text("lock v1\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo_dir), "add", "uv.lock"], check=True)
+    subprocess.run(["git", "-C", str(repo_dir), "commit", "-m", "add lock"], check=True)
+
+    # Modify uv.lock
+    (repo_dir / "uv.lock").write_text("lock v2 modified\n", encoding="utf-8")
+
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_verify_uv_lock")
+    (task_dir / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
+    (task_dir / ".th_worktree").write_text(str(repo_dir), encoding="utf-8")
+    (task_dir / "DONE").write_text("Completed\n", encoding="utf-8")
+
+    verify_sh = task_dir / "verify.sh"
+    verify_sh.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    verify_sh.chmod(verify_sh.stat().st_mode | stat.S_IEXEC)
+
+    (test_env["watch_dir"] / "tasks.txt").write_text(f"{task_dir}\n", encoding="utf-8")
+
+    watch_script = SCRIPTS_DIR / "th-watch.sh"
+    env = dict(test_env["env"])
+    env["TH_POLL_SEC"] = "1"
+    res = subprocess.run(
+        [str(watch_script), "2"], env=env, capture_output=True, text=True
+    )
+    assert res.returncode == 0
+    assert "검수 통과" in res.stdout
+    assert (task_dir / "VERIFIED").is_file()
+    content = (task_dir / "VERIFIED").read_text(encoding="utf-8")
+    assert "uv.lock" in content
+    assert "검토 필요" in content or "warning" in content.lower()
+
+
+def test_th_status_shows_verify_column(test_env: dict):
+    """B. 보조 검수: th-status.sh에 '검수' 열이 추가되고 상태가 표시됨."""
+    task_ok = _create_task_dir(test_env["tmp_path"], "status_task_ok")
+    (task_ok / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
+    (task_ok / "DONE").write_text("Done\n", encoding="utf-8")
+    (task_ok / "VERIFIED").write_text("All passed\n", encoding="utf-8")
+
+    task_fail = _create_task_dir(test_env["tmp_path"], "status_task_fail")
+    (task_fail / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
+    (task_fail / "DONE").write_text("Done\n", encoding="utf-8")
+    (task_fail / "VERIFY_FAILED").write_text("Failed\n", encoding="utf-8")
+
+    task_none = _create_task_dir(test_env["tmp_path"], "status_task_none")
+    (task_none / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
+    (task_none / "DONE").write_text("Done\n", encoding="utf-8")
+
+    tasks_txt = test_env["watch_dir"] / "tasks.txt"
+    tasks_txt.write_text(f"{task_ok}\n{task_fail}\n{task_none}\n", encoding="utf-8")
+
+    status_script = SCRIPTS_DIR / "th-status.sh"
+    res = subprocess.run(
+        [str(status_script)], env=test_env["env"], capture_output=True, text=True
+    )
+    assert res.returncode == 0
+    assert "검수" in res.stdout
+    assert "통과" in res.stdout
+    assert "실패" in res.stdout

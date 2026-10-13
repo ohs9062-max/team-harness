@@ -354,7 +354,20 @@ if not valid_tasks:
     print("등록 작업 없음")
     sys.exit(0)
 
-headers = ["작업", "내용", "상태", "마지막 변화", "완료 예상", "진행"]
+def get_verify_status(task_dir):
+    verified_file = os.path.join(task_dir, "VERIFIED")
+    failed_file = os.path.join(task_dir, "VERIFY_FAILED")
+    verify_sh = os.path.join(task_dir, "verify.sh")
+
+    if os.path.isfile(verified_file):
+        return "통과"
+    elif os.path.isfile(failed_file):
+        return "실패"
+    elif os.path.isfile(verify_sh):
+        return "대기"
+    return "-"
+
+headers = ["작업", "내용", "상태", "검수", "마지막 변화", "완료 예상", "진행"]
 rows = []
 now_ts = time.time()
 
@@ -414,39 +427,41 @@ for task in valid_tasks:
     
     task_name = get_task_name(task)
     title = get_task_title(task)
+    v_status = get_verify_status(task)
     prog = get_progress(task)
     eta = estimate_eta(task, state, now_ts)
     
-    rows.append([task_name, title, state, age_str, eta, prog])
+    rows.append([task_name, title, state, v_status, age_str, eta, prog])
 
-raw_w = [max(str_width(headers[i]), max((str_width(r[i]) for r in rows), default=0)) for i in range(6)]
+raw_w = [max(str_width(headers[i]), max((str_width(r[i]) for r in rows), default=0)) for i in range(7)]
 
-w0 = min(max(raw_w[0], str_width(headers[0])), 26)
+w0 = min(max(raw_w[0], str_width(headers[0])), 24)
 w2 = min(max(raw_w[2], str_width(headers[2])), 8)
-w3 = min(max(raw_w[3], str_width(headers[3])), 11)
-w4 = min(max(raw_w[4], str_width(headers[4])), 15)
+w3 = min(max(raw_w[3], str_width(headers[3])), 6)
+w4 = min(max(raw_w[4], str_width(headers[4])), 11)
+w5 = min(max(raw_w[5], str_width(headers[5])), 15)
 
-budget = 101 - w0 - w2 - w3 - w4
+budget = 101 - w0 - w2 - w3 - w4 - w5
 w1_req = raw_w[1]
-w5_req = raw_w[5]
+w6_req = raw_w[6]
 
-if w1_req + w5_req <= budget:
+if w1_req + w6_req <= budget:
     w1 = w1_req
-    w5 = w5_req
+    w6 = w6_req
 else:
     w1_cap = max(10, int(budget * 0.40))
-    w5_cap = budget - w1_cap
+    w6_cap = budget - w1_cap
     if w1_req < w1_cap:
         w1 = w1_req
-        w5 = min(w5_req, budget - w1)
-    elif w5_req < w5_cap:
-        w5 = w5_req
-        w1 = min(w1_req, budget - w5)
+        w6 = min(w6_req, budget - w1)
+    elif w6_req < w6_cap:
+        w6 = w6_req
+        w1 = min(w1_req, budget - w6)
     else:
         w1 = w1_cap
-        w5 = w5_cap
+        w6 = w6_cap
 
-widths = [w0, w1, w2, w3, w4, w5]
+widths = [w0, w1, w2, w3, w4, w5, w6]
 
 def render_row(cols):
     cells = [fit_width(c, w) for c, w in zip(cols, widths)]

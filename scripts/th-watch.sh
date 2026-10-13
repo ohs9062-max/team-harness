@@ -38,6 +38,10 @@ case "$stall_sec" in (*[!0-9]*|'') stall_sec=600 ;; esac
 case "$max_wait" in (*[!0-9]*|'') max_wait=21600 ;; esac
 deadline=$(( $(date +%s) + max_wait ))
 
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=scripts/th-watch-lib.sh
+source "$script_dir/th-watch-lib.sh"
+
 pid_alive() { [[ $1 =~ ^[1-9][0-9]*$ ]] && kill -0 "$1" 2>/dev/null; }
 
 cpu_ticks() {
@@ -139,7 +143,8 @@ while (( $(date +%s) < deadline )); do
       if [[ ! -f $marker.done ]]; then
         touch "$marker.done"
         remove_task "$task"
-        notify "$name" '완료'
+        v_res=$(run_verification "$task")
+        notify "$name" "완료 (검수 $v_res)"
       fi
       continue
     fi

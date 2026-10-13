@@ -86,6 +86,25 @@ mkdir -p "$watch_dir"; touch "$watch_dir/tasks.txt"
 rm -f "$task_dir"/DONE "$task_dir"/FAILED "$task_dir"/.th_* "$task_dir"/job.pid
 # 이 작업을 띄운 작업 공간. th-watch는 소유자 작업만 알린다(다른 코디네이터 사건을 가로채지 않게).
 printf '%s\n' "$journal_workspace" > "$task_dir/.th_owner"
+printf '%s\n' "$worktree" > "$task_dir/.th_worktree"
+
+# 보조 검수: task.md의 ## 검수 블록을 verify.sh로 저장 (없으면 경고만)
+verify_script="$task_dir/verify.sh"
+rm -f "$verify_script"
+awk '
+  /^##[[:space:]]+검수/ { in_verify=1; next }
+  in_verify && /^```bash/ { in_code=1; next }
+  in_code && /^```/ { exit }
+  in_code { print }
+' "$task_dir/task.md" > "$verify_script" || true
+
+if [[ -s "$verify_script" ]]; then
+  chmod +x "$verify_script"
+else
+  rm -f "$verify_script"
+  printf 'warning: task.md에 ## 검수 블록 없음 (보조 검수 생략)\n' >&2
+fi
+
 prompt="$(<"$task_dir/task.md")
 
 ---
