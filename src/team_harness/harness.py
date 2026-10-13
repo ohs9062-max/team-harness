@@ -53,7 +53,6 @@ from team_harness.ui.console import ConsoleBase
 from team_harness.ui.console import make_console
 
 _WORKER_SIGTERM_GRACE_S = 1.0
-_WORKER_SWEEP_GRACE_S = 3.5
 
 
 class TeamHarness:
@@ -716,15 +715,20 @@ async def _graceful_shutdown(
 ) -> None:
     """Wait for workers, terminate stragglers, and persist terminal states."""
 
+    loop = asyncio.get_running_loop()
+    total_budget = timeout + terminate_wait
+    deadline = loop.time() + max(0.005, total_budget - 0.05)
+
     manager.poll_exit_codes()
     running = [state.id for state in manager.list_all() if state.status == "running"]
     if running:
+        natural_wait = max(0.001, min(timeout, deadline - loop.time()))
         try:
             await asyncio.wait_for(
                 asyncio.gather(
                     *(manager.wait_one(agent_id=agent_id) for agent_id in running)
                 ),
-                timeout=timeout,
+                timeout=natural_wait,
             )
         except asyncio.TimeoutError:
             manager.poll_exit_codes()
@@ -749,6 +753,10 @@ async def _graceful_shutdown(
                 state.status = "killed"
                 stragglers.append(agent_id)
             if stragglers:
+                remaining_for_stragglers = max(0.002, deadline - loop.time())
+                straggler_budget = min(
+                    terminate_wait * 0.4, remaining_for_stragglers * 0.4
+                )
                 try:
                     await asyncio.wait_for(
                         asyncio.gather(
@@ -757,7 +765,7 @@ async def _graceful_shutdown(
                                 for agent_id in stragglers
                             )
                         ),
-                        timeout=terminate_wait,
+                        timeout=straggler_budget,
                     )
                 except asyncio.TimeoutError:
                     pass
@@ -775,9 +783,16 @@ async def _graceful_shutdown(
     # phase above. Escalate to a verified group kill for every trusted pgid.
     sweep_targets = [state.id for state in manager.list_all() if state.pgid is not None]
     if sweep_targets:
+        remaining_for_sweep = max(0.002, deadline - loop.time())
+        sweep_term_wait = min(terminate_wait * 0.2, remaining_for_sweep * 0.3)
+        sweep_kill_wait = max(0.001, remaining_for_sweep - sweep_term_wait - 0.01)
         sweep_results = await asyncio.gather(
             *(
-                manager.ensure_group_dead(agent_id=agent_id, term_wait_s=terminate_wait)
+                manager.ensure_group_dead(
+                    agent_id=agent_id,
+                    term_wait_s=sweep_term_wait,
+                    kill_wait_s=sweep_kill_wait,
+                )
                 for agent_id in sweep_targets
             )
         )
@@ -851,9 +866,7 @@ async def _finalize_run(
         ),
         name="team-harness-worker-shutdown",
     )
-    shutdown_phase_timeout_s = (
-        shutdown_timeout_s + _WORKER_SIGTERM_GRACE_S + _WORKER_SWEEP_GRACE_S
-    )
+    shutdown_phase_timeout_s = shutdown_timeout_s + _WORKER_SIGTERM_GRACE_S
     shutdown_done, _ = await asyncio.wait(
         (shutdown_task,), timeout=shutdown_phase_timeout_s
     )
