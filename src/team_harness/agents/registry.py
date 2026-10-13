@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import os
 import shutil
 import warnings
@@ -8,6 +9,32 @@ from team_harness.agents.template import AgentTemplate
 from team_harness.agents.template import DEFAULT_AGENT_TEMPLATES
 from team_harness.agents.template import render_reasoning_effort_flags
 from team_harness.config import Config
+
+
+def _strip_mcp_isolation(template: AgentTemplate) -> AgentTemplate:
+    """Remove preamble-isolating MCP/config flags when the coordinator opts out."""
+    flags = list(template.shared_flags)
+    new_flags: list[str] = []
+    i = 0
+    while i < len(flags):
+        if flags[i] in {"--strict-mcp-config", "--ignore-user-config"}:
+            i += 1
+            continue
+        if (
+            flags[i] == "-c"
+            and i + 1 < len(flags)
+            and flags[i + 1] in {"mcp_servers={}", 'mcp_servers="{}"'}
+        ):
+            i += 2
+            continue
+        new_flags.append(flags[i])
+        i += 1
+    dedup = tuple(
+        f
+        for f in template.deduplicate_flags
+        if f not in {"--strict-mcp-config", "--ignore-user-config"}
+    )
+    return replace(template, shared_flags=tuple(new_flags), deduplicate_flags=dedup)
 
 
 def all_agent_types(config: Config) -> list[str]:
@@ -21,11 +48,16 @@ def all_agent_types(config: Config) -> list[str]:
 
 def resolve_template(agent_type: str, config: Config) -> AgentTemplate:
     user_template = config.agent_templates.get(agent_type)
-    if user_template is not None:
-        return user_template
-    if agent_type not in DEFAULT_AGENT_TEMPLATES:
+    template = (
+        user_template
+        if user_template is not None
+        else DEFAULT_AGENT_TEMPLATES.get(agent_type)
+    )
+    if template is None:
         raise ValueError(f"Unknown agent type {agent_type!r}")
-    return DEFAULT_AGENT_TEMPLATES[agent_type]
+    if not (config.worker_isolate_mcp and config.worker_strict_preamble):
+        template = _strip_mcp_isolation(template)
+    return template
 
 
 def _substitute_template_token(

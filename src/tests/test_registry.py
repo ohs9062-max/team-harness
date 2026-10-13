@@ -24,6 +24,7 @@ def test_build_command_default_codex_fresh():
         "--dangerously-bypass-approvals-and-sandbox",
         "--skip-git-repo-check",
         "--json",
+        "--ignore-user-config",
         "--model",
         "gpt-5.6-sol",
         "do thing",
@@ -46,11 +47,25 @@ def test_build_command_default_codex_resume():
         "--dangerously-bypass-approvals-and-sandbox",
         "--skip-git-repo-check",
         "--json",
+        "--ignore-user-config",
         "--model",
         "gpt-5.6-sol",
         "sid-123",
         "continue",
     ]
+
+
+def test_build_command_worker_isolate_mcp_opt_out():
+    config_opted_out = Config(worker_isolate_mcp=False)
+    codex_cmd = build_command(
+        agent_type="codex", prompt="test", config=config_opted_out
+    )
+    claude_cmd = build_command(
+        agent_type="claude", prompt="test", config=config_opted_out
+    )
+
+    assert "--ignore-user-config" not in codex_cmd
+    assert "--strict-mcp-config" not in claude_cmd
 
 
 def test_build_command_codex_explicit_model_overrides_default():
@@ -339,6 +354,7 @@ def test_build_command_default_claude_contains_verbose():
         "--output-format",
         "stream-json",
         "--verbose",
+        "--strict-mcp-config",
         "review",
     ]
 

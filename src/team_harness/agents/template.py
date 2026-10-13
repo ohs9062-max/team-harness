@@ -72,6 +72,7 @@ DEFAULT_AGENT_TEMPLATES: dict[str, AgentTemplate] = {
             "--dangerously-bypass-approvals-and-sandbox",
             "--skip-git-repo-check",
             "--json",
+            "--ignore-user-config",
         ),
         resume_prefix=("resume",),
         resume_flags=("{session_id}",),
@@ -81,6 +82,7 @@ DEFAULT_AGENT_TEMPLATES: dict[str, AgentTemplate] = {
             "--dangerously-bypass-approvals-and-sandbox",
             "--skip-git-repo-check",
             "--json",
+            "--ignore-user-config",
         ),
         # Codex expresses reasoning effort via its generic -c override.
         reasoning_effort_flag=("-c", "model_reasoning_effort={effort}"),
@@ -110,6 +112,7 @@ DEFAULT_AGENT_TEMPLATES: dict[str, AgentTemplate] = {
             "--output-format",
             "stream-json",
             "--verbose",
+            "--strict-mcp-config",
         ),
         resume_flags=("--resume", "{session_id}"),
         model_flag="--model",
@@ -127,7 +130,12 @@ DEFAULT_AGENT_TEMPLATES: dict[str, AgentTemplate] = {
             "ANTHROPIC_DEFAULT_SONNET_MODEL",
             "ANTHROPIC_DEFAULT_OPUS_MODEL",
         ),
-        deduplicate_flags=("-p", "--dangerously-skip-permissions", "--verbose"),
+        deduplicate_flags=(
+            "-p",
+            "--dangerously-skip-permissions",
+            "--verbose",
+            "--strict-mcp-config",
+        ),
         # Claude Code exposes reasoning effort via --effort.
         reasoning_effort_flag=("--effort", "{effort}"),
         session_capture=SessionCapture(

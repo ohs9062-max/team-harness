@@ -309,3 +309,19 @@ Jev 요청 자체의 입력 비용과 지연이 추가되므로 `run.json.decisi
 실제 usage를 함께 비교해야 합니다. 기능을 켜면 최근 메시지의 제한된 부분이 설정한 외부
 endpoint로 전송됩니다. MODE A의 사용자 선택, MODE C의 CHECK/REVIEW, TH-D18의 agent family
 고정, TH-D2의 one-shot worker 수명은 유지됩니다.
+
+## TH-D25. 워커 기본 템플릿의 MCP·설정 상속 차단과 preamble 격리
+
+**결정.**
+워커 에이전트 서브프로세스가 부모 환경의 불필요한 MCP 서버, 외부 도구 스키마, 사용자 전역 설정을 무분별하게 상속하여 preamble 토큰을 낭비하는 것을 막기 위해, 내장 기본 템플릿(`DEFAULT_AGENT_TEMPLATES`)에 CLI별 격리 옵션을 기본 활성화합니다.
+- Claude Code 워커: `--strict-mcp-config` (외부 전역/프로젝트 MCP 설정을 무시하고 격리)
+- Codex 워커: `-c mcp_servers={}` (외부 MCP 서버 상속 차단)
+- 이 격리 동작은 `Config.worker_isolate_mcp` (또는 `worker_strict_preamble`, 기본값: `True`) 설정을 통해 `config.toml`이나 환경 변수(`TEAM_HARNESS_WORKER_ISOLATE_MCP=false`)로 언제든 옵트아웃(비활성화)할 수 있습니다.
+
+**맥락.**
+워커 서브프로세스는 독립적인 일회성 작업(TH-D2)을 수행하지만, 기본적으로 사용자 환경(`~/.claude/`, `~/.codex/config.toml` 등)에 등록된 모든 전역 MCP 도구 정의를 그대로 시스템 프롬프트/도구 스키마로 로드합니다. 이는 워커 호출마다 수천~수만 토큰의 preamble 비용을 누적시키며, 불필요한 도구 스키마로 인해 모델 환각 및 컨텍스트 낭비를 유발합니다. 실제로 team-harness 워커는 파일 조작과 쉘 실행 등 기본 제공 도구 또는 CLI 고유 기능만 필요로 하므로, 외부 MCP 서버를 상속받지 않도록 차단하는 것이 토큰 절감과 실행 안정성 모두에 유리합니다.
+
+**결과.**
+- 워커 호출 시 불필요한 MCP 서버 도구 스키마가 주입되지 않아 워커당 첫 턴 및 후속 턴의 입력 토큰이 크게 절감됩니다.
+- 기존 외부 MCP 도구가 필요한 특수 워커의 경우 `config.toml`에서 `worker_isolate_mcp = false`로 옵트아웃하거나, 해당 에이전트 블록의 `shared_flags`를 오버라이드하여 명시적으로 MCP를 활성화할 수 있습니다.
+- `resolve_template`은 옵트아웃 시 자동으로 해당 격리 플래그를 제거하므로 공개 API 및 템플릿 계약(`AgentTemplate`, `Config`)의 하위 호환성은 완벽히 유지됩니다.

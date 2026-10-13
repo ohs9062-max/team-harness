@@ -39,6 +39,7 @@ def test_parse_structured_template_fields():
             "--dangerously-bypass-approvals-and-sandbox",
             "--skip-git-repo-check",
             "--json",
+            "--ignore-user-config",
         ),
         reasoning_effort_flag=("-c", "model_reasoning_effort={effort}"),
         session_capture=SessionCapture(

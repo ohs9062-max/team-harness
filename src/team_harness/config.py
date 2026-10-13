@@ -68,6 +68,9 @@ class Config:
     min_agent_lifetime_before_kill_s: float = 600.0
     allowed_agents: list[str] | None = None
     agent_templates: dict[str, AgentTemplate] = field(default_factory=dict)
+    # Isolate worker MCP / preamble inheritance to reduce worker overhead (TH-D25).
+    worker_isolate_mcp: bool = True
+    worker_strict_preamble: bool = True
     # Optional prebuilt code graph for workers (TH-D22). Off by default.
     context_graph: ContextGraphSettings = field(default_factory=ContextGraphSettings)
     # Optional System One decision layer for reducing coordinator tool schemas.
@@ -131,6 +134,7 @@ shared_flags = [
     "--dangerously-bypass-approvals-and-sandbox",
     "--skip-git-repo-check",
     "--json",
+    "--ignore-user-config",
 ]
 resume_prefix = ["resume"]
 resume_flags = ["{session_id}"]
@@ -140,6 +144,7 @@ deduplicate_flags = [
     "--dangerously-bypass-approvals-and-sandbox",
     "--skip-git-repo-check",
     "--json",
+    "--ignore-user-config",
 ]
 reasoning_effort_flag = ["-c", "model_reasoning_effort={effort}"]
 # reasoning_effort = "high"   # uncomment to pin a level (low|medium|high|xhigh)
@@ -205,6 +210,7 @@ shared_flags = [
     "--dangerously-skip-permissions",
     "--output-format", "stream-json",
     "--verbose",
+    "--strict-mcp-config",
 ]
 resume_flags = ["--resume", "{session_id}"]
 model_flag = "--model"
@@ -217,6 +223,7 @@ deduplicate_flags = [
     "-p",
     "--dangerously-skip-permissions",
     "--verbose",
+    "--strict-mcp-config",
 ]
 reasoning_effort_flag = ["--effort", "{effort}"]
 # default_model = "claude-sonnet-4-6"   # uncomment to pin a default
@@ -1544,6 +1551,30 @@ def load_config(
             coordinator,
             "min_agent_lifetime_before_kill_s",
             Config.min_agent_lifetime_before_kill_s,
+        ),
+        worker_isolate_mcp=(
+            os.environ.get("TEAM_HARNESS_WORKER_ISOLATE_MCP", "").strip().lower()
+            in _TRUE_STRINGS
+            if os.environ.get("TEAM_HARNESS_WORKER_ISOLATE_MCP", "").strip()
+            else _coordinator_bool(
+                coordinator,
+                "worker_isolate_mcp",
+                _coordinator_bool(
+                    coordinator, "worker_strict_preamble", Config.worker_isolate_mcp
+                ),
+            )
+        ),
+        worker_strict_preamble=(
+            os.environ.get("TEAM_HARNESS_WORKER_ISOLATE_MCP", "").strip().lower()
+            in _TRUE_STRINGS
+            if os.environ.get("TEAM_HARNESS_WORKER_ISOLATE_MCP", "").strip()
+            else _coordinator_bool(
+                coordinator,
+                "worker_isolate_mcp",
+                _coordinator_bool(
+                    coordinator, "worker_strict_preamble", Config.worker_isolate_mcp
+                ),
+            )
         ),
         allowed_agents=cli_allowed_agents
         if cli_allowed_agents is not None

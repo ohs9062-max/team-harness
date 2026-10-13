@@ -77,6 +77,7 @@ def test_spawn_agent_schema_describes_template_default_flags(config):
     assert "--dangerously-bypass-approvals-and-sandbox" in codex_line
     assert "--skip-git-repo-check" in codex_line
     assert "--json" in codex_line
+    assert "--ignore-user-config" in codex_line
     assert "gpt-5.6-sol" in codex_line
     assert "--dangerously-skip-permissions" not in codex_line
     assert "--output-format" not in codex_line
@@ -87,6 +88,7 @@ def test_spawn_agent_schema_describes_template_default_flags(config):
     assert "--output-format" in claude_line
     assert "stream-json" in claude_line
     assert "--verbose" in claude_line
+    assert "--strict-mcp-config" in claude_line
     assert "--dangerously-bypass-approvals-and-sandbox" not in claude_line
     assert "--skip-git-repo-check" not in claude_line
 
