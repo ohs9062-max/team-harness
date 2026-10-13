@@ -59,6 +59,13 @@ fi
 watch_dir=${TH_WATCH_DIR:-"$HOME/.team-harness/watch"}
 # 동기화된 전역 사본만 사용한다. 임의의 오래된 경로를 override하지 않는다.
 suffix=${TH_WORKER_SUFFIX:-"$HOME/.team-harness/worker_suffix.md"}
+# 쿼터·용량 오류 뒤에는 같은 종류 워커를 새로 띄우지 않는다(th-watch가 잠금 생성).
+quota_lock="$watch_dir/quota_lock.$worker_type"
+if [[ -f $quota_lock && ${TH_IGNORE_QUOTA_LOCK:-0} != 1 ]]; then
+  echo "쿼터 잠금으로 $worker_type 실행 거부: $(cat "$quota_lock")"
+  echo "쿼터가 풀렸으면 rm '$quota_lock' 후 다시 실행"
+  exit 3
+fi
 [[ -f $task_dir/task.md ]] || { echo "task.md 없음: $task_dir"; exit 1; }
 [[ -f $suffix ]] || { echo "worker_suffix.md 없음(최신 정책을 붙일 수 없음): $suffix"; exit 1; }
 journal_append

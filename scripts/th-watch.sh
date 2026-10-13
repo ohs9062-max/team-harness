@@ -129,7 +129,11 @@ while (( $(date +%s) < deadline )); do
     if [[ -n $log_file && ! -f $marker.quota ]]; then
       touch "$marker.quota" "$marker.dead"
       line=$(grep -iE '^ERROR: ' "$log_file" | grep -vE '^ERROR: test_' | grep -iE '(quota|rate limit|usage limit|at capacity|capacity exceeded)' | tail -n 1 | cut -c1-180)
-      notify "$name" "워커 오류(쿼터·용량) — $line"
+      # 같은 종류 워커의 새 실행을 막는다(th-launch가 확인). 해제는 파일 삭제.
+      lock_type=$(basename "$log_file" .log)
+      [[ $lock_type == worker ]] && lock_type=unknown
+      printf '%s | %s | %s\n' "$(date '+%F %R')" "$task" "$line" > "$watch_dir/quota_lock.$lock_type"
+      notify "$name" "워커 오류(쿼터·용량) — $line (새 $lock_type 실행 잠금: $watch_dir/quota_lock.$lock_type)"
     fi
 
     # 4. 프로세스 상태 확인 (job.pid / worker.pid)
