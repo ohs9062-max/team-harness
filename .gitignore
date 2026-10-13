@@ -11,3 +11,6 @@ Makefile
 .mcp.json
 
 .idea/
+
+# th run/repl session outputs (config output_dir default)
+_outputs/
