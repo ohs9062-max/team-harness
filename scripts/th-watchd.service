@@ -1,0 +1,13 @@
+[Unit]
+Description=team-harness watch daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/rang/team-harness/scripts/th-watchd.sh
+Restart=always
+RestartSec=5
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:%h/.local/bin:%h/.cargo/bin
+
+[Install]
+WantedBy=default.target

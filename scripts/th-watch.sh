@@ -110,118 +110,24 @@ latest_signature() {
     sort -n | tail -n 1 | cut -d. -f1
 }
 
+handle_watch_event() {
+  local task=$1 event_type=$2 summary=$3 v_res=$4 owner=$5
+  local name=${task#"$HOME"/}
+  if [[ $event_type == "완료" ]]; then
+    remove_task "$task"
+    notify "$name" "완료 (검수 $v_res)"
+  elif [[ $event_type == "실패" || $event_type == "워커 오류(쿼터·용량)" || $event_type == "중단" ]]; then
+    remove_task "$task"
+    notify "$name" "$summary"
+  elif [[ $event_type == "멈춤" ]]; then
+    notify "$name" "$summary"
+  fi
+}
+
 while (( $(date +%s) < deadline )); do
   while IFS= read -r task || [[ -n $task ]]; do
     [[ -n $task && -d $task ]] || continue
-    name=${task#"$HOME"/}
-    marker="$task/.th_notified"
-    # 다른 작업 공간이 띄운 작업은 그쪽 감시자 몫이다. 표시·등록부를 건드리지 않는다.
-    # 쿼터 오류는 알리지 않고 quota_lock만 만든다(모든 th-launch가 공유).
-    owner=$(cat "$task/.th_owner" 2>/dev/null || true)
-    # 소유자 파일 이전 작업: 이 작업 공간 작업일지에 th-launch 지시 기록이 있으면 내 것.
-    if [[ -z $owner ]]; then
-      journal_logs=("$(dirname "$journal_log")"/work_log*.md)
-      if (( ${#journal_logs[@]} > 0 )) && grep -qsF "| $task |" "${journal_logs[@]}"; then
-        owner=$journal_workspace
-      else
-        owner="(unknown)"
-      fi
-    fi
-    if [[ -n $owner && $owner != "$journal_workspace" ]]; then
-      for cand in "$task/codex.log" "$task/agy.log" "$task/claude.log"; do
-        [[ -f $cand ]] || continue
-        lock="$watch_dir/quota_lock.$(basename "$cand" .log)"
-        [[ -f $lock || -f $task/DONE || -f $task/FAILED ]] && continue
-        qline=$(grep -iE '^ERROR: ' "$cand" 2>/dev/null | grep -vE '^ERROR: test_' | grep -iE '(quota|rate limit|usage limit|at capacity|capacity exceeded)' | tail -n 1 | cut -c1-180)
-        [[ -n $qline ]] && printf '%s | %s | %s\n' "$(date '+%F %R')" "$task" "$qline" > "$lock"
-      done
-      continue
-    fi
-
-    # 1. 완료 판정
-    if [[ -f $task/DONE ]]; then
-      if [[ ! -f $marker.done ]]; then
-        touch "$marker.done"
-        remove_task "$task"
-        v_res=$(run_verification "$task")
-        notify "$name" "완료 (검수 $v_res)"
-      fi
-      continue
-    fi
-
-    # 2. 실패 판정
-    if [[ -f $task/FAILED ]]; then
-      if [[ ! -f $marker.failed ]]; then
-        touch "$marker.failed"
-        remove_task "$task"
-        reason=$(tail -n 5 "$task/FAILED" 2>/dev/null | tr '\n' ' ')
-        notify "$name" "실패 — $reason"
-      fi
-      continue
-    fi
-
-    # 3. 워커 오류(쿼터·용량) - ERROR: test_x 오탐 방지
-    log_file=""
-    for cand in "$task/codex.log" "$task/agy.log" "$task/claude.log" "$task/worker.log"; do
-      [[ -f $cand ]] || continue
-      if grep -iE '^ERROR: ' "$cand" 2>/dev/null | grep -vE '^ERROR: test_' | grep -qiE '(quota|rate limit|usage limit|at capacity|capacity exceeded)'; then
-        log_file=$cand
-        break
-      fi
-    done
-    if [[ -n $log_file && ! -f $marker.quota ]]; then
-      touch "$marker.quota" "$marker.dead"
-      line=$(grep -iE '^ERROR: ' "$log_file" | grep -vE '^ERROR: test_' | grep -iE '(quota|rate limit|usage limit|at capacity|capacity exceeded)' | tail -n 1 | cut -c1-180)
-      # 같은 종류 워커의 새 실행을 막는다(th-launch가 확인). 해제는 파일 삭제.
-      lock_type=$(basename "$log_file" .log)
-      [[ $lock_type == worker ]] && lock_type=unknown
-      printf '%s | %s | %s\n' "$(date '+%F %R')" "$task" "$line" > "$watch_dir/quota_lock.$lock_type"
-      remove_task "$task"
-      notify "$name" "워커 오류(쿼터·용량) — $line (새 $lock_type 실행 잠금: $watch_dir/quota_lock.$lock_type)"
-    fi
-
-    # 4. 프로세스 상태 확인 (job.pid / worker.pid)
-    job_pid=$(cat "$task/job.pid" 2>/dev/null || true)
-    worker_pid=$(cat "$task/worker.pid" 2>/dev/null || true)
-    alive_pids=()
-
-    pid_alive "$job_pid" && alive_pids+=("$job_pid")
-    pid_alive "$worker_pid" && alive_pids+=("$worker_pid")
-
-    if (( ${#alive_pids[@]} == 0 )); then
-      if [[ -f $task/DONE || -f $task/FAILED ]]; then
-        continue
-      fi
-      if [[ ! -f $marker.dead ]]; then
-        touch "$marker.dead"
-        remove_task "$task"
-        notify "$name" '중단 — 실행 중인 프로세스 없음, DONE/FAILED 없음'
-      fi
-      continue
-    fi
-
-    rm -f "$marker.dead"
-
-    # 5. 멈춤(stall) 판정: CPU와 산출물 파일 무변화
-    cpu=0
-    for pid in "${alive_pids[@]}"; do cpu=$(( cpu + $(cpu_ticks "$pid") )); done
-    newest=$(latest_signature "$task")
-    signature="$cpu:$newest"
-    state_file="$task/.th_sig"
-    previous=""
-    [[ -f $state_file ]] && previous=$(<"$state_file")
-    now=$(date +%s)
-
-    if [[ ${previous%%|*} != "$signature" ]]; then
-      rm -f "$marker.stall"
-      printf '%s|%s\n' "$signature" "$now" > "$state_file"
-    else
-      since=${previous##*|}
-      if [[ $since =~ ^[0-9]+$ ]] && (( now - since >= stall_sec )) && [[ ! -f $marker.stall ]]; then
-        touch "$marker.stall"
-        notify "$name" "멈춤 — CPU·산출물 $(( now - since ))s 변화 없음(프로세스는 살아 있음)"
-      fi
-    fi
+    inspect_task_event "$task" "$watch_dir" ".th_notified" "$stall_sec" "$journal_workspace" handle_watch_event
   done < "$registry"
   sleep "$poll_sec"
 done

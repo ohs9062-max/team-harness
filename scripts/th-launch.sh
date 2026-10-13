@@ -160,4 +160,14 @@ fi
   flock -x 200
   grep -qxF "$task_dir" "$watch_dir/tasks.txt" 2>/dev/null || printf '%s\n' "$task_dir" >> "$watch_dir/tasks.txt"
 ) 200>"$watch_dir/tasks.lock"
+
+# 상시 감시 데몬: 데몬이 없으면 setsid nohup으로 띄움
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+if [[ ${TH_NO_DAEMON:-0} != 1 && -x "$script_dir/th-watchd.sh" ]]; then
+  touch "$watch_dir/watchd.lock"
+  if flock -n "$watch_dir/watchd.lock" true 2>/dev/null; then
+    setsid nohup "$script_dir/th-watchd.sh" > /dev/null 2>&1 &
+  fi
+fi
+
 printf 'launched [%s] pid %s → %s\n' "$worker_type" "$(<"$task_dir/worker.pid")" "$task_dir"

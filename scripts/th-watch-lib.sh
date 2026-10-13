@@ -164,3 +164,123 @@ run_verification() {
     return 0
   fi
 }
+
+inspect_task_event() {
+  local task=$1 watch_dir=$2 marker_prefix=$3 stall_sec=$4 target_workspace=$5 callback_fn=$6
+  [[ -n $task && -d $task ]] || return 0
+  local marker="$task/$marker_prefix"
+
+  local owner
+  owner=$(cat "$task/.th_owner" 2>/dev/null || true)
+  if [[ -z $owner && -n $target_workspace ]]; then
+    local journal_log="$target_workspace/.claude/work_log.md"
+    local journal_logs=("$(dirname "$journal_log")"/work_log*.md)
+    if (( ${#journal_logs[@]} > 0 )) && grep -qsF "| $task |" "${journal_logs[@]}"; then
+      owner=$target_workspace
+    else
+      owner="(unknown)"
+    fi
+  fi
+
+  # target_workspace가 지정되어 있고 본인 소유가 아닌 경우:
+  # 쿼터 잠금만 생성하고 사건 통지는 건너뜀
+  if [[ -n $target_workspace && -n $owner && $owner != "$target_workspace" ]]; then
+    for cand in "$task/codex.log" "$task/agy.log" "$task/claude.log"; do
+      [[ -f $cand ]] || continue
+      local lock="$watch_dir/quota_lock.$(basename "$cand" .log)"
+      [[ -f $lock || -f $task/DONE || -f $task/FAILED ]] && continue
+      local qline
+      qline=$(grep -iE '^ERROR: ' "$cand" 2>/dev/null | grep -vE '^ERROR: test_' | grep -iE '(quota|rate limit|usage limit|at capacity|capacity exceeded)' | tail -n 1 | cut -c1-180)
+      [[ -n $qline ]] && printf '%s | %s | %s\n' "$(date '+%F %R')" "$task" "$qline" > "$lock"
+    done
+    return 0
+  fi
+
+  # 1. 완료 판정
+  if [[ -f $task/DONE ]]; then
+    if [[ ! -f $marker.done ]]; then
+      touch "$marker.done"
+      local v_res
+      v_res=$(run_verification "$task")
+      "$callback_fn" "$task" "완료" "완료" "$v_res" "$owner"
+    fi
+    return 0
+  fi
+
+  # 2. 실패 판정
+  if [[ -f $task/FAILED ]]; then
+    if [[ ! -f $marker.failed ]]; then
+      touch "$marker.failed"
+      local reason
+      reason=$(tail -n 5 "$task/FAILED" 2>/dev/null | tr '\n' ' ')
+      "$callback_fn" "$task" "실패" "실패 — $reason" "-" "$owner"
+    fi
+    return 0
+  fi
+
+  # 3. 워커 오류(쿼터·용량)
+  local log_file=""
+  for cand in "$task/codex.log" "$task/agy.log" "$task/claude.log" "$task/worker.log"; do
+    [[ -f $cand ]] || continue
+    if grep -iE '^ERROR: ' "$cand" 2>/dev/null | grep -vE '^ERROR: test_' | grep -qiE '(quota|rate limit|usage limit|at capacity|capacity exceeded)'; then
+      log_file=$cand
+      break
+    fi
+  done
+  if [[ -n $log_file && ! -f $marker.quota ]]; then
+    touch "$marker.quota" "$marker.dead"
+    local line
+    line=$(grep -iE '^ERROR: ' "$log_file" | grep -vE '^ERROR: test_' | grep -iE '(quota|rate limit|usage limit|at capacity|capacity exceeded)' | tail -n 1 | cut -c1-180)
+    local lock_type
+    lock_type=$(basename "$log_file" .log)
+    [[ $lock_type == worker ]] && lock_type=unknown
+    printf '%s | %s | %s\n' "$(date '+%F %R')" "$task" "$line" > "$watch_dir/quota_lock.$lock_type"
+    "$callback_fn" "$task" "워커 오류(쿼터·용량)" "워커 오류(쿼터·용량) — $line (새 $lock_type 실행 잠금: $watch_dir/quota_lock.$lock_type)" "-" "$owner"
+    return 0
+  fi
+
+  # 4. 프로세스 상태 확인 (job.pid / worker.pid)
+  local job_pid worker_pid
+  job_pid=$(cat "$task/job.pid" 2>/dev/null || true)
+  worker_pid=$(cat "$task/worker.pid" 2>/dev/null || true)
+  local alive_pids=()
+
+  pid_alive "$job_pid" && alive_pids+=("$job_pid")
+  pid_alive "$worker_pid" && alive_pids+=("$worker_pid")
+
+  if (( ${#alive_pids[@]} == 0 )); then
+    if [[ -f $task/DONE || -f $task/FAILED ]]; then
+      return 0
+    fi
+    if [[ ! -f $marker.dead ]]; then
+      touch "$marker.dead"
+      "$callback_fn" "$task" "중단" "중단 — 실행 중인 프로세스 없음, DONE/FAILED 없음" "-" "$owner"
+    fi
+    return 0
+  fi
+
+  rm -f "$marker.dead"
+
+  # 5. 멈춤(stall) 판정
+  local cpu=0
+  for p in "${alive_pids[@]}"; do cpu=$(( cpu + $(cpu_ticks "$p") )); done
+  local newest
+  newest=$(latest_signature "$task")
+  local signature="$cpu:$newest"
+  local state_file="$task/.th_sig"
+  local previous=""
+  [[ -f $state_file ]] && previous=$(<"$state_file")
+  local now
+  now=$(date +%s)
+
+  if [[ ${previous%%|*} != "$signature" ]]; then
+    rm -f "$marker.stall"
+    printf '%s|%s\n' "$signature" "$now" > "$state_file"
+  else
+    local since=${previous##*|}
+    if [[ $since =~ ^[0-9]+$ ]] && (( now - since >= stall_sec )) && [[ ! -f $marker.stall ]]; then
+      touch "$marker.stall"
+      "$callback_fn" "$task" "멈춤" "멈춤 — CPU·산출물 $(( now - since ))s 변화 없음(프로세스는 살아 있음)" "-" "$owner"
+    fi
+  fi
+}

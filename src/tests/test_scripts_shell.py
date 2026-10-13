@@ -842,3 +842,139 @@ def test_th_status_shows_verify_column(test_env: dict):
     assert "검수" in res.stdout
     assert "통과" in res.stdout
     assert "실패" in res.stdout
+
+
+def test_th_watchd_notifies_inbox_and_events_log(test_env: dict):
+    """A. 상시 감시 데몬: inbox.md에 기록, events.log에 기록, 같은 사건 1회만."""
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_daemon_done")
+    (task_dir / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
+    (task_dir / "DONE").write_text("Completed\n", encoding="utf-8")
+    (test_env["watch_dir"] / "tasks.txt").write_text(f"{task_dir}\n", encoding="utf-8")
+
+    watchd_script = SCRIPTS_DIR / "th-watchd.sh"
+    env = dict(test_env["env"])
+    env["TH_POLL_SEC"] = "1"
+    env["TH_ONCE"] = "1"  # Test flag: run one loop iteration then exit
+
+    res = subprocess.run([str(watchd_script)], env=env, capture_output=True, text=True)
+    assert res.returncode == 0
+
+    inbox_file = test_env["workspace"] / ".claude" / "inbox.md"
+    assert inbox_file.is_file(), "inbox.md must be created in owner workspace"
+    inbox_content = inbox_file.read_text(encoding="utf-8").strip()
+    # verify format: time, task, event, summary, verify
+    assert "task_daemon_done" in inbox_content
+    assert "완료" in inbox_content
+    assert "검수 없음" in inbox_content or "없음" in inbox_content
+
+    events_log = test_env["watch_dir"] / "events.log"
+    assert events_log.is_file()
+    assert "task_daemon_done" in events_log.read_text(encoding="utf-8")
+
+    # Second run: must not duplicate inbox line
+    res2 = subprocess.run([str(watchd_script)], env=env, capture_output=True, text=True)
+    assert res2.returncode == 0
+    lines = [
+        line
+        for line in inbox_file.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert len(lines) == 1, "Same event must be recorded only once"
+
+
+def test_th_watchd_notify_send_desktop(test_env: dict):
+    """A. 상시 감시 데몬: notify-send가 있으면 데스크톱 알림, 없으면 건너뜀."""
+    notify_log = test_env["tmp_path"] / "notify.log"
+    notify_stub = test_env["bin_dir"] / "notify-send"
+    notify_stub.write_text(
+        f'#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "{notify_log}"\n',
+        encoding="utf-8",
+    )
+    notify_stub.chmod(notify_stub.stat().st_mode | stat.S_IEXEC)
+
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_daemon_notify")
+    (task_dir / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
+    (task_dir / "DONE").write_text("Completed\n", encoding="utf-8")
+    (test_env["watch_dir"] / "tasks.txt").write_text(f"{task_dir}\n", encoding="utf-8")
+
+    watchd_script = SCRIPTS_DIR / "th-watchd.sh"
+    env = dict(test_env["env"])
+    env["TH_ONCE"] = "1"
+    res = subprocess.run([str(watchd_script)], env=env, capture_output=True, text=True)
+    assert res.returncode == 0
+    assert notify_log.is_file(), "notify-send must be invoked"
+    assert "task_daemon_notify" in notify_log.read_text(encoding="utf-8")
+
+
+def test_th_watchd_and_th_watch_marker_separation(test_env: dict):
+    """A. 상시 감시 데몬과 th-watch의 표시 파일 분리 (.th_daemon.* vs .th_notified.*)."""
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_separation")
+    (task_dir / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
+    (task_dir / "DONE").write_text("Completed\n", encoding="utf-8")
+    (test_env["watch_dir"] / "tasks.txt").write_text(f"{task_dir}\n", encoding="utf-8")
+
+    watchd_script = SCRIPTS_DIR / "th-watchd.sh"
+    env = dict(test_env["env"])
+    env["TH_ONCE"] = "1"
+    res_d = subprocess.run(
+        [str(watchd_script)], env=env, capture_output=True, text=True
+    )
+    assert res_d.returncode == 0
+    assert (task_dir / ".th_daemon.done").is_file(), "Daemon uses .th_daemon.* marker"
+    assert not (task_dir / ".th_notified.done").exists(), "th-watch marker untouched"
+
+    # Now run th-watch.sh; it should still detect DONE because .th_notified.done is absent
+    watch_script = SCRIPTS_DIR / "th-watch.sh"
+    env["TH_POLL_SEC"] = "1"
+    res_w = subprocess.run(
+        [str(watch_script), "2"], env=env, capture_output=True, text=True
+    )
+    assert res_w.returncode == 0
+    assert "완료" in res_w.stdout
+    assert (task_dir / ".th_notified.done").is_file()
+
+
+def test_th_watchd_single_instance_flock(test_env: dict):
+    """A. 상시 감시 데몬은 flock으로 단일 인스턴스만 실행."""
+    watch_dir = test_env["watch_dir"]
+    lock_file = watch_dir / "watchd.lock"
+
+    # Hold the lock in a background process
+    proc = subprocess.Popen(
+        ["bash", "-c", f"exec 201>'{lock_file}'; flock 201; sleep 10"]
+    )
+    try:
+        time.sleep(0.2)
+        watchd_script = SCRIPTS_DIR / "th-watchd.sh"
+        env = dict(test_env["env"])
+        env["TH_ONCE"] = "1"
+        res = subprocess.run(
+            [str(watchd_script)], env=env, capture_output=True, text=True
+        )
+        assert res.returncode == 0, "Second instance should exit cleanly"
+        assert "already running" in res.stderr.lower() or res.stdout == ""
+    finally:
+        proc.terminate()
+        proc.wait()
+
+
+def test_th_launch_starts_daemon_if_not_running(test_env: dict):
+    """A. th-launch는 실행 시 데몬이 없으면 setsid nohup으로 띄움."""
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_launch_daemon")
+    launch_script = SCRIPTS_DIR / "th-launch.sh"
+
+    cmd = [
+        str(launch_script),
+        str(task_dir),
+        "codex",
+        "gpt-5.6-terra",
+        "medium",
+        str(task_dir),
+    ]
+    res = subprocess.run(cmd, env=test_env["env"], capture_output=True, text=True)
+    assert res.returncode == 0
+
+    lock_file = test_env["watch_dir"] / "watchd.lock"
+    assert lock_file.is_file(), (
+        "Daemon lock file should be touched/created by daemon launch"
+    )
