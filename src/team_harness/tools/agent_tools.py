@@ -1181,6 +1181,14 @@ def spawn_agent_schema(
     }
 
 
+def _resolve_spawn_cwd(raw_cwd: str, config: "Config") -> str:
+    path = Path(raw_cwd).expanduser()
+    if path.is_absolute():
+        return str(path.resolve())
+    base_cwd = Path(getattr(config, "cwd", ".")).expanduser().resolve()
+    return str((base_cwd / path).resolve())
+
+
 async def spawn_agent(**kwargs: object) -> str:
     """Validate, record, and launch one worker for the active legacy binding."""
 
@@ -1188,7 +1196,7 @@ async def spawn_agent(**kwargs: object) -> str:
     manager, run_log, config, ui = _require_setup()
     agent_type = str(kwargs["type"])
     prompt = str(kwargs["prompt"])
-    cwd = str(Path(str(kwargs["cwd"])).expanduser().resolve())
+    cwd = _resolve_spawn_cwd(str(kwargs["cwd"]), config)
     model = str(kwargs["model"]) if kwargs.get("model") is not None else None
     breaker = _require_rate_limit_breaker()
     _sync_finished_rate_limits(manager=manager, run_log=run_log, breaker=breaker)
@@ -1671,7 +1679,7 @@ def build_agent_tool_bindings(
         _validate_spawn_agent_kwargs(kwargs=kwargs)
         agent_type = str(kwargs["type"])
         prompt = str(kwargs["prompt"])
-        cwd = str(Path(str(kwargs["cwd"])).expanduser().resolve())
+        cwd = _resolve_spawn_cwd(str(kwargs["cwd"]), config)
         model_val = str(kwargs["model"]) if kwargs.get("model") is not None else None
         _sync_finished_rate_limits(
             manager=manager, run_log=run_log, breaker=rate_limit_breaker

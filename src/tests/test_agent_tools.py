@@ -136,6 +136,51 @@ async def test_spawn_agent_can_resume_provider_session(tmp_path, config, manager
 
 
 @pytest.mark.asyncio
+async def test_spawn_agent_resolves_relative_cwd_against_config_cwd(
+    tmp_path, config, manager, ui
+):
+    worktree_dir = tmp_path / "worktree"
+    worktree_dir.mkdir()
+    subfolder = worktree_dir / "subdir"
+    subfolder.mkdir()
+
+    config.cwd = str(worktree_dir)
+    config.run_dir = tmp_path
+    config.worker_suffix = ""
+    fake_worker = tmp_path / "fake-worker"
+    fake_worker.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_worker.chmod(0o755)
+    config.agent_templates = {
+        "codex": AgentTemplate(command=(str(fake_worker),), shared_flags=())
+    }
+    run_log = RunLogWriter(
+        run_id="run_1",
+        run_dir=tmp_path,
+        provider=config.provider,
+        model=config.model,
+        api_base=config.api_base,
+    )
+    agent_tools.setup(manager=manager, run_log=run_log, config=config, ui=ui)
+
+    agent_id = await agent_tools.spawn_agent(
+        type="codex", prompt="test relative cwd", cwd="subdir"
+    )
+    state = manager.get(agent_id)
+    assert state.cwd == str(subfolder.resolve())
+
+    # Also test via tool bindings
+    bindings = agent_tools.build_agent_tool_bindings(
+        manager=manager, run_log=run_log, config=config, ui=ui, allowed_types=["codex"]
+    )
+    bound_tools = {schema["function"]["name"]: fn for schema, fn in bindings}
+    bound_id = await bound_tools["spawn_agent"](
+        type="codex", prompt="test relative cwd bound", cwd="."
+    )
+    bound_state = manager.get(bound_id)
+    assert bound_state.cwd == str(worktree_dir.resolve())
+
+
+@pytest.mark.asyncio
 async def test_bound_spawn_agent_resolves_same_run_agent_session(tmp_path, ui):
     """The live-run agent id must resolve to the captured provider session id."""
 
