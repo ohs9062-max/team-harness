@@ -157,6 +157,7 @@ while (( $(date +%s) < deadline )); do
       lock_type=$(basename "$log_file" .log)
       [[ $lock_type == worker ]] && lock_type=unknown
       printf '%s | %s | %s\n' "$(date '+%F %R')" "$task" "$line" > "$watch_dir/quota_lock.$lock_type"
+      remove_task "$task"
       notify "$name" "워커 오류(쿼터·용량) — $line (새 $lock_type 실행 잠금: $watch_dir/quota_lock.$lock_type)"
     fi
 
@@ -172,7 +173,11 @@ while (( $(date +%s) < deadline )); do
       if [[ -f $task/DONE || -f $task/FAILED ]]; then
         continue
       fi
-      [[ -f $marker.dead ]] || { touch "$marker.dead"; notify "$name" '중단 — 실행 중인 프로세스 없음, DONE/FAILED 없음'; }
+      if [[ ! -f $marker.dead ]]; then
+        touch "$marker.dead"
+        remove_task "$task"
+        notify "$name" '중단 — 실행 중인 프로세스 없음, DONE/FAILED 없음'
+      fi
       continue
     fi
 

@@ -256,3 +256,77 @@ def test_th_launch_concurrent_registry_integrity(test_env: dict):
         assert str(t) in lines
 
 
+def test_th_watch_quota_error_removes_task(test_env: dict):
+    """ops-05: Quota error removes task from registry tasks.txt."""
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_quota_rm")
+    (task_dir / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
+    (task_dir / "codex.log").write_text("ERROR: 429 quota exceeded\n", encoding="utf-8")
+
+    tasks_txt = test_env["watch_dir"] / "tasks.txt"
+    tasks_txt.write_text(f"{task_dir}\n", encoding="utf-8")
+
+    watch_script = SCRIPTS_DIR / "th-watch.sh"
+    env = dict(test_env["env"])
+    env["TH_POLL_SEC"] = "1"
+    res = subprocess.run([str(watch_script), "2"], env=env, capture_output=True, text=True)
+    assert res.returncode == 0
+    assert "워커 오류(쿼터·용량)" in res.stdout
+
+    # Must be removed from registry
+    assert str(task_dir) not in tasks_txt.read_text(encoding="utf-8")
+
+
+def test_th_watch_dead_process_removes_task(test_env: dict):
+    """ops-05: Missing/dead process without DONE/FAILED removes task from registry."""
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_dead_rm")
+    (task_dir / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
+    (task_dir / "worker.pid").write_text("999999\n", encoding="utf-8")
+
+    tasks_txt = test_env["watch_dir"] / "tasks.txt"
+    tasks_txt.write_text(f"{task_dir}\n", encoding="utf-8")
+
+    watch_script = SCRIPTS_DIR / "th-watch.sh"
+    env = dict(test_env["env"])
+    env["TH_POLL_SEC"] = "1"
+    res = subprocess.run([str(watch_script), "2"], env=env, capture_output=True, text=True)
+    assert res.returncode == 0
+    assert "중단 — 실행 중인 프로세스 없음" in res.stdout
+
+    # Must be removed from registry
+    assert str(task_dir) not in tasks_txt.read_text(encoding="utf-8")
+
+
+def test_th_watch_stall_retains_task_in_registry(test_env: dict):
+    """ops-05: Stalled task (alive process, no changes) must remain in registry."""
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_stall_keep")
+    (task_dir / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
+
+    # Start a live background sleep process
+    proc = subprocess.Popen(["sleep", "30"])
+    try:
+        (task_dir / "worker.pid").write_text(f"{proc.pid}\n", encoding="utf-8")
+
+        # Fake existing signature state file older than TH_STALL_SEC
+        state_file = task_dir / ".th_sig"
+        # 10 ticks, older than 10 seconds ago
+        state_file.write_text("10:12345|1000000000\n", encoding="utf-8")
+
+        tasks_txt = test_env["watch_dir"] / "tasks.txt"
+        tasks_txt.write_text(f"{task_dir}\n", encoding="utf-8")
+
+        watch_script = SCRIPTS_DIR / "th-watch.sh"
+        env = dict(test_env["env"])
+        env["TH_POLL_SEC"] = "1"
+        env["TH_STALL_SEC"] = "1"  # stall threshold 1s
+        res = subprocess.run([str(watch_script), "2"], env=env, capture_output=True, text=True)
+        assert res.returncode == 0
+        assert "멈춤" in res.stdout
+
+        # Registry must RETAIN the task
+        assert str(task_dir) in tasks_txt.read_text(encoding="utf-8")
+    finally:
+        proc.terminate()
+        proc.wait()
+
+
+
