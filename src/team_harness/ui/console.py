@@ -740,7 +740,13 @@ class TeamHarnessConsole(ConsoleBase):
         todo_path = self._run_dir / "todo.json"
         if not todo_path.exists():
             return []
-        return json.loads(todo_path.read_text())
+        try:
+            data = json.loads(todo_path.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                return data
+            return []
+        except (json.JSONDecodeError, OSError):
+            return []
 
 
 def _fmt_args(args: dict) -> str:

@@ -136,6 +136,51 @@ async def test_spawn_agent_can_resume_provider_session(tmp_path, config, manager
 
 
 @pytest.mark.asyncio
+async def test_spawn_agent_resolves_relative_cwd_against_config_cwd(
+    tmp_path, config, manager, ui
+):
+    worktree_dir = tmp_path / "worktree"
+    worktree_dir.mkdir()
+    subfolder = worktree_dir / "subdir"
+    subfolder.mkdir()
+
+    config.cwd = str(worktree_dir)
+    config.run_dir = tmp_path
+    config.worker_suffix = ""
+    fake_worker = tmp_path / "fake-worker"
+    fake_worker.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_worker.chmod(0o755)
+    config.agent_templates = {
+        "codex": AgentTemplate(command=(str(fake_worker),), shared_flags=())
+    }
+    run_log = RunLogWriter(
+        run_id="run_1",
+        run_dir=tmp_path,
+        provider=config.provider,
+        model=config.model,
+        api_base=config.api_base,
+    )
+    agent_tools.setup(manager=manager, run_log=run_log, config=config, ui=ui)
+
+    agent_id = await agent_tools.spawn_agent(
+        type="codex", prompt="test relative cwd", cwd="subdir"
+    )
+    state = manager.get(agent_id)
+    assert state.cwd == str(subfolder.resolve())
+
+    # Also test via tool bindings
+    bindings = agent_tools.build_agent_tool_bindings(
+        manager=manager, run_log=run_log, config=config, ui=ui, allowed_types=["codex"]
+    )
+    bound_tools = {schema["function"]["name"]: fn for schema, fn in bindings}
+    bound_id = await bound_tools["spawn_agent"](
+        type="codex", prompt="test relative cwd bound", cwd="."
+    )
+    bound_state = manager.get(bound_id)
+    assert bound_state.cwd == str(worktree_dir.resolve())
+
+
+@pytest.mark.asyncio
 async def test_bound_spawn_agent_resolves_same_run_agent_session(tmp_path, ui):
     """The live-run agent id must resolve to the captured provider session id."""
 
@@ -898,7 +943,7 @@ async def test_read_new_output_truncates_large_initial_backlog(
 
 
 @pytest.mark.asyncio
-async def test_wait_for_any_advances_read_new_output_cursor(
+async def test_wait_for_any_does_not_advance_read_new_output_cursor(
     tmp_path, config, manager, ui
 ):
     stdout = tmp_path / "agent_stdout.log"
@@ -934,8 +979,45 @@ async def test_wait_for_any_advances_read_new_output_cursor(
     result = json.loads(await agent_tools.kill_agent("agent_1"))
 
     assert timeout_result["timed_out"] is True
-    assert new_output == "after\n"
+    assert new_output == "before\nafter\n"
     assert result["killed"] is True
+
+
+@pytest.mark.asyncio
+async def test_wait_for_any_does_not_swallow_unread_output(
+    tmp_path, config, manager, ui
+):
+    stdout = tmp_path / "agent_stdout.log"
+    stderr = tmp_path / "agent_stderr.log"
+    stdout.write_text("important log output\n")
+    stderr.write_text("")
+    proc = await asyncio.create_subprocess_exec("sleep", "5")
+    state = AgentState(
+        id="agent_2",
+        agent_type="codex",
+        prompt="p",
+        cwd=str(tmp_path),
+        proc=proc,
+        spawn_time=datetime.now(timezone.utc),
+        stdout_log=stdout,
+        stderr_log=stderr,
+    )
+    manager.register(state)
+    run_log = RunLogWriter(
+        run_id="run_2",
+        run_dir=tmp_path,
+        provider=config.provider,
+        model=config.model,
+        api_base=config.api_base,
+    )
+    agent_tools.setup(manager=manager, run_log=run_log, config=config, ui=ui)
+
+    # Calling wait_for_any should not swallow output for read_new_agent_output
+    await agent_tools.wait_for_any(["agent_2"], timeout=0.1)
+    output = await agent_tools.read_new_agent_output("agent_2")
+    await agent_tools.kill_agent("agent_2")
+
+    assert output == "important log output\n"
 
 
 @pytest.mark.asyncio
@@ -1295,3 +1377,32 @@ def test_build_direct_spawn_footer_contains_result_card_instruction(tmp_path):
     assert "result card" in footer
     assert "at most 15 lines" in footer
     assert "Write long reports to files, not stdout." in footer
+
+
+@pytest.mark.asyncio
+async def test_wait_for_any_handles_unknown_agent_id(tmp_path, config, manager, ui):
+    run_log = RunLogWriter(
+        run_id="run_1",
+        run_dir=tmp_path,
+        provider=config.provider,
+        model=config.model,
+        api_base=config.api_base,
+    )
+    agent_tools.setup(manager=manager, run_log=run_log, config=config, ui=ui)
+
+    result_raw = await agent_tools.wait_for_any(["nonexistent_worker"])
+    data = json.loads(result_raw)
+    assert "error" in data
+    assert "nonexistent_worker" in data["error"]
+
+    # Also test via bindings
+    bindings = agent_tools.build_agent_tool_bindings(
+        manager=manager, run_log=run_log, config=config, ui=ui, allowed_types=["codex"]
+    )
+    bound_wait = next(
+        fn for schema, fn in bindings if schema["function"]["name"] == "wait_for_any"
+    )
+    bound_res = json.loads(await bound_wait(["missing_1", "missing_2"]))
+    assert "error" in bound_res
+    assert "missing_1" in bound_res["error"]
+    assert "missing_2" in bound_res["error"]

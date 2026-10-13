@@ -2,6 +2,8 @@
 
 다른 코딩 하네스(Codex, Claude Code, Grok Build, Antigravity, OpenCode, pi, OpenHands)를 위한 조율(Coordination) 계층.
 
+> 기능별 사용법과 명령어 요약은 [start.md](./start.md)를 보세요.
+
 <br>
 
 <p align="center">

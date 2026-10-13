@@ -1,6 +1,27 @@
-# team-harness 빠른 사용법
+# team-harness 기능별 사용법
 
-## 1. 최초 설치
+자세한 설정 스키마는 [README.md](./README.md), 설계 이유는
+[design/decisions.md](./design/decisions.md)를 봅니다. 이 문서는 "무엇을 어떤 명령으로
+쓰는가"만 기능별로 정리합니다.
+
+| # | 기능 | 언제 쓰나 | 핵심 명령 |
+|---|---|---|---|
+| 1 | 설치·설정 | 처음 한 번 | `uv tool install -e`, `th init` |
+| 2 | Orca 코디네이터 (`th cord`) | 평소 작업의 기본 진입점 | 에이전트 창에 `th cord` |
+| 3 | 워커 실행·감시 스크립트 | 데이터·GPU·장시간 작업 위임 | `th-launch.sh`, `th-watch.sh`, `th-status.sh` |
+| 4 | 쿼터 잠금 | 쿼터 오류 뒤 재시도 낭비 방지 | 자동 (`quota_lock.<워커>`) |
+| 5 | 내장 코디네이터 실행 | 하네스가 직접 계획·위임 | `th run`, `th repl` |
+| 6 | Harness Protocol A/B/C | 저장소 코드 변경 | `th protocol run/resume/relay/status` |
+| 7 | 로그·정리 | 실행 기록 확인, 고아 워커 정리 | `th logs`, `th reap` |
+| 8 | 토큰 절감 | 기본 적용, 측정 | `worker_isolate_mcp`, `measure_preamble.py` |
+| 9 | 모델·추론 노력 | **코디네이터가 자동 선택** | (직접 쓸 일 없음) |
+| 10 | graft 코드 그래프 | **코디네이터 판단**, 기본 꺼짐 | (직접 쓸 일 없음) |
+| 11 | Jev 결정 라우터 | **자동 적용** (`th run`·`th repl`) | (직접 쓸 일 없음) |
+| 12 | 코디네이터 작업일지 | 상태·이력 보존 | `.claude/current_status.md`, `work_log.md` |
+
+---
+
+## 1. 설치·설정
 
 ```bash
 uv tool install -e /home/hs/rang/team-harness
@@ -9,138 +30,222 @@ claude                 # 로그인 확인
 agy                    # 로그인 확인
 ```
 
-`-e` 설치는 `/home/hs/rang/team-harness`의 현재 코드를 사용하므로 이 디렉터리는
-사용할 branch에 두세요.
-
-프로젝트별 설정이 필요하면 대상 프로젝트에서 한 번 실행합니다.
+`-e` 설치는 `/home/hs/rang/team-harness`의 현재 코드를 그대로 씁니다. 이 디렉터리를
+main에 두면 main 변경이 바로 반영됩니다.
 
 ```bash
-th init                # .team-harness/config.toml
-th init --global       # ~/.team-harness/config.toml
+th init                # 프로젝트 로컬 .team-harness/config.toml
+th init --global       # 전역 ~/.team-harness/config.toml
+th init --force        # 주석 달린 기본 템플릿으로 덮어쓰기
 ```
 
-현재 기본 구성은 **코디네이터 Codex**, **worker Codex·Claude·Antigravity(`agy`)**입니다.
+설정 우선순위: CLI 플래그 → 환경 변수(`TEAM_HARNESS_*`) → 로컬 `.team-harness/config.toml`
+→ 전역 `~/.team-harness/config.toml` → 내장 기본값.
 
-## 2. 사용할 수 있는 스킬
-
-| 스킬 | 현재 상태 | 용도 |
-|---|---|---|
-| `team-harness` | 저장소 제공 | `th run`의 작업 분할, worker 위임·검증 지침 |
-| `orca-harness-protocol` | Codex·Claude·Agy에 설치됨 | Orca에서 `th cord`로 코디네이터 시작 |
-| `orchestration` | 전역 설치됨 | Orca worker 생성, 메시지, 완료·정리 관리 |
-
-저장소가 제공하는 스킬 확인:
+스킬 설치(새 에이전트 세션부터 인식):
 
 ```bash
 cd /home/hs/rang/team-harness
 npx -y skills add . --list --full-depth
-```
-
-두 스킬을 모든 프로젝트에서 사용:
-
-```bash
 npx -y skills add . --skill team-harness orca-harness-protocol \
   -a codex -a claude-code -a antigravity-cli --global -y
 ```
 
-현재 `orca-harness-protocol`은 `~/.agents/skills/`에 설치되어 있습니다. 설치 후 연
-**새 에이전트 세션**부터 스킬을 인식합니다.
-
-## 3. 기본 명령
-
-| 명령 | 기능 |
+| 스킬 | 용도 |
 |---|---|
-| `th run "작업"` | 코디네이터가 계획하고 worker에게 위임하는 1회 실행 |
-| `th run -f task.md` | 파일의 작업 지시 실행 |
-| `th repl` | 대화형 실행 |
-| `th logs` | 최근 실행 로그 |
-| `th logs <RUN_ID>` | 특정 실행 로그 |
-| `th reap <RUN_ID>` | 비정상 종료 뒤 남은 worker 확인·정리 |
-| `th --help` | 전체 명령 확인 |
+| `team-harness` | `th run`의 작업 분할, worker 위임·검증 지침 |
+| `orca-harness-protocol` | Orca에서 `th cord`로 코디네이터 시작 |
+| `orchestration` | Orca worker 생성, 메시지, 완료·정리 관리 |
 
-`th repl` 안에서는 `/agents`, `/log`, `/compact`, `/clear`, `/kill <id>`, `/quit`를
-사용할 수 있습니다.
+## 2. Orca 코디네이터 (`th cord`)
 
-## 4. Harness Protocol A/B/C
-
-| MODE | 동작 |
-|---|---|
-| **A 경쟁** | 두 worker가 독립 구현 → 교차 검토 → 사용자가 결과 선택 |
-| **B 인계** | 기존 branch·worktree·상태를 유지하고 다른 agent가 이어받음 |
-| **C 파이프라인** | 설계 → 구현·테스트 → 검수 순서로 진행 |
-
-```bash
-# A 시작
-th protocol run --mode a "작업" --repo .
-
-# C 시작
-th protocol run --mode c "작업" --repo .
-
-# A 결과 선택
-th protocol resume --task-id <ID> --run-dir <DIR> --repo . \
-  --selection SELECT_WORKER_1
-
-# 중단된 C 이어서 실행
-th protocol resume --task-id <ID> --run-dir <DIR> --repo .
-
-# B로 Codex에게 인계
-th protocol relay --task-id <ID> --run-dir <DIR> --repo . \
-  --next-agent codex
-```
-
-MODE 실행은 task worktree에 checkpoint를 만들지만 base branch를 자동으로 merge하거나
-push하지 않습니다.
-
-## 5. Orca IDE에서 프롬프트로 실행
-
-Orca에서 대상 프로젝트의 작업 트리를 만들고 Codex·Claude·Agy 중 하나를 연 뒤 입력합니다.
+Orca에서 대상 프로젝트 작업 트리를 만들고 Codex·Claude·Agy 중 하나를 연 뒤 입력합니다.
+`th cord`는 shell 명령이 아니라 **에이전트 프롬프트 명령**입니다.
 
 ```text
 th cord
 > team-harness 코디네이터 모드가 준비됐습니다.
 
-A 로그인 오류를 고치고 테스트해줘
-C graft 켜고 설정 파서를 정리해줘
-B codex
-상태
-토큰
+학습 결과 정리해서 agy로 돌려       # 일반 작업 → 3번 스크립트로 워커 위임
+C 설정 파서를 정리해줘              # 코드 변경 → MODE C
+A 로그인 오류를 고치고 테스트해줘   # 코드 변경, 두 구현 비교 → MODE A
+B codex                             # 진행 중 작업을 codex에 인계 → MODE B
+상태                                # th-status.sh 1회
+토큰                                # 토큰 사용량
 종료
 ```
 
-`th cord`는 raw shell 명령이 아니라 **에이전트 프롬프트 명령**입니다. 현재 스킬은 이후
-문장을 `th protocol ... --no-visible`로 변환합니다. worker가 Orca의 개별 에이전트 창에
-나타나는 실행 adapter는 아직 추가되지 않았습니다.
+- 코디네이터는 계획·짧은 지시·결과 검증·보고만 하고, 코드 작성과 실행은 워커에 맡깁니다.
+- 워커의 채팅 출력은 근거가 아닙니다. 완료와 수치는 파일(`DONE`/`FAILED`, 결과표)로만 인정합니다.
+- 운영 규칙 원문: `~/.claude/skills/orca-harness-protocol/SKILL.md`.
 
-## 6. 상태와 토큰 사용량
+## 3. 워커 실행·감시 스크립트
+
+데이터 처리, 학습, 라벨링, 리뷰처럼 오래 걸리거나 저장소 코드 변경 흐름이 필요 없는
+작업에 씁니다. 상태는 대화가 아니라 **작업 폴더 안 파일**로 주고받습니다.
+
+### 작업 폴더 규약
+
+| 파일 | 쓰는 쪽 | 의미 |
+|---|---|---|
+| `task.md` | 코디네이터 | 워커 지시서 (필수) |
+| `worker.pid` / `job.pid` | th-launch / 워커 | 워커 PID / 분리 실행한 본 작업 PID |
+| `STATUS` | 워커 | 단계 변화마다 한 줄 |
+| `WORKLOG.md` | 워커 | 60줄 이내 현재 상태 (목표·진행·방법·문제·산출물 경로) |
+| `DONE` / `FAILED` | 워커 | 완료 / 실패와 이유 |
+| `codex.log` / `agy.log` | th-launch | 워커 출력 |
+| `.th_owner` | th-launch | 이 작업을 띄운 작업 공간 (감시 소유자 판정) |
+
+### th-launch — 워커 분리 실행
 
 ```bash
-th protocol status                    # 최근 Protocol 실행
-th protocol status --run-dir <DIR>    # stage, 실패 원인, 시간, 토큰·비용
+# 사용: th-launch.sh <작업폴더> [codex|agy] <모델> <effort> <작업트리> [추가 인자]
+scripts/th-launch.sh _outputs/fix_20261013/core agy default /path/to/worktree
+scripts/th-launch.sh ./job codex gpt-5.6-terra medium /path/to/repo
 ```
 
-시간은 하네스가 직접 측정합니다. 토큰·비용은 worker CLI가 보고한 stage만 합산하므로
-`N개 중 M개 반영` 경고가 있으면 부분 합계입니다.
+- `task.md` 뒤에 `~/.team-harness/worker_suffix.md`(워커 공통 규칙)를 항상 붙입니다.
+  정책 변경은 다음 launch부터 적용됩니다.
+- 워커 종류를 생략하면 codex. agy 모델 생략·`default`는 Gemini 3.8 Flash (High).
+- codex는 `-c mcp_servers={}`로 MCP 서버 상속 없이 실행합니다(사용자 config는 유지).
+- agy는 시작 직후 다른 PID로 재부모화되므로 최대 20초 동안 실제 PID를 다시 찾아 기록합니다.
+- 실행 기록은 작업 공간 `.claude/work_log.md`에 "지시" 줄로 남습니다.
+- 같은 종류 워커에 쿼터 잠금이 있으면 실행을 거부합니다(4번).
 
-## 7. graft 코드 그래프
-
-이번 실행만 켜기:
+### th-watch — 사건 하나만 알리고 종료
 
 ```bash
-TEAM_HARNESS_CONTEXT_GRAPH=1 th protocol run --mode c "작업" --repo .
+scripts/th-watch.sh [최대대기초]          # 기본 21600초
+TH_WATCH_DIR=... TH_STALL_SEC=600 TH_POLL_SEC=30 scripts/th-watch.sh
 ```
 
-프로젝트에서 항상 켜기:
+- 알리는 사건: **완료, 실패, 쿼터·용량 오류, 프로세스 소실(1분 이내), 멈춤(CPU·산출물
+  10분 무변화)**. 정상 진행은 알리지 않습니다. 사건을 하나 출력하면 종료하므로 다시 실행합니다.
+- **자기 작업 공간이 띄운 작업만 알립니다.** 여러 코디네이터가 동시에 일해도 남의 사건을
+  가로채지 않습니다. 소유자는 `.th_owner`로, 그 파일이 없는 예전 작업은 작업 공간
+  `work_log*.md`의 launch 기록으로 판정합니다.
+- 등록부: `~/.team-harness/watch/tasks.txt`, 사건 기록: `~/.team-harness/watch/events.log`.
+- 시험할 때는 실제 등록부 대신 임시 `TH_WATCH_DIR`을 씁니다.
+
+### th-status — 요청할 때만 표로 한 번
+
+```bash
+scripts/th-status.sh
+```
+
+작업·내용·상태·마지막 변화·진행 요약·완료 예상(속도·진행률·epoch 기반)을 표로 출력합니다.
+
+## 4. 쿼터 잠금
+
+- `th-watch`가 워커 로그에서 쿼터·용량 오류(`quota`, `rate limit`, `usage limit`,
+  `at capacity`)를 보면 `~/.team-harness/watch/quota_lock.<codex|agy>`를 만듭니다.
+  다른 작업 공간의 작업에서 난 오류도 잠금 파일은 만듭니다(알림은 소유자에게만).
+- `th-launch`는 잠금이 있으면 같은 종류 워커를 띄우지 않고 종료 코드 3으로 끝냅니다.
+
+```bash
+cat ~/.team-harness/watch/quota_lock.codex      # 원인 확인
+rm  ~/.team-harness/watch/quota_lock.codex      # 쿼터가 풀린 뒤 해제
+TH_IGNORE_QUOTA_LOCK=1 scripts/th-launch.sh ... # 1회 무시
+```
+
+## 5. 내장 코디네이터 실행 (`th run`, `th repl`)
+
+하네스의 자체 조율자 LLM이 작업을 나눠 워커 CLI에 위임합니다.
+
+| 명령 | 기능 |
+|---|---|
+| `th run "작업"` | 1회 실행 |
+| `th run -f task.md` | 파일의 지시 실행 |
+| `th run --agents codex,claude --model ... --cwd ...` | 워커 종류·모델·작업 경로 지정 |
+| `th repl` | 대화형 실행 |
+
+REPL 명령: `/agents`, `/log`, `/compact`, `/clear`, `/kill <agent_id>`, `/quit`.
+
+- 세션 산출물은 실행한 저장소의 `_outputs/<run_id>/`에 생깁니다(git 무시 대상).
+- SDK: `TeamHarness(...).run(task)` → `TeamHarnessResult` (README "Python SDK").
+
+## 6. Harness Protocol A/B/C — 저장소 코드 변경
+
+| MODE | 동작 |
+|---|---|
+| **A 경쟁** | 두 worker가 독립 구현 → 교차 검토 → 사용자가 결과 선택 |
+| **B 인계** | 기존 branch·worktree·상태를 유지하고 다른 agent가 이어받음 |
+| **C 파이프라인** (기본) | 설계 → 구현·테스트 → 검수 순서로 진행 |
+
+```bash
+th protocol run --mode c "작업" --repo .          # C 시작 (기본 모드)
+th protocol run --mode a "작업" --repo .          # A 시작
+th protocol resume --task-id <ID> --run-dir <DIR> --repo . \
+  --selection SELECT_WORKER_1                      # A 결과 선택
+th protocol resume --task-id <ID> --run-dir <DIR> --repo .   # 중단된 C 이어서
+th protocol relay  --task-id <ID> --run-dir <DIR> --repo . \
+  --next-agent codex                               # B: codex에 인계
+th protocol status                                 # 최근 실행 목록
+th protocol status --run-dir <DIR>                 # 단계·실패 원인·시간·토큰
+```
+
+주요 옵션: `--no-visible`(tmux 창 끔), `--agent-timeout 600`(단계별 워커 제한 초),
+`--check-timeout 300`, `--set-role ROLE.FIELD=VALUE`.
+
+- 결과는 `task/<TASK-ID>/...` 브랜치에 커밋되며 base 작업 트리를 자동 merge·push하지
+  않습니다(TH-D16). 채택은 사람이 merge합니다.
+- 토큰·비용은 worker CLI가 보고한 단계만 합산합니다. `N개 중 M개 반영` 경고는 부분 합계입니다.
+- 막히면 먼저 `th protocol status --run-dir <DIR>`의 blocker를 확인합니다.
+
+## 7. 로그·정리
+
+```bash
+th logs                     # 최근 실행 로그
+th logs <RUN_ID>            # 특정 실행
+th reap <RUN_ID> --dry-run  # 비정상 종료 뒤 남은 워커 확인만
+th reap <RUN_ID>            # SIGTERM → (--grace-s 뒤) SIGKILL
+```
+
+실행 기록(`run.json`)에는 조율자 턴별·워커별 입력 토큰과 캐시 토큰
+(`input_tokens`, `cached_prompt_tokens`)이 남습니다.
+
+## 8. 토큰 절감
+
+기본으로 켜져 있는 것:
+
+- **프롬프트 캐시 친화 순서**: 조율자 시스템 프롬프트에서 실행마다 바뀌는 값(세션 경로,
+  시각)을 맨 끝 `Run context`로 모아 앞부분이 실행 간 캐시됩니다.
+- **도구 스키마 축약**: 도구 설명은 1~2문장, 상세 사용법은 시스템 프롬프트에 한 번만.
+- **워커 MCP 격리(TH-D25)**: claude 워커 `--strict-mcp-config`, codex 워커
+  `-c mcp_servers={}`. 사용자 전역 MCP 도구 정의가 워커마다 실리지 않습니다.
+- **워커 공통 규칙 축소**: `worker_suffix.md`에는 워커가 지킬 규칙만 둡니다.
+
+MCP 도구가 꼭 필요한 워커가 있으면 끕니다.
+
+```bash
+TEAM_HARNESS_WORKER_ISOLATE_MCP=false th run "작업"
+```
 
 ```toml
 # .team-harness/config.toml
-[context_graph]
-enabled = true
+[coordinator]
+worker_isolate_mcp = false
 ```
 
-graft는 worker별 코드 탐색 토큰을 줄이기 위한 선택 기능입니다. 그래프는
-`~/.team-harness/graft/`에 저장되며 빌드 실패 시에도 작업은 계속됩니다.
+고정 전송량 측정:
 
-## 8. 모델 바꾸기
+```bash
+uv run python scripts/measure_preamble.py   # 시스템 프롬프트 + 도구 스키마 토큰(근사)
+```
+
+## 9~11. 코디네이터가 관리하는 옵션
+
+평소에는 `th cord` 코디네이터에게 하고 싶은 일만 말하면 됩니다. 아래 옵션은 코디네이터가
+작업에 맞춰 정하고 보고에 한 줄로 알립니다(규칙: `skills/orca-harness-protocol/SKILL.md`
+"옵션은 코디네이터가 판단한다"). 아래 명령은 직접 `th`를 실행할 때의 참고용입니다.
+
+| 옵션 | 현재 동작 |
+|---|---|
+| 모델·effort | 코디네이터가 워커 선택 기준으로 `th-launch` 인자에 넣음 |
+| graft | 기본 꺼짐. `th-launch` 워커에는 아직 연결되지 않음. `th run`·protocol로 큰 저장소 코드 작업을 할 때만 코디네이터가 켬 |
+| Jev | 전역 설정으로 항상 켜짐. `th run`·`th repl` 내장 조율자에만 효과. 실패·쿼터 소진 시 전체 도구로 자동 대체, 연속 3회 오류면 그 실행에서 꺼짐 |
+
+### 9. 모델·추론 노력 (참고)
 
 ```bash
 th protocol run --mode c "복잡한 작업" --repo . \
@@ -149,15 +254,35 @@ th protocol run --mode c "복잡한 작업" --repo . \
 ```
 
 고정 설정은 `.team-harness/config.toml`의 `[protocol.roles.<역할>]`에 저장합니다.
+`th-launch` 워커는 실행 인자(모델, effort)로 고릅니다. 기본 선택 기준:
+terra medium(기본) → terra high(중간 중요도) → sol(terra 실패·설계 판단만),
+agy(단순·대량, 결과 검증 필요).
 
-## 9. Jev로 coordinator 토큰 줄이기
+### 10. graft 코드 그래프 (참고)
+
+워커가 코드 심볼·호출 관계를 그래프로 찾게 해 탐색 토큰을 줄입니다(브랜치 병합 도구가
+아닙니다).
+
+```bash
+TEAM_HARNESS_CONTEXT_GRAPH=1 th protocol run --mode c "작업" --repo .
+```
+
+```toml
+[context_graph]
+enabled = true
+```
+
+그래프는 `~/.team-harness/graft/`에 저장되며 빌드가 실패해도 작업은 계속됩니다.
+
+### 11. Jev 결정 라우터 (참고)
+
+조율자의 다음 턴에 필요한 도구 묶음만 골라 보냅니다. 실패하거나 confidence가 낮으면
+전체 도구를 씁니다.
 
 ```bash
 export TYPESAFE_API_KEY="..."
-TEAM_HARNESS_JEV=1 th run "작업"       # 이번 실행만
+TEAM_HARNESS_JEV=1 th run "작업"
 ```
-
-항상 사용하려면 `.team-harness/config.toml`에 추가합니다.
 
 ```toml
 [decision_router]
@@ -165,9 +290,21 @@ enabled = true
 confidence_threshold = 0.85
 ```
 
-Jev는 다음 턴의 도구 묶음만 고릅니다. 실패하거나 confidence가 낮으면 전체 도구를 쓰며,
-MODE 선택·worker 교체·리뷰 판정은 기존 계약을 유지합니다. 측정값은 해당 실행의
-`run.json` → `decisions`에서 확인합니다.
+측정값은 해당 실행 `run.json`의 `decisions`에서 확인합니다.
 
-문제가 생기면 먼저 `th protocol status --run-dir <DIR>`의 blocker와 실패 원인을
-확인하세요.
+## 12. 코디네이터 작업일지
+
+모든 코디네이터는 작업 공간에 두 파일을 유지합니다(정본: `design/coordinator_journal.md`).
+
+| 파일 | 내용 |
+|---|---|
+| `.claude/current_status.md` | 40줄 이내 현재 상태. 시작·대화 요약 직후·긴 작업 전에 읽음 |
+| `.claude/work_log.md` | 지시·시작·완료·실패·결정·실수마다 한 줄. 날짜가 바뀌면 `work_log_<날짜>.md`로 보관 |
+
+`th-launch`와 `th-watch`는 지시·완료·실패 줄을 자동으로 남기고, 판단·원인·교훈은
+코디네이터가 적습니다.
+
+```bash
+scripts/install-journal-rule.sh   # 전역 지시 파일에 작업일지 규칙 설치(멱등)
+# scripts/journal-hook.sh         # Claude Code SessionStart 훅: current_status.md를 맥락으로 제공
+```
