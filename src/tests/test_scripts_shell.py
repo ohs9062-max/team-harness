@@ -329,4 +329,44 @@ def test_th_watch_stall_retains_task_in_registry(test_env: dict):
         proc.wait()
 
 
+def test_th_status_worker_pid_alive_shows_running(test_env: dict):
+    """ops-03: th-status shows '진행' if worker_pid is alive even if job_pid is dead."""
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_status_alive")
+    (task_dir / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
+
+    proc = subprocess.Popen(["sleep", "30"])
+    try:
+        (task_dir / "job.pid").write_text("999999\n", encoding="utf-8")
+        (task_dir / "worker.pid").write_text(f"{proc.pid}\n", encoding="utf-8")
+
+        tasks_txt = test_env["watch_dir"] / "tasks.txt"
+        tasks_txt.write_text(f"{task_dir}\n", encoding="utf-8")
+
+        status_script = SCRIPTS_DIR / "th-status.sh"
+        res = subprocess.run([str(status_script)], env=test_env["env"], capture_output=True, text=True)
+        assert res.returncode == 0
+        assert "진행" in res.stdout
+        assert "중단?" not in res.stdout
+    finally:
+        proc.terminate()
+        proc.wait()
+
+
+def test_th_status_both_pids_dead_shows_stopped(test_env: dict):
+    """ops-03: th-status shows '중단?' if both job_pid and worker_pid are dead."""
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_status_dead")
+    (task_dir / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
+    (task_dir / "job.pid").write_text("999998\n", encoding="utf-8")
+    (task_dir / "worker.pid").write_text("999999\n", encoding="utf-8")
+
+    tasks_txt = test_env["watch_dir"] / "tasks.txt"
+    tasks_txt.write_text(f"{task_dir}\n", encoding="utf-8")
+
+    status_script = SCRIPTS_DIR / "th-status.sh"
+    res = subprocess.run([str(status_script)], env=test_env["env"], capture_output=True, text=True)
+    assert res.returncode == 0
+    assert "중단?" in res.stdout
+
+
+
 

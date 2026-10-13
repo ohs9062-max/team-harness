@@ -402,12 +402,8 @@ for task in valid_tasks:
                 except Exception:
                     pass
             
-            if job_pid:
-                if not pid_alive(job_pid):
-                    state = '중단?'
-            else:
-                if not pid_alive(worker_pid):
-                    state = '중단?'
+            if not pid_alive(job_pid) and not pid_alive(worker_pid):
+                state = '중단?'
 
     latest_ts = get_latest_output(task)
     if latest_ts is not None:
