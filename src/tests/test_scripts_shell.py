@@ -495,6 +495,32 @@ def test_th_watch_failed_reason_preserves_utf8_boundaries(test_env: dict):
     assert "가" in output
 
 
+def test_th_watch_signature_ignores_deep_files(test_env: dict):
+    """ops-09: watcher signatures inspect only operational files within three levels."""
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_bounded_signature")
+    status_file = task_dir / "STATUS"
+    status_file.write_text("working\n", encoding="utf-8")
+    deep_log = task_dir / "one" / "two" / "three" / "deep.log"
+    deep_log.parent.mkdir(parents=True)
+    deep_log.write_text("large dataset worker output\n", encoding="utf-8")
+    os.utime(task_dir / "task.md", (50, 50))
+    os.utime(status_file, (100, 100))
+    os.utime(deep_log, (200, 200))
+
+    command = (
+        'source <(sed -n \'/^latest_signature() {/,/^}$/p\' "$1"); '
+        'latest_signature "$2"'
+    )
+    result = subprocess.run(
+        ["bash", "-c", command, "bash", str(SCRIPTS_DIR / "th-watch.sh"), str(task_dir)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.stdout.strip() == "100"
+
+
 
 
 

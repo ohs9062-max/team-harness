@@ -100,7 +100,8 @@ notify() {
 }
 
 latest_signature() {
-  find "$1" -type f ! -name '.th_*' -printf '%T@\n' 2>/dev/null |
+  find "$1" -maxdepth 3 -type f ! -name '.th_*' \
+    \( -name STATUS -o -name WORKLOG.md -o -name '*.log' \) -printf '%T@\n' 2>/dev/null |
     sort -n | tail -n 1 | cut -d. -f1
 }
 
