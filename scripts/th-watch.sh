@@ -68,8 +68,11 @@ cpu_ticks() {
 
 remove_task() {
   local task=$1 tmp
-  tmp=$(mktemp "$watch_dir/tasks.XXXXXX") || return
-  awk -v task="$task" '$0 != task' "$registry" > "$tmp" && mv "$tmp" "$registry"
+  (
+    flock -x 200
+    tmp=$(mktemp "$watch_dir/tasks.XXXXXX") || exit 1
+    awk -v task="$task" '$0 != task' "$registry" > "$tmp" && mv "$tmp" "$registry"
+  ) 200>"$watch_dir/tasks.lock"
 }
 
 notify() {

@@ -122,5 +122,8 @@ elif [[ "$worker_type" == "agy" ]]; then
   fi
 fi
 
-grep -qxF "$task_dir" "$watch_dir/tasks.txt" 2>/dev/null || printf '%s\n' "$task_dir" >> "$watch_dir/tasks.txt"
+(
+  flock -x 200
+  grep -qxF "$task_dir" "$watch_dir/tasks.txt" 2>/dev/null || printf '%s\n' "$task_dir" >> "$watch_dir/tasks.txt"
+) 200>"$watch_dir/tasks.lock"
 printf 'launched [%s] pid %s → %s\n' "$worker_type" "$(<"$task_dir/worker.pid")" "$task_dir"
