@@ -6,7 +6,11 @@ from typing import Any
 from typing import Literal
 
 DecisionKind = Literal[
-    "tool_selection", "worker_failure", "review_escalation", "agent_selection"
+    "tool_selection",
+    "worker_failure",
+    "review_escalation",
+    "agent_selection",
+    "watch_observation",
 ]
 
 

@@ -978,3 +978,159 @@ def test_th_launch_starts_daemon_if_not_running(test_env: dict):
     assert lock_file.is_file(), (
         "Daemon lock file should be touched/created by daemon launch"
     )
+
+
+def test_watch_cli_completed_verified_records_jev_decision(test_env: dict):
+    """C. Jev 관찰: 완료+검수통과 시 DecisionRouter로 판단 후 jev_decisions.log 기록."""
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_jev_done")
+    (task_dir / "STATUS").write_text(
+        "[2026-10-13 14:00] Step 1\n[2026-10-13 14:05] Step 2\n", encoding="utf-8"
+    )
+    (task_dir / "WORKLOG.md").write_text("## Goal\nComplete task\n", encoding="utf-8")
+    (task_dir / "VERIFIED").write_text("=== 검수 통과 ===\n", encoding="utf-8")
+
+    watch_dir = test_env["watch_dir"]
+    jev_log = watch_dir / "jev_decisions.log"
+
+    env = dict(test_env["env"])
+    env["TYPESAFE_API_KEY"] = "fake-key-for-test"
+    cmd = [
+        "python3",
+        "-m",
+        "team_harness.decisions.watch_cli",
+        str(task_dir),
+        "완료",
+        str(watch_dir),
+    ]
+    res = subprocess.run(cmd, env=env, capture_output=True, text=True)
+    assert res.returncode == 0
+    assert jev_log.is_file(), "jev_decisions.log must be created"
+    log_content = jev_log.read_text(encoding="utf-8")
+    assert "task_jev_done" in log_content
+    assert "완료" in log_content
+    assert "choice=" in log_content
+
+
+def test_watch_cli_stalled_records_jev_decision(test_env: dict):
+    """C. Jev 관찰: 멈춤 시 WAIT_MORE, KILL, NOTIFY 선택지 중 판단."""
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_jev_stall")
+    (task_dir / "STATUS").write_text("Working\n", encoding="utf-8")
+    (task_dir / "WORKLOG.md").write_text("Long operation\n", encoding="utf-8")
+
+    watch_dir = test_env["watch_dir"]
+    jev_log = watch_dir / "jev_decisions.log"
+
+    env = dict(test_env["env"])
+    env["TYPESAFE_API_KEY"] = "fake-key"
+    cmd = [
+        "python3",
+        "-m",
+        "team_harness.decisions.watch_cli",
+        str(task_dir),
+        "멈춤",
+        str(watch_dir),
+    ]
+    res = subprocess.run(cmd, env=env, capture_output=True, text=True)
+    assert res.returncode == 0
+    assert jev_log.is_file()
+    log_content = jev_log.read_text(encoding="utf-8")
+    assert "task_jev_stall" in log_content
+    assert "멈춤" in log_content
+
+
+def test_watch_cli_skips_unsupported_events(test_env: dict):
+    """C. Jev 관찰: 그 외 사건(실패 등)은 호출/기록하지 않고 스킵."""
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_jev_fail")
+    (task_dir / "FAILED").write_text("Some error\n", encoding="utf-8")
+
+    watch_dir = test_env["watch_dir"]
+    jev_log = watch_dir / "jev_decisions.log"
+    if jev_log.exists():
+        jev_log.unlink()
+
+    env = dict(test_env["env"])
+    cmd = [
+        "python3",
+        "-m",
+        "team_harness.decisions.watch_cli",
+        str(task_dir),
+        "실패",
+        str(watch_dir),
+    ]
+    res = subprocess.run(cmd, env=env, capture_output=True, text=True)
+    assert res.returncode == 0
+    assert not jev_log.exists(), "Unsupported events should not produce decisions"
+
+
+def test_watch_cli_failure_does_not_break_daemon(test_env: dict):
+    """C. Jev 관찰: Jev 관찰 실패(API 키 없음/에러 등) 시에도 감시 지속."""
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_daemon_jev_fail")
+    (task_dir / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
+    (task_dir / "DONE").write_text("Done\n", encoding="utf-8")
+    (test_env["watch_dir"] / "tasks.txt").write_text(f"{task_dir}\n", encoding="utf-8")
+
+    watchd_script = SCRIPTS_DIR / "th-watchd.sh"
+    env = dict(test_env["env"])
+    env["TH_ONCE"] = "1"
+    env["TYPESAFE_API_KEY"] = ""
+    env.pop("JEV_API_KEY", None)
+
+    res = subprocess.run([str(watchd_script)], env=env, capture_output=True, text=True)
+    assert res.returncode == 0
+
+    inbox_file = test_env["workspace"] / ".claude" / "inbox.md"
+    assert inbox_file.is_file(), "Daemon must still record to inbox despite Jev errors"
+
+
+def test_watch_cli_quota_records_jev_decision(test_env: dict):
+    """C. Jev 관찰: 쿼터 시 LOCK_AND_WAIT, NOTIFY 선택지 중 판단."""
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_jev_quota")
+    (task_dir / "STATUS").write_text("Quota error\n", encoding="utf-8")
+
+    watch_dir = test_env["watch_dir"]
+    jev_log = watch_dir / "jev_decisions.log"
+    if jev_log.exists():
+        jev_log.unlink()
+
+    env = dict(test_env["env"])
+    env["TYPESAFE_API_KEY"] = "fake-key"
+    cmd = [
+        "python3",
+        "-m",
+        "team_harness.decisions.watch_cli",
+        str(task_dir),
+        "워커 오류(쿼터·용량)",
+        str(watch_dir),
+    ]
+    res = subprocess.run(cmd, env=env, capture_output=True, text=True)
+    assert res.returncode == 0
+    assert jev_log.is_file()
+    log_content = jev_log.read_text(encoding="utf-8")
+    assert "task_jev_quota" in log_content
+    assert "choice=" in log_content
+
+
+def test_th_watchd_jev_watch_off(test_env: dict):
+    """C. Jev 관찰: TH_JEV_WATCH=off 설정 시 Jev 결정을 기록하지 않음."""
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_daemon_jev_off")
+    (task_dir / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
+    (task_dir / "DONE").write_text("Done\n", encoding="utf-8")
+    (task_dir / "VERIFIED").write_text("Passed\n", encoding="utf-8")
+    (test_env["watch_dir"] / "tasks.txt").write_text(f"{task_dir}\n", encoding="utf-8")
+
+    jev_log = test_env["watch_dir"] / "jev_decisions.log"
+    if jev_log.exists():
+        jev_log.unlink()
+
+    watchd_script = SCRIPTS_DIR / "th-watchd.sh"
+    env = dict(test_env["env"])
+    env["TH_ONCE"] = "1"
+    env["TH_JEV_WATCH"] = "off"
+    env["TYPESAFE_API_KEY"] = "fake-key"
+
+    res = subprocess.run([str(watchd_script)], env=env, capture_output=True, text=True)
+    assert res.returncode == 0
+
+    assert not jev_log.exists(), (
+        "jev_decisions.log must not be written when TH_JEV_WATCH=off"
+    )
