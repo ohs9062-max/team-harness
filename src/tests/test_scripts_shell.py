@@ -220,7 +220,7 @@ done
         for f in futures:
             f.result()
 
-    lines = [l.strip() for l in registry.read_text(encoding="utf-8").splitlines() if l.strip()]
+    lines = [line.strip() for line in registry.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert len(lines) == tasks_count
     for t in task_dirs:
         assert str(t) in lines
@@ -250,7 +250,7 @@ def test_th_launch_concurrent_registry_integrity(test_env: dict):
         list(executor.map(launch_one, task_dirs))
 
     tasks_txt = test_env["watch_dir"] / "tasks.txt"
-    lines = [l.strip() for l in tasks_txt.read_text(encoding="utf-8").splitlines() if l.strip()]
+    lines = [line.strip() for line in tasks_txt.read_text(encoding="utf-8").splitlines() if line.strip()]
     for t in task_dirs:
         assert str(t) in lines
 
