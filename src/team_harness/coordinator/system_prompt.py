@@ -71,6 +71,13 @@ Tool usage guidelines:
 - `bash`: Runs with a default 120s timeout. Pass explicit `timeout_seconds` for
   long-running commands.
 
+Worker model selection:
+- Explicitly pass `model` (and `effort` where applicable) when calling `spawn_agent`.
+- Default to `gpt-5.6-terra` with `effort="medium"`; use `effort="high"` for moderate importance.
+- Use `gpt-5.6-sol` only when terra actually failed or design judgment is strictly required.
+- Use `antigravity` (`agy`) for simple or bulk tasks.
+- Keep small tasks (1-2 files, clear approach) to a single worker without splitting.
+
 Good worker prompt pattern:
 - objective
 - relevant context

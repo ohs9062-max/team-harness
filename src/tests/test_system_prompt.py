@@ -215,3 +215,35 @@ def test_build_system_prompt_handles_unescaped_braces_in_custom_prompt():
     )
     assert '{"action": "spawn", "name": "worker"}' in prompt
     assert "Working directory is /my/repo." in prompt
+
+
+def test_system_prompt_worker_model_selection_in_fixed_prefix():
+    config = Config(cwd="/repo")
+    prompt = build_system_prompt(
+        config=config,
+        allowed_types=["codex", "gemini"],
+        skills=[],
+        session_output_dir="/repo/_outputs/run_123",
+    )
+
+    assert "Worker model selection:" in prompt
+    assert "## Run context" in prompt
+
+    prefix, _ = prompt.split("## Run context", 1)
+    assert "Worker model selection:" in prefix
+    assert "gpt-5.6-terra" in prefix
+    assert 'effort="medium"' in prefix
+    assert 'effort="high"' in prefix
+    assert "gpt-5.6-sol" in prefix
+    assert "antigravity" in prefix
+    assert "spawn_agent" in prefix
+
+    section_chunk = [
+        chunk
+        for chunk in prefix.split("\n\n")
+        if chunk.startswith("Worker model selection:")
+    ][0]
+    section_lines = [
+        line for line in section_chunk.strip().splitlines() if line.strip()
+    ]
+    assert len(section_lines) <= 6

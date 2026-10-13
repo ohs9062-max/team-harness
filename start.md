@@ -330,7 +330,7 @@ uv run python scripts/measure_preamble.py   # 시스템 프롬프트 + 도구 �
 
 | 옵션 | 현재 동작 |
 |---|---|
-| 모델·effort | 코디네이터가 워커 선택 기준으로 `th-launch` 인자에 넣음 |
+| 모델·effort | 코디네이터가 워커 선택 기준으로 `th-launch` 인자에 넣음. `th run` 조율자도 같은 기준으로 워커 모델 선택 |
 | graft | 기본 꺼짐. `th-launch` 워커에는 아직 연결되지 않음. `th run`·protocol로 큰 저장소 코드 작업을 할 때만 코디네이터가 켬 |
 | Jev | 전역 설정으로 항상 켜짐. `th run`·`th repl` 내장 조율자에만 효과. 실패·쿼터 소진 시 전체 도구로 자동 대체, 연속 3회 오류면 그 실행에서 꺼짐 |
 
