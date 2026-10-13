@@ -25,13 +25,13 @@ TODO_WRITE_SCHEMA = {
                             "status": {
                                 "type": "string",
                                 "enum": list(_VALID_STATUSES),
-                                "description": "Task state. One of: pending, in_progress, completed, blocked.",
+                                "description": "Task status (pending, in_progress, completed, blocked).",
                             },
                             "priority": {"type": "string"},
                             "blocked_by": {
                                 "type": "array",
                                 "items": {"type": "string"},
-                                "description": "IDs of tasks that must complete before this one can start.",
+                                "description": "Prerequisite task IDs.",
                             },
                         },
                         "required": ["id", "description", "status"],

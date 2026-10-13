@@ -16,11 +16,7 @@ READ_FILE_SCHEMA = {
     "type": "function",
     "function": {
         "name": "read_file",
-        "description": (
-            "Read one bounded page of a text file. Small files are returned unchanged. "
-            "Large files include continuation metadata; use offset_chars to read the "
-            "next page instead of loading the whole file into coordinator context."
-        ),
+        "description": "Read text file content with optional character pagination.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -29,18 +25,14 @@ READ_FILE_SCHEMA = {
                     "type": "integer",
                     "minimum": 0,
                     "default": 0,
-                    "description": "Zero-based character offset for this page.",
+                    "description": "Character offset for pagination.",
                 },
                 "limit_chars": {
                     "type": "integer",
                     "minimum": 1,
                     "maximum": READ_FILE_MAX_LIMIT_CHARS,
                     "default": READ_FILE_DEFAULT_LIMIT_CHARS,
-                    "description": (
-                        "Maximum file-content characters to return in this page. The "
-                        "hard character and UTF-8 byte maxima keep one tool result "
-                        "within coordinator context."
-                    ),
+                    "description": "Maximum characters to return.",
                 },
             },
             "required": ["path"],
@@ -153,10 +145,8 @@ READ_NEW_FILE_CONTENT_SCHEMA = {
     "function": {
         "name": "read_new_file_content",
         "description": (
-            "Read one bounded FIFO page of content appended since the last call for "
-            "this path. Useful for incremental reading of worker-generated artifacts. "
-            "If continuation metadata says more content is available, call again with "
-            "the same path. Returns an empty string if nothing is new."
+            "Read one bounded FIFO page of content appended since last call. "
+            "If continuation metadata says more content is available, call again with the same path."
         ),
         "parameters": {
             "type": "object",

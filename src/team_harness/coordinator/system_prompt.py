@@ -60,6 +60,17 @@ Delegation rules:
 - If a worker should write artifacts, tell it exactly where to write them
   inside the session output directory.
 
+Tool usage guidelines:
+- `spawn_agent`: Built-in agent templates already configure required approval,
+  output, and session flags. Use `flags` only for additional non-default flags.
+  Use `mode='resume'` with `resume_from_agent_id` (for same-run agents) or
+  `resume_from_session_id` (from prior worker_sessions.json).
+- `read_file`: Use `offset_chars` and `limit_chars` for pagination on large
+  files. For incremental reading of files appended during a run, use
+  `read_new_file_content`.
+- `bash`: Runs with a default 120s timeout. Pass explicit `timeout_seconds` for
+  long-running commands.
+
 Good worker prompt pattern:
 - objective
 - relevant context

@@ -57,13 +57,20 @@ def test_spawn_agent_schema_describes_template_default_flags(config):
     flags_description = schema["function"]["parameters"]["properties"]["flags"][
         "description"
     ]
+
+    assert "Spawn a worker agent subprocess" in description
+    assert "Default CLI behavior" not in description
+    assert "Additional non-default CLI flags" in flags_description
+
+    formatted = agent_tools._format_spawn_agent_defaults(
+        allowed_types=["codex", "claude"], config=config
+    )
+    assert "Default CLI behavior by agent type" in formatted
     agent_lines = {
         line.split(":", 1)[0].removeprefix("- "): line
-        for line in description.splitlines()
+        for line in formatted.splitlines()
         if line.startswith("- ")
     }
-
-    assert "Default CLI behavior by agent type" in description
     assert set(agent_lines) == {"codex", "claude"}
 
     codex_line = agent_lines["codex"]
@@ -82,7 +89,6 @@ def test_spawn_agent_schema_describes_template_default_flags(config):
     assert "--verbose" in claude_line
     assert "--dangerously-bypass-approvals-and-sandbox" not in claude_line
     assert "--skip-git-repo-check" not in claude_line
-    assert "Additional non-default CLI flags" in flags_description
 
 
 @pytest.mark.asyncio

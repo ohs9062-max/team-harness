@@ -21,9 +21,9 @@ BASH_SCHEMA = {
                     "minimum": 1,
                     "default": DEFAULT_BASH_TIMEOUT_SECONDS,
                     "description": (
-                        "Maximum runtime before the command and its descendants are "
-                        "terminated. Defaults to 120 seconds; explicitly raise this "
-                        "for a known long-running foreground command."
+                        "Maximum runtime before the command and its descendants are terminated. "
+                        "Defaults to 120 seconds; explicitly raise this for a known long-running "
+                        "foreground command."
                     ),
                 },
             },

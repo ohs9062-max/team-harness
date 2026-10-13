@@ -884,7 +884,7 @@ AGENT_STATUS_SCHEMA = {
     "type": "function",
     "function": {
         "name": "agent_status",
-        "description": "Get the current status of a spawned agent.",
+        "description": "Get current status and elapsed runtime of a spawned agent.",
         "parameters": {
             "type": "object",
             "properties": {"agent_id": {"type": "string"}},
@@ -896,16 +896,15 @@ READ_AGENT_OUTPUT_SCHEMA = {
     "type": "function",
     "function": {
         "name": "read_agent_output",
-        "description": (
-            "Read stdout and stderr log tails for a spawned agent. tail_bytes "
-            "is clamped to a per-run ceiling; over-large requests return the "
-            "clamped tail with a banner naming the full log paths."
-        ),
+        "description": "Read stdout and stderr log tails for a spawned agent.",
         "parameters": {
             "type": "object",
             "properties": {
                 "agent_id": {"type": "string"},
-                "tail_bytes": {"type": "integer"},
+                "tail_bytes": {
+                    "type": "integer",
+                    "description": "Maximum tail bytes to return (default 8192).",
+                },
             },
             "required": ["agent_id"],
         },
@@ -915,7 +914,7 @@ READ_NEW_AGENT_OUTPUT_SCHEMA = {
     "type": "function",
     "function": {
         "name": "read_new_agent_output",
-        "description": "Read only newly appended stdout content for an agent.",
+        "description": "Read newly appended stdout content for an agent since last check.",
         "parameters": {
             "type": "object",
             "properties": {"agent_id": {"type": "string"}},
@@ -927,11 +926,7 @@ LIST_AGENTS_SCHEMA = {
     "type": "function",
     "function": {
         "name": "list_agents",
-        "description": (
-            "List all agents in the current run. A terminal agent id may be "
-            "passed to spawn_agent(resume_from_agent_id=...) for safe "
-            "same-run session resume."
-        ),
+        "description": "List all spawned agents and their current statuses in this run.",
         "parameters": {"type": "object", "properties": {}, "required": []},
     },
 }
@@ -939,10 +934,7 @@ AGENT_AVAILABILITY_SCHEMA = {
     "type": "function",
     "function": {
         "name": "agent_availability",
-        "description": (
-            "List agent-template families that are available or temporarily "
-            "blocked by a hard provider rate-limit circuit."
-        ),
+        "description": "Check available and rate-limited agent-template families.",
         "parameters": {"type": "object", "properties": {}, "required": []},
     },
 }
@@ -950,7 +942,7 @@ WAIT_FOR_AGENTS_SCHEMA = {
     "type": "function",
     "function": {
         "name": "wait_for_agents",
-        "description": "Wait for all specified agents or until timeout.",
+        "description": "Wait for specified agents to complete or until timeout.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -980,7 +972,7 @@ KILL_AGENT_SCHEMA = {
     "type": "function",
     "function": {
         "name": "kill_agent",
-        "description": "Terminate a running agent.",
+        "description": "Terminate a running agent subprocess.",
         "parameters": {
             "type": "object",
             "properties": {"agent_id": {"type": "string"}},
@@ -1105,19 +1097,13 @@ def spawn_agent_schema(
 ) -> dict:
     """Build the coordinator tool schema for dynamic direct worker spawns."""
 
-    default_flags_description = _format_spawn_agent_defaults(
-        allowed_types=allowed_types, config=config
-    )
     return {
         "type": "function",
         "function": {
             "name": "spawn_agent",
             "description": (
-                "Spawn a worker agent subprocess. Returns a bare agent_<id> on "
-                "success. If an active hard-rate-limit circuit blocks the "
-                "family, returns JSON with spawned=false and "
-                "status=rate_limited without creating a worker.\n\n"
-                + default_flags_description
+                "Spawn a worker agent subprocess. Returns agent_<id> on success, "
+                "or rate-limited JSON status if blocked."
             ),
             "parameters": {
                 "type": "object",
@@ -1129,52 +1115,35 @@ def spawn_agent_schema(
                     "effort": {
                         "type": "string",
                         "minLength": 1,
-                        "description": (
-                            "Optional reasoning-effort override for this "
-                            "worker (e.g. low, medium, high). Overrides the "
-                            "agent template's default level. Only agent types "
-                            "whose template declares a reasoning-effort flag "
-                            "support it; the value is passed to the worker "
-                            "CLI unvalidated."
-                        ),
+                        "description": "Optional reasoning-effort override (e.g. low, medium, high).",
                     },
                     "mode": {
                         "type": "string",
                         "enum": ["fresh", "resume"],
                         "description": (
-                            "Use 'resume' to continue an existing provider "
-                            "session instead of starting a fresh one."
+                            "Use 'resume' to continue an existing provider session instead of "
+                            "starting a fresh one."
                         ),
                     },
                     "resume_from_session_id": {
                         "type": "string",
                         "description": (
-                            "Provider session ID to resume when mode == 'resume'. "
-                            "Use this for an ID read from a finalized current or "
-                            "prior worker_sessions.json. Mutually exclusive with "
-                            "resume_from_agent_id."
+                            "Provider session ID from worker_sessions.json to resume. "
+                            "Mutually exclusive with resume_from_agent_id."
                         ),
                     },
                     "resume_from_agent_id": {
                         "type": "string",
                         "minLength": 1,
                         "description": (
-                            "Agent ID from this live harness run to resume when "
-                            "mode == 'resume'. Team-harness resolves the captured "
-                            "provider session internally. The source must be "
-                            "terminal, have the same agent type, and have a "
-                            "captured session ID. It is mutually exclusive with "
-                            "resume_from_session_id."
+                            "Agent ID from this live harness run to resume; "
+                            "mutually exclusive with resume_from_session_id."
                         ),
                     },
                     "flags": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": (
-                            "Additional non-default CLI flags for this worker. "
-                            "Do not repeat flags already applied by the selected "
-                            "agent template."
-                        ),
+                        "description": "Additional non-default CLI flags for this worker.",
                     },
                     "env": {"type": "object"},
                     "agents": {
@@ -1184,47 +1153,27 @@ def spawn_agent_schema(
                     },
                     "worker_label": {
                         "type": "string",
-                        "description": (
-                            "Optional filesystem-safe worker label. "
-                            "Team-harness writes worker stdout/stderr under "
-                            "the session output directory at "
-                            "workers/<label>__<agent_id>/. The label must not "
-                            "contain path separators."
-                        ),
+                        "description": "Optional filesystem-safe worker label for log directory naming.",
                     },
                     "delegated_role": {
                         "type": "string",
                         "minLength": 1,
-                        "description": (
-                            "Dynamic audit label for this delegate's role "
-                            "(for example implementation, research, or review). "
-                            "This is not an enum or scheduling constraint."
-                        ),
+                        "description": "Audit label for delegate's role (e.g. implementation, research, review).",
                     },
                     "delegated_task_id": {
                         "type": "string",
                         "minLength": 1,
-                        "description": (
-                            "Coordinator-chosen task identifier used to join the "
-                            "spawn with its result and expected outputs."
-                        ),
+                        "description": "Task identifier linking the spawn with its result.",
                     },
                     "expected_outputs": {
                         "type": "array",
                         "items": {"type": "string", "minLength": 1},
-                        "description": (
-                            "Dynamic list of concrete outputs this delegate should "
-                            "return. Team-harness records it but does not enforce it."
-                        ),
+                        "description": "List of concrete outputs this delegate should produce.",
                     },
                     "state_responsibility": {
                         "type": "string",
                         "minLength": 1,
-                        "description": (
-                            "Plain-language statement of which state this delegate "
-                            "may update or must only report back about. This is "
-                            "accountability metadata, not a filesystem ACL."
-                        ),
+                        "description": "Statement of state updates the delegate is accountable for.",
                     },
                 },
                 "required": ["type", "prompt", "cwd"],
