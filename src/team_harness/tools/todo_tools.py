@@ -1,8 +1,9 @@
 import asyncio
 from collections.abc import Awaitable
 from collections.abc import Callable
-import json
 from pathlib import Path
+
+from team_harness.tracking.persistence import write_json_atomic
 
 _todo_path: Path | None = None
 _VALID_STATUSES = ("pending", "in_progress", "completed", "blocked")
@@ -66,8 +67,7 @@ async def todo_write(tasks: list[dict]) -> str:
 
     def _write() -> str:
         assert _todo_path is not None
-        _todo_path.parent.mkdir(parents=True, exist_ok=True)
-        _todo_path.write_text(json.dumps(tasks, indent=2))
+        write_json_atomic(path=_todo_path, payload=tasks)
         return f"Todo list updated ({len(tasks)} tasks)."
 
     return await asyncio.to_thread(_write)
@@ -102,8 +102,7 @@ def build_todo_tool_bindings(
                 return f"ERROR: invalid status {task.get('status')!r}"
 
         def _write() -> str:
-            todo_path.parent.mkdir(parents=True, exist_ok=True)
-            todo_path.write_text(json.dumps(tasks, indent=2))
+            write_json_atomic(path=todo_path, payload=tasks)
             return f"Todo list updated ({len(tasks)} tasks)."
 
         return await asyncio.to_thread(_write)

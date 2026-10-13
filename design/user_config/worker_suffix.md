@@ -11,3 +11,5 @@
   max 3 tries. Time limit (default smoke 15 min) exceeded → `FAILED`.
   Quota/permission/license error → `FAILED` immediately.
 - Do not claim checks you did not run.
+- Do not poll in a loop (sleep → check → sleep). Each check re-sends your whole
+  context. Wait on the process itself, or write DONE/FAILED and exit.

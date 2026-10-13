@@ -546,13 +546,12 @@ def _read_new_stdout_chunk(
     *,
     stdout_log: Path,
     output_cursor: int,
-    seen_stdout_cursor: int,
+    seen_stdout_cursor: int = 0,
     max_bytes: int = READ_NEW_AGENT_OUTPUT_MAX_BYTES,
 ) -> tuple[int, bytes, int, int]:
     """Read the unread stdout tail and return the cursor advanced to EOF.
 
-    The unread span starts at the later of the explicit read cursor and the
-    cursor maintained by wait_for_any snapshots. If that span is larger than
+    The unread span starts at the explicit read cursor. If that span is larger than
     max_bytes, only the latest max_bytes are returned, while the next cursor is
     still advanced to the current file size so the omitted backlog is not
     replayed on a later read.
@@ -560,7 +559,7 @@ def _read_new_stdout_chunk(
     if not stdout_log.exists():
         return output_cursor, b"", 0, 0
     size = stdout_log.stat().st_size
-    cursor = max(output_cursor, seen_stdout_cursor)
+    cursor = output_cursor
     if size <= cursor:
         return cursor, b"", 0, 0
     total_new_bytes = size - cursor
@@ -751,8 +750,7 @@ def _build_running_snapshot(
 
     Cursor stores are injectable so per-run tool bindings keep their own state,
     while the module-level tool functions can share the global stores. Advancing
-    the stdout cursor here lets read_new_agent_output skip output already
-    accounted for by wait_for_any.
+    the stdout cursor here tracks delta bytes produced between wait_for_any calls.
     """
     stdout_cursor_store = (
         stdout_cursors if stdout_cursors is not None else _wait_stdout_cursors
@@ -1183,6 +1181,14 @@ def spawn_agent_schema(
     }
 
 
+def _resolve_spawn_cwd(raw_cwd: str, config: "Config") -> str:
+    path = Path(raw_cwd).expanduser()
+    if path.is_absolute():
+        return str(path.resolve())
+    base_cwd = Path(getattr(config, "cwd", ".")).expanduser().resolve()
+    return str((base_cwd / path).resolve())
+
+
 async def spawn_agent(**kwargs: object) -> str:
     """Validate, record, and launch one worker for the active legacy binding."""
 
@@ -1190,7 +1196,7 @@ async def spawn_agent(**kwargs: object) -> str:
     manager, run_log, config, ui = _require_setup()
     agent_type = str(kwargs["type"])
     prompt = str(kwargs["prompt"])
-    cwd = str(Path(str(kwargs["cwd"])).expanduser().resolve())
+    cwd = _resolve_spawn_cwd(str(kwargs["cwd"]), config)
     model = str(kwargs["model"]) if kwargs.get("model") is not None else None
     breaker = _require_rate_limit_breaker()
     _sync_finished_rate_limits(manager=manager, run_log=run_log, breaker=breaker)
@@ -1441,19 +1447,16 @@ async def read_new_agent_output(agent_id: str) -> str:
     lock = _output_locks.setdefault(agent_id, asyncio.Lock())
     async with lock:
         cursor = _output_cursors.get(agent_id, 0)
-        seen_cursor = _wait_stdout_cursors.get(agent_id, 0)
 
         new_cursor, data, omitted_bytes, total_new_bytes = await asyncio.to_thread(
             _read_new_stdout_chunk,
             stdout_log=state.stdout_log,
             output_cursor=cursor,
-            seen_stdout_cursor=seen_cursor,
             max_bytes=max_bytes,
         )
         if not data:
             return ""
         _output_cursors[agent_id] = new_cursor
-        _wait_stdout_cursors[agent_id] = new_cursor
         return _format_new_stdout_chunk(
             data=data,
             omitted_bytes=omitted_bytes,
@@ -1531,6 +1534,16 @@ async def wait_for_any(agent_ids: list[str], timeout: float | None = None) -> st
     manager, _, config, _ = _require_setup()
     if not agent_ids:
         return json.dumps({"agent_id": None, "timed_out": False, "running": []})
+    missing = [aid for aid in agent_ids if aid not in manager._agents]
+    if missing:
+        return json.dumps(
+            {
+                "error": f"Agent(s) not found: {', '.join(missing)}",
+                "agent_id": None,
+                "timed_out": False,
+                "running": [],
+            }
+        )
     tasks = {
         asyncio.ensure_future(manager.wait_one(agent_id)): agent_id
         for agent_id in agent_ids
@@ -1676,7 +1689,7 @@ def build_agent_tool_bindings(
         _validate_spawn_agent_kwargs(kwargs=kwargs)
         agent_type = str(kwargs["type"])
         prompt = str(kwargs["prompt"])
-        cwd = str(Path(str(kwargs["cwd"])).expanduser().resolve())
+        cwd = _resolve_spawn_cwd(str(kwargs["cwd"]), config)
         model_val = str(kwargs["model"]) if kwargs.get("model") is not None else None
         _sync_finished_rate_limits(
             manager=manager, run_log=run_log, breaker=rate_limit_breaker
@@ -1911,19 +1924,16 @@ def build_agent_tool_bindings(
         lock = output_locks.setdefault(agent_id, asyncio.Lock())
         async with lock:
             cursor = output_cursors.get(agent_id, 0)
-            seen_cursor = wait_stdout_cursors.get(agent_id, 0)
 
             new_cursor, data, omitted_bytes, total_new_bytes = await asyncio.to_thread(
                 _read_new_stdout_chunk,
                 stdout_log=state.stdout_log,
                 output_cursor=cursor,
-                seen_stdout_cursor=seen_cursor,
                 max_bytes=max_bytes,
             )
             if not data:
                 return ""
             output_cursors[agent_id] = new_cursor
-            wait_stdout_cursors[agent_id] = new_cursor
             return _format_new_stdout_chunk(
                 data=data,
                 omitted_bytes=omitted_bytes,
@@ -1993,6 +2003,16 @@ def build_agent_tool_bindings(
     async def _wait_for_any(agent_ids: list[str], timeout: float | None = None) -> str:
         if not agent_ids:
             return json.dumps({"agent_id": None, "timed_out": False, "running": []})
+        missing = [aid for aid in agent_ids if aid not in manager._agents]
+        if missing:
+            return json.dumps(
+                {
+                    "error": f"Agent(s) not found: {', '.join(missing)}",
+                    "agent_id": None,
+                    "timed_out": False,
+                    "running": [],
+                }
+            )
         tasks = {asyncio.ensure_future(manager.wait_one(aid)): aid for aid in agent_ids}
         try:
             done, pending = await asyncio.wait_for(

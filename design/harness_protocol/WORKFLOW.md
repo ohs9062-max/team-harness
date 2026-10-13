@@ -189,6 +189,8 @@ Entry AI는 Worker를 자동으로 겸하지 않는다.
 
 ## 2. shared 문서 책임
 
+> **참고 (자동 러너 vs 수동 규칙):** 아래 `shared/` 문서는 수동/실험실 워크플로 규칙이다. CLI 자동 러너(`th protocol run`)는 `shared/` 디렉터리를 만들지 않고, 실행별 run 디렉터리(`~/.team-harness/runs/protocol-<TASK-ID>/`) 아래 `protocol_outputs/<STAGE>/<agent>.md` 및 `protocol_state.json`을 정본 산출물 계약으로 사용한다.
+
 | 문서 | 책임 |
 |------|------|
 | TASK.md | 사용자 원문, MODE, Git 정보, Worker 상태 / Stage Plan을 담은 작업 계약 |
@@ -396,13 +398,13 @@ base/master에 직접 코드를 쓰지 않는다.
 
 - MODE B: state에 기록된 기존 task worktree를 그대로 사용한다.
 - MODE C: `task/<TASK-ID>/pipeline` worktree 하나를 모든 역할이 순차 사용한다.
-- MODE A 사용자 선택 후 `CODEX_MERGE`만 base working tree 통합 권한을 가진다.
+- MODE A 사용자 선택 후 `CODEX_MERGE`는 `task/<TASK-ID>/integration` 워크트리에 결과를 통합한다 (base working tree는 직접 수정하지 않으며 사람의 최종 merge로 반영, TH-D16).
 
 ### Checkpoint
 
 checkpoint commit은 AI 간 인계·비교·검수용 task branch 로컬 스냅샷이다.
 MODE A/B/C Runner 실행 승인은 task worktree checkpoint를 포함하지만 push나 base 통합 승인은 아니다.
-MODE A base 통합은 사용자 선택 후 Codex가 수행하고 push는 별도 승인이다.
+MODE A 통합은 사용자 선택 후 Codex가 `task/<TASK-ID>/integration` 워크트리에 통합 커밋을 생성하며, base 반영은 사람의 최종 merge로 수행하고 push는 별도 승인이다 (TH-D16).
 
 다른 worktree는 merge-base와 triple-dot diff로 실제 작업 변경을 검수한다.
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 import subprocess
 import sys
@@ -13,6 +14,7 @@ from team_harness.protocol.models import CheckStatus
 from team_harness.protocol.models import ReviewVerdict
 from team_harness.protocol.models import Stage
 from team_harness.protocol.models import StageStatus
+from team_harness.protocol.state import ProtocolStateManager
 
 
 def _init_git_repo(path: Path) -> str:
@@ -427,9 +429,9 @@ async def test_mode_c_git_safety_dirty_base(tmp_path: Path) -> None:
     repo.mkdir()
     _init_git_repo(repo)
 
-    # Make repo dirty
-    dirty_file = repo / "uncommitted.py"
-    dirty_file.write_text("# work in progress", encoding="utf-8")
+    # Modify a tracked file
+    readme = repo / "README.md"
+    readme.write_text("# Modified Work in progress\n", encoding="utf-8")
 
     runner = MockAgentRunner()
     state = await run_mode_c(
@@ -441,13 +443,37 @@ async def test_mode_c_git_safety_dirty_base(tmp_path: Path) -> None:
         auto_discover_checks=False,
     )
 
-    assert state.stage == Stage.GIT_PREFLIGHT.value
-    assert state.status == StageStatus.BLOCKED.value
-    assert "uncommitted changes" in (state.blocker or "")
-    # No workers should have been spawned
-    assert len(runner.calls) == 0
-    # Dirty file must remain untouched (no reset/clean/stash)
-    assert dirty_file.exists()
+    assert state.stage_statuses[Stage.GIT_PREFLIGHT.value] == StageStatus.DONE.value
+    assert any("tracked uncommitted changes" in w for w in state.warnings)
+    assert len(runner.calls) > 0
+    # Dirty file must remain untouched
+    assert readme.read_text(encoding="utf-8") == "# Modified Work in progress\n"
+
+
+@pytest.mark.asyncio
+async def test_mode_c_git_safety_ignores_untracked_files(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+
+    # Add an untracked file
+    untracked_file = repo / "uncommitted.py"
+    untracked_file.write_text("# work in progress", encoding="utf-8")
+
+    runner = MockAgentRunner()
+    state = await run_mode_c(
+        task_id="T-UNTRACKED",
+        user_request="x",
+        target_repo=str(repo),
+        run_dir=tmp_path / "run_untracked",
+        agent_runner=runner,
+        auto_discover_checks=False,
+    )
+
+    assert state.stage_statuses[Stage.GIT_PREFLIGHT.value] == StageStatus.DONE.value
+    assert len(state.warnings) == 0
+    assert len(runner.calls) > 0
+    assert untracked_file.exists()
 
 
 @pytest.mark.asyncio
@@ -573,3 +599,41 @@ async def test_mode_c_waived_checks_allows_final(tmp_path: Path) -> None:
     assert state.status == StageStatus.DONE.value
     assert state.test_status == CheckStatus.WAIVED.value
     assert state.checkpoint is not None
+
+
+@pytest.mark.asyncio
+async def test_mode_c_records_blocked_on_cancellation_or_interrupt(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+
+    class CancellingRunner:
+        def __init__(self) -> None:
+            self.cleaned_up = False
+
+        async def run_agent(self, **kwargs: Any) -> AgentResult:
+            raise asyncio.CancelledError("User cancelled")
+
+        def cleanup(self) -> None:
+            self.cleaned_up = True
+
+    runner = CancellingRunner()
+    run_dir = tmp_path / "run_cancel"
+
+    with pytest.raises(asyncio.CancelledError):
+        await run_mode_c(
+            task_id="T-CANCEL",
+            user_request="test",
+            target_repo=str(repo),
+            run_dir=run_dir,
+            agent_runner=runner,  # type: ignore
+        )
+
+    saved = ProtocolStateManager(run_dir).load_state()
+    assert saved is not None
+    assert saved.status == StageStatus.BLOCKED.value
+    assert saved.stage_statuses[saved.stage] == StageStatus.BLOCKED.value
+    assert "User cancelled" in (saved.blocker or "")
+    assert runner.cleaned_up is True

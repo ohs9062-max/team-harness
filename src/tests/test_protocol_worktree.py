@@ -230,7 +230,36 @@ def test_remove_worktree(tmp_path: Path) -> None:
         base_commit=base_commit,
         worktrees_base_dir=wt_base,
     )
-    assert Path(ref.path).exists()
-
     remove_worktree(ref.path, repo_root=repo)
     assert not Path(ref.path).exists()
+
+
+def test_remove_worktree_without_repo_root(tmp_path: Path) -> None:
+    """PROTOCOL-06: remove_worktree must succeed even when repo_root is not provided."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    base_commit = _init_repo(repo)
+
+    wt_base = tmp_path / "wt_base"
+    ref = create_worktree(
+        repo_root=repo,
+        task_id="TASK-REMOVE-NOROOT",
+        label="pipeline",
+        base_commit=base_commit,
+        worktrees_base_dir=wt_base,
+    )
+    assert Path(ref.path).exists()
+
+    # Call remove_worktree without repo_root
+    remove_worktree(ref.path)
+    assert not Path(ref.path).exists()
+
+    # Verify worktree is pruned from git worktree list
+    output = subprocess.run(
+        ["git", "worktree", "list", "--porcelain"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    assert str(Path(ref.path).resolve()) not in output

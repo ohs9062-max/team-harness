@@ -175,3 +175,13 @@ async def test_chat_usage_without_cache_omits_cached_key():
         "prompt_tokens": 100,
         "completion_tokens": 20,
     }
+
+
+@pytest.mark.asyncio
+async def test_coordinator_client_aclose_closes_underlying_client():
+    client = CoordinatorClient(
+        api_base="http://localhost:9999", api_key="k", model="openai/gpt-4o"
+    )
+    assert not client._client.is_closed()
+    await client.aclose()
+    assert client._client.is_closed()

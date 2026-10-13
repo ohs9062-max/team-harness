@@ -14,3 +14,9 @@ Makefile
 
 # th run/repl session outputs (config output_dir default)
 _outputs/
+
+# secrets — keys live in ~/.team-harness/secrets.env, never in the repo
+.env
+.env.*
+secrets.env
+*.secrets.env

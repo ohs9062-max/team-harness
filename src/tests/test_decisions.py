@@ -131,3 +131,24 @@ def test_jev_official_response_shape_is_parsed():
 def test_jev_response_without_decision_is_rejected():
     with pytest.raises(JevBackendError):
         _extract_answer({"answers": {}})
+
+
+@pytest.mark.asyncio
+async def test_router_stops_calling_backend_after_consecutive_errors():
+    calls = 0
+
+    class CountingFailingBackend:
+        async def decide(self, request: DecisionRequest) -> JevAnswer:
+            nonlocal calls
+            calls += 1
+            raise RuntimeError("429 quota exhausted")
+
+    router = DecisionRouter(
+        DecisionRouterSettings(enabled=True), backend=CountingFailingBackend()
+    )
+    for _ in range(5):
+        result = await router.decide(request())
+        assert result.choice == "BLOCK"
+        assert result.applied is False
+    assert calls == 3
+    assert "disabled after 3 consecutive errors" in (result.fallback_reason or "")

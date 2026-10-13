@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -83,31 +84,51 @@ class CheckRunner:
 
         # Python projects
         excluded_parts = {".git", ".harness", ".venv", "venv", "node_modules"}
-        test_roots = sorted(
-            {
-                path.parent
-                for path in self.repo_root.glob("**/tests/test_*.py")
-                if not (set(path.relative_to(self.repo_root).parts) & excluded_parts)
-            }
-        )
-        for test_root in test_roots:
-            commands.append(
-                [
-                    sys.executable,
-                    "-m",
-                    "unittest",
-                    "discover",
-                    "-s",
-                    str(test_root.relative_to(self.repo_root)),
-                    "-p",
-                    "test_*.py",
-                    "-v",
-                ]
+        has_python_tests = (
+            any(
+                not (set(path.relative_to(self.repo_root).parts) & excluded_parts)
+                for path in self.repo_root.glob("**/test_*.py")
             )
-        if not test_roots and (self.repo_root / "pyproject.toml").exists():
-            commands.append([sys.executable, "-m", "pytest", "-q"])
+            or (self.repo_root / "pyproject.toml").exists()
+            or (self.repo_root / "setup.py").exists()
+        )
+
+        if has_python_tests:
+            commands.append(self._detect_python_test_runner())
 
         return commands
+
+    def _detect_python_test_runner(self) -> list[str]:
+        """Detect the appropriate Python test runner (venv, uv, pytest) for the target repo."""
+        for venv_name in (".venv", "venv"):
+            venv_dir = self.repo_root / venv_name
+            if not venv_dir.is_dir():
+                continue
+            for pytest_candidate in (
+                venv_dir / "bin" / "pytest",
+                venv_dir / "Scripts" / "pytest.exe",
+                venv_dir / "Scripts" / "pytest",
+            ):
+                if pytest_candidate.is_file():
+                    return [str(pytest_candidate), "-q"]
+            for py_candidate in (
+                venv_dir / "bin" / "python",
+                venv_dir / "bin" / "python3",
+                venv_dir / "Scripts" / "python.exe",
+                venv_dir / "Scripts" / "python",
+            ):
+                if py_candidate.is_file():
+                    return [str(py_candidate), "-m", "pytest", "-q"]
+
+        if (self.repo_root / "uv.lock").exists() or (
+            (self.repo_root / "pyproject.toml").exists() and shutil.which("uv")
+        ):
+            return ["uv", "run", "pytest", "-q"]
+
+        if shutil.which("pytest"):
+            return ["pytest", "-q"]
+
+        return [sys.executable, "-m", "pytest", "-q"]
 
     def run_all(self, commands: Sequence[Sequence[str]]) -> list[CheckResult]:
         return [self.run_one(list(cmd)) for cmd in commands]

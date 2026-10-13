@@ -765,7 +765,10 @@ async def _protocol_run(
 ) -> None:
     from team_harness.protocol.config import load_protocol_config
     from team_harness.protocol.mode_a import run_mode_a
+    from team_harness.protocol.mode_c import _safe_cleanup
     from team_harness.protocol.mode_c import run_mode_c
+    from team_harness.protocol.models import StageStatus
+    from team_harness.protocol.state import ProtocolStateManager
 
     task_id = _make_run_id()
     run_dir = RUNS_DIR / f"protocol-{task_id}"
@@ -790,16 +793,32 @@ async def _protocol_run(
         runtime_roles=_parse_set_role(set_role), config_start_dir=target_repo
     )
     mode_fn = run_mode_a if mode == "a" else run_mode_c
-    state = await mode_fn(
-        task_id=task_id,
-        user_request=task,
-        target_repo=target_repo,
-        run_dir=run_dir,
-        agent_runner=runner,
-        protocol_config=proto_cfg,
-        agent_timeout_sec=agent_timeout_sec,
-        check_timeout_sec=check_timeout_sec,
-    )
+    try:
+        state = await mode_fn(
+            task_id=task_id,
+            user_request=task,
+            target_repo=target_repo,
+            run_dir=run_dir,
+            agent_runner=runner,
+            protocol_config=proto_cfg,
+            agent_timeout_sec=agent_timeout_sec,
+            check_timeout_sec=check_timeout_sec,
+        )
+    except BaseException as exc:
+        _safe_cleanup(runner)
+        mgr = ProtocolStateManager(run_dir)
+        cur_state = mgr.load_state()
+        if cur_state is not None and cur_state.status not in (
+            StageStatus.DONE.value,
+            StageStatus.BLOCKED.value,
+        ):
+            cur_state.status = StageStatus.BLOCKED.value
+            if cur_state.stage:
+                cur_state.stage_statuses[cur_state.stage] = StageStatus.BLOCKED.value
+            cur_state.blocker = f"Interrupted/failed: {type(exc).__name__}: {exc}"
+            mgr.save_state(cur_state)
+            mgr.append_event("RUN_INTERRUPTED", reason=str(exc))
+        raise
     _print_protocol_state(state, run_dir=run_dir)
     if mode == "a" and state.status == "WAITING_USER":
         click.echo(
@@ -1077,7 +1096,9 @@ async def _protocol_resume(
 ) -> None:
     from team_harness.protocol.config import load_protocol_config
     from team_harness.protocol.mode_a import resume_mode_a
+    from team_harness.protocol.mode_c import _safe_cleanup
     from team_harness.protocol.mode_c import resume_mode_c
+    from team_harness.protocol.models import StageStatus
     from team_harness.protocol.state import ProtocolStateManager
 
     resolved_run_dir = Path(run_dir).resolve()
@@ -1096,44 +1117,60 @@ async def _protocol_resume(
         runtime_roles=_parse_set_role(set_role), config_start_dir=resolved_repo
     )
 
-    if saved.mode == "C":
-        if selection is not None:
-            raise click.ClickException(
-                "--selection applies to MODE A runs; this run is MODE C. "
-                "Use --from-stage instead."
+    try:
+        if saved.mode == "C":
+            if selection is not None:
+                raise click.ClickException(
+                    "--selection applies to MODE A runs; this run is MODE C. "
+                    "Use --from-stage instead."
+                )
+            state = await resume_mode_c(
+                run_dir=resolved_run_dir,
+                agent_runner=runner,
+                from_stage=from_stage,
+                protocol_config=proto_cfg,
+                agent_timeout_sec=agent_timeout_sec,
+                check_timeout_sec=check_timeout_sec,
             )
-        state = await resume_mode_c(
+            _print_protocol_state(state, run_dir=resolved_run_dir)
+            return
+
+        if selection is None:
+            raise click.ClickException(
+                "--selection is required to resume a MODE A run "
+                "(SELECT_WORKER_1|SELECT_WORKER_2|SELECT_HYBRID|REWORK|CANCEL)."
+            )
+        if from_stage is not None:
+            raise click.ClickException(
+                "--from-stage applies to MODE C runs; this run is MODE A."
+            )
+        state = await resume_mode_a(
+            task_id=task_id,
+            selection=selection,
+            user_instruction=note,
             run_dir=resolved_run_dir,
+            target_repo=resolved_repo,
             agent_runner=runner,
-            from_stage=from_stage,
             protocol_config=proto_cfg,
             agent_timeout_sec=agent_timeout_sec,
             check_timeout_sec=check_timeout_sec,
         )
         _print_protocol_state(state, run_dir=resolved_run_dir)
-        return
-
-    if selection is None:
-        raise click.ClickException(
-            "--selection is required to resume a MODE A run "
-            "(SELECT_WORKER_1|SELECT_WORKER_2|SELECT_HYBRID|REWORK|CANCEL)."
-        )
-    if from_stage is not None:
-        raise click.ClickException(
-            "--from-stage applies to MODE C runs; this run is MODE A."
-        )
-    state = await resume_mode_a(
-        task_id=task_id,
-        selection=selection,
-        user_instruction=note,
-        run_dir=resolved_run_dir,
-        target_repo=resolved_repo,
-        agent_runner=runner,
-        protocol_config=proto_cfg,
-        agent_timeout_sec=agent_timeout_sec,
-        check_timeout_sec=check_timeout_sec,
-    )
-    _print_protocol_state(state, run_dir=resolved_run_dir)
+    except BaseException as exc:
+        _safe_cleanup(runner)
+        mgr = ProtocolStateManager(resolved_run_dir)
+        cur_state = mgr.load_state()
+        if cur_state is not None and cur_state.status not in (
+            StageStatus.DONE.value,
+            StageStatus.BLOCKED.value,
+        ):
+            cur_state.status = StageStatus.BLOCKED.value
+            if cur_state.stage:
+                cur_state.stage_statuses[cur_state.stage] = StageStatus.BLOCKED.value
+            cur_state.blocker = f"Interrupted/failed: {type(exc).__name__}: {exc}"
+            mgr.save_state(cur_state)
+            mgr.append_event("RESUME_INTERRUPTED", reason=str(exc))
+        raise
 
 
 @protocol.command("relay")
@@ -1214,3 +1251,78 @@ async def _protocol_relay(
         check_timeout_sec=check_timeout_sec,
     )
     _print_protocol_state(state, run_dir=resolved_run_dir)
+
+
+@protocol.command("clean")
+@click.option(
+    "--repo",
+    type=click.Path(exists=True, file_okay=False),
+    default=None,
+    help="Target git repository path (defaults to auto-detection from runs).",
+)
+@click.option(
+    "--runs-dir",
+    type=click.Path(file_okay=False),
+    default=None,
+    help="Base directory containing protocol run logs (default: ~/.team-harness/runs).",
+)
+@click.option("--task-id", default=None, help="Specific task ID to clean up.")
+@click.option(
+    "--run-dir",
+    type=click.Path(file_okay=False),
+    default=None,
+    help="Specific run directory to clean up.",
+)
+@click.option(
+    "--yes",
+    is_flag=True,
+    default=False,
+    help="Perform actual deletion. Without this flag, only a dry-run preview is shown.",
+)
+def protocol_clean(
+    repo: str | None,
+    runs_dir: str | None,
+    task_id: str | None,
+    run_dir: str | None,
+    yes: bool,
+) -> None:
+    """Clean up worktrees and branches from completed, blocked, or cancelled runs.
+
+    By default, this command performs a dry run and lists items that would be deleted.
+    Pass `--yes` to perform the actual deletion.
+    """
+    from team_harness.protocol.clean import clean_protocol_runs
+
+    result = clean_protocol_runs(
+        runs_dir=runs_dir,
+        repo_root=repo,
+        task_id=task_id,
+        run_dir=run_dir,
+        dry_run=not yes,
+    )
+
+    if not result.targets:
+        click.echo("[protocol] 정리할 대상(DONE/BLOCKED/CANCELLED)이 없습니다.")
+        return
+
+    mode_label = "실제 삭제" if yes else "dry-run (시뮬레이션)"
+    click.echo(f"[protocol] 정리 대상 실행 ({mode_label}): {len(result.targets)}개")
+    for t in result.targets:
+        click.echo(f"  - task_id={t.task_id} status={t.status} stage={t.stage}")
+        for wt in t.worktrees:
+            click.echo(f"      워크트리: {wt}")
+        for br in t.branches:
+            click.echo(f"      브랜치: {br}")
+
+    if not yes:
+        click.echo(
+            "[protocol] (dry-run) 실제 삭제를 수행하려면 --yes 옵션을 추가하여 실행하십시오."
+        )
+    else:
+        click.echo(
+            f"[protocol] 정리 완료: 워크트리 {len(result.removed_worktrees)}개 삭제, "
+            f"브랜치 {len(result.removed_branches)}개 삭제."
+        )
+        if result.errors:
+            for err in result.errors:
+                click.echo(f"[protocol] [경고] {err}", err=True)

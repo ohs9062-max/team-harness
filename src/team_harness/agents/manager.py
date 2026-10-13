@@ -186,6 +186,12 @@ class AgentManager:
         state.status = "killed"
         state.finished_at = datetime.now(timezone.utc)
 
+    def kill_all(self) -> None:
+        """Terminate all live worker execution groups registered in the manager."""
+        for agent_id, state in list(self._agents.items()):
+            if state.proc.returncode is None:
+                self.kill(agent_id)
+
     async def ensure_group_dead(
         self,
         agent_id: str,

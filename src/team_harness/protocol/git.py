@@ -74,13 +74,17 @@ def git_preflight(repo_path: str | Path) -> GitPreflight:
     status_output = _git(
         "status",
         "--porcelain=v1",
-        "--untracked-files=all",
+        "--untracked-files=no",
         "--",
         ".",
         *_RUNTIME_EXCLUDES,
         cwd=repo,
     ).stdout
-    status_lines = [line for line in status_output.splitlines() if line]
+    status_lines = [
+        line
+        for line in status_output.splitlines()
+        if line and not line.startswith("??")
+    ]
 
     worktrees = list_worktrees(repo)
 

@@ -284,6 +284,9 @@ class ProtocolState:
     # Blocker reason
     blocker: str | None = None
 
+    # Warnings collected during execution (e.g. tracked modifications at preflight)
+    warnings: list[str] = field(default_factory=list)
+
     # Timestamps
     created_at: str = ""
     updated_at: str = ""

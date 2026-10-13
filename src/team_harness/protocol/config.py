@@ -8,9 +8,33 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from dotenv import dotenv_values
-
 from team_harness.protocol.models import normalize_agent_type
+
+
+def _parse_dotenv(path: Path) -> dict[str, str]:
+    """Parse a simple KEY=VALUE dotenv file without external dependencies."""
+    vals: dict[str, str] = {}
+    if not path.is_file():
+        return vals
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError:
+        return vals
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" in line:
+            k, v = line.split("=", 1)
+            k = k.strip()
+            v = v.strip()
+            if (v.startswith('"') and v.endswith('"')) or (
+                v.startswith("'") and v.endswith("'")
+            ):
+                v = v[1:-1]
+            vals[k] = v
+    return vals
+
 
 if TYPE_CHECKING:
     from team_harness.config import Config
@@ -90,6 +114,7 @@ class ProtocolConfig:
             agent_type="antigravity", model="Gemini 3.8 Flash (High)"
         )
     )
+    symlink_ignored_dirs: tuple[str, ...] = field(default_factory=tuple)
 
 
 # Every role the Harness Protocol maps onto an agent backend. Used to reject a
@@ -233,6 +258,7 @@ def load_protocol_config(
     mode_c_review: ProtocolAgentSpec | str | None = None,
     mode_c_review_model: str | None = None,
     mode_c_review_effort: str | None = None,
+    symlink_ignored_dirs: list[str] | tuple[str, ...] | None = None,
     role_tables: dict[str, dict[str, str]] | None = None,
     runtime_roles: dict[str, dict[str, str]] | None = None,
     config_start_dir: str | Path | None = None,
@@ -271,10 +297,8 @@ def load_protocol_config(
         merged_env = {}
         target_file = Path(env_file) if env_file else Path(".env")
         if target_file.exists():
-            file_vals = dotenv_values(target_file)
-            for k, v in file_vals.items():
-                if v is not None:
-                    merged_env[k] = v
+            file_vals = _parse_dotenv(target_file)
+            merged_env.update(file_vals)
         for k, v in os.environ.items():
             merged_env[k] = v
 
@@ -376,6 +400,19 @@ def load_protocol_config(
         toml_role=role_tables.get("mode_c_review"),
     )
 
+    resolved_symlink_dirs: tuple[str, ...]
+    if symlink_ignored_dirs is not None:
+        resolved_symlink_dirs = tuple(symlink_ignored_dirs)
+    elif "HARNESS_PROTOCOL_SYMLINK_IGNORED_DIRS" in merged_env:
+        raw_env_symlinks = merged_env["HARNESS_PROTOCOL_SYMLINK_IGNORED_DIRS"].strip()
+        resolved_symlink_dirs = (
+            tuple(x.strip() for x in raw_env_symlinks.split(",") if x.strip())
+            if raw_env_symlinks
+            else ()
+        )
+    else:
+        resolved_symlink_dirs = ()
+
     return ProtocolConfig(
         mode_a_worker_1=spec_a_w1,
         mode_a_worker_2=spec_a_w2,
@@ -384,6 +421,7 @@ def load_protocol_config(
         mode_c_design=spec_c_design,
         mode_c_implement=spec_c_impl,
         mode_c_review=spec_c_rev,
+        symlink_ignored_dirs=resolved_symlink_dirs,
     )
 
 

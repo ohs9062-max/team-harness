@@ -4,6 +4,7 @@ from collections.abc import Awaitable
 from collections.abc import Callable
 import os
 from pathlib import Path
+import signal
 
 _file_cursors: dict[str, int] = {}
 _file_locks: dict[str, asyncio.Lock] = {}
@@ -11,6 +12,9 @@ _file_locks: dict[str, asyncio.Lock] = {}
 READ_FILE_DEFAULT_LIMIT_CHARS = 32_768
 READ_FILE_MAX_LIMIT_CHARS = 32_768
 READ_FILE_MAX_CONTENT_BYTES = 32 * 1024
+LS_MAX_ENTRIES = 500
+GLOB_MAX_ENTRIES = 500
+GREP_DEFAULT_TIMEOUT_SECONDS = 30.0
 
 READ_FILE_SCHEMA = {
     "type": "function",
@@ -135,7 +139,14 @@ GREP_SCHEMA = {
         "description": "Search file contents for a regex pattern.",
         "parameters": {
             "type": "object",
-            "properties": {"pattern": {"type": "string"}, "path": {"type": "string"}},
+            "properties": {
+                "pattern": {"type": "string"},
+                "path": {"type": "string"},
+                "timeout_seconds": {
+                    "type": "number",
+                    "description": "Maximum execution time in seconds.",
+                },
+            },
             "required": ["pattern", "path"],
         },
     },
@@ -309,9 +320,13 @@ async def ls(path: str) -> str:
                     rows.append((prefix, f"{entry.name}\tdir"))
                 else:
                     rows.append((prefix, f"{entry.name}\tfile\t{entry.stat().st_size}"))
-        return "\n".join(
-            row for _, row in sorted(rows, key=lambda item: (item[0], item[1]))
-        )
+        sorted_rows = sorted(rows, key=lambda item: (item[0], item[1]))
+        total = len(sorted_rows)
+        if total > LS_MAX_ENTRIES:
+            omitted = total - LS_MAX_ENTRIES
+            visible = [row for _, row in sorted_rows[:LS_MAX_ENTRIES]]
+            return "\n".join(visible) + f"\n[output truncated: {omitted} items omitted]"
+        return "\n".join(row for _, row in sorted_rows)
 
     return await asyncio.to_thread(_scan)
 
@@ -320,21 +335,47 @@ async def glob(pattern: str, cwd: str = ".") -> str:
     def _glob() -> str:
         base = Path(cwd)
         matches = sorted(str(match.relative_to(base)) for match in base.glob(pattern))
-        return "\n".join(matches) if matches else "(no matches)"
+        if not matches:
+            return "(no matches)"
+        total = len(matches)
+        if total > GLOB_MAX_ENTRIES:
+            omitted = total - GLOB_MAX_ENTRIES
+            visible = matches[:GLOB_MAX_ENTRIES]
+            return "\n".join(visible) + f"\n[output truncated: {omitted} items omitted]"
+        return "\n".join(matches)
 
     return await asyncio.to_thread(_glob)
 
 
-async def grep(pattern: str, path: str) -> str:
+async def grep(
+    pattern: str, path: str, timeout_seconds: float = GREP_DEFAULT_TIMEOUT_SECONDS
+) -> str:
     proc = await asyncio.create_subprocess_exec(
         "grep",
-        "-rn",
+        "-rnI",
         pattern,
         path,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.DEVNULL,
+        start_new_session=True,
     )
-    stdout, _ = await proc.communicate()
+    try:
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
+    except TimeoutError:
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=1.0)
+        except TimeoutError:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            await proc.wait()
+        return f"ERROR: grep timed out after {timeout_seconds} seconds"
+
     text = stdout.decode(errors="replace")
     if not text:
         return "(no matches)"

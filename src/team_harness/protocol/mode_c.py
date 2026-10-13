@@ -77,6 +77,19 @@ class AgentRunner(TypingProtocol):
     ) -> AgentResult: ...
 
 
+def _safe_cleanup(runner: Any) -> None:
+    """Safely terminate all worker processes registered in runner."""
+    cleanup_fn = getattr(runner, "cleanup", None)
+    if callable(cleanup_fn):
+        cleanup_fn()
+        return
+    manager = getattr(runner, "manager", None)
+    if manager is not None:
+        kill_all_fn = getattr(manager, "kill_all", None)
+        if callable(kill_all_fn):
+            kill_all_fn()
+
+
 class TeamHarnessAgentRunner:
     """AgentRunner implementation that delegates to team_harness execution engine."""
 
@@ -198,6 +211,16 @@ class TeamHarnessAgentRunner:
             elif spawn_result.proc.returncode is None:
                 spawn_result.proc.kill()
             await spawn_result.proc.wait()
+        except BaseException:
+            if spawn_result.pgid:
+                signal_group(spawn_result.pgid, signal.SIGKILL)
+            elif spawn_result.proc.returncode is None:
+                spawn_result.proc.kill()
+            try:
+                await spawn_result.proc.wait()
+            except Exception:
+                pass
+            raise
 
         duration = time.monotonic() - started
         returncode = spawn_result.proc.returncode or 0
@@ -265,6 +288,10 @@ class TeamHarnessAgentRunner:
             failure_classification=classification,
             usage=(usage.to_dict() if (usage := extract_usage(stdout_text)) else None),
         )
+
+    def cleanup(self) -> None:
+        """Terminate all workers registered in the manager."""
+        self.manager.kill_all()
 
     def _classify_failure(
         self,
@@ -463,11 +490,15 @@ async def run_mode_c(
     state.base_branch = preflight.branch
     state.base_commit = preflight.head
     if preflight.dirty:
-        return _block(
-            state,
-            state_mgr,
-            Stage.GIT_PREFLIGHT.value,
-            f"Repository has uncommitted changes: {preflight.status_lines[:5]}",
+        warning_msg = (
+            f"Repository has tracked uncommitted changes (proceeding from HEAD): "
+            f"{preflight.status_lines[:5]}"
+        )
+        state.warnings.append(warning_msg)
+        state_mgr.append_event(
+            "git_preflight.warning",
+            warning=warning_msg,
+            status_lines=preflight.status_lines[:5],
         )
     state.stage_statuses[Stage.GIT_PREFLIGHT.value] = StageStatus.DONE.value
     state_mgr.save_state(state)
@@ -486,6 +517,7 @@ async def run_mode_c(
             "pipeline",
             state.base_commit,
             worktrees_base_dir=worktrees_base_dir,
+            symlink_dirs=proto_cfg.symlink_ignored_dirs,
         )
     except (OSError, subprocess.CalledProcessError, ValueError, RuntimeError) as exc:
         return _block(
@@ -578,6 +610,17 @@ async def resume_mode_c(
             "MODE A runs are continued with resume_mode_a."
         )
 
+    pipeline = state.worktrees.get("pipeline")
+    worktree_path = (pipeline or {}).get("path", "")
+    if not pipeline or not worktree_path:
+        failed_stage = state.stage
+        reason = state.blocker or "pre-worktree setup stage"
+        raise ValueError(
+            f"Cannot resume MODE C run {state.task_id}: worktree was never created "
+            f"(run failed before WORKTREE_SETUP at stage {failed_stage}: {reason}). "
+            "Start a fresh run with `th protocol run` instead."
+        )
+
     stage = from_stage or _first_unfinished_stage(state)
     if stage not in RESUMABLE_MODE_C_STAGES:
         raise ValueError(
@@ -585,14 +628,12 @@ async def resume_mode_c(
             f"Resumable stages: {list(RESUMABLE_MODE_C_STAGES)}"
         )
 
-    pipeline = state.worktrees.get("pipeline")
-    worktree_path = (pipeline or {}).get("path", "")
-    if not worktree_path or not Path(worktree_path).is_dir():
+    if not Path(worktree_path).is_dir():
         return _block(
             state,
             state_mgr,
             stage,
-            f"Task worktree is missing ({worktree_path or 'not recorded'}); "
+            f"Task worktree is missing ({worktree_path}); "
             "cannot resume. Start a fresh run instead.",
         )
 
@@ -664,6 +705,8 @@ def _first_unfinished_stage(state: ProtocolState) -> str:
                 Stage.WORKTREE_SETUP.value,
             ):
                 return Stage.DESIGN.value
+            if candidate in (Stage.TEST.value, Stage.CHECK.value):
+                return Stage.IMPLEMENT.value
             return Stage.REVIEW.value
     return Stage.REVIEW.value
 
@@ -1182,19 +1225,32 @@ async def _run_stage(
         requested_model=spec.model,
     )
 
-    result = await agent_runner.run_agent(
-        agent_type=agent_type,
-        prompt=prompt,
-        cwd=cwd,
-        timeout_sec=timeout_sec,
-        model=spec.model,
-        effort=spec.effort,
-        # agent_type (codex/claude/antigravity), not role_name — role_name is
-        # nearly always identical to stage (see callers), which made this
-        # window name redundant ("DESIGN-DESIGN") without ever showing which
-        # actual AI backend is running.
-        label=f"{agent_type}-{stage}",
-    )
+    try:
+        result = await agent_runner.run_agent(
+            agent_type=agent_type,
+            prompt=prompt,
+            cwd=cwd,
+            timeout_sec=timeout_sec,
+            model=spec.model,
+            effort=spec.effort,
+            # agent_type (codex/claude/antigravity), not role_name — role_name is
+            # nearly always identical to stage (see callers), which made this
+            # window name redundant ("DESIGN-DESIGN") without ever showing which
+            # actual AI backend is running.
+            label=f"{agent_type}-{stage}",
+        )
+    except BaseException as exc:
+        state.status = StageStatus.BLOCKED.value
+        state.stage_statuses[stage] = StageStatus.BLOCKED.value
+        state.blocker = (
+            f"Cancelled or failed during {stage}: {type(exc).__name__}: {exc}"
+        )
+        state_mgr.save_state(state)
+        state_mgr.append_event(
+            f"{stage}_INTERRUPTED", stage=stage, error=f"{type(exc).__name__}: {exc}"
+        )
+        _safe_cleanup(agent_runner)
+        raise
     result.agent = spec.agent_type
     result.agent_type = agent_type
     result.stage = stage

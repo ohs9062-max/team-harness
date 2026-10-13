@@ -63,15 +63,67 @@ def test_check_runner_discover_nodejs(tmp_path: Path) -> None:
     assert ["npm", "run", "test"] in discovered
 
 
-def test_check_runner_discover_python(tmp_path: Path) -> None:
+def test_check_runner_discover_python_defaults_to_pytest(tmp_path: Path) -> None:
     test_dir = tmp_path / "tests"
     test_dir.mkdir()
     (test_dir / "test_example.py").write_text("def test_ok(): pass\n", encoding="utf-8")
 
     runner = CheckRunner(tmp_path)
     discovered = runner.discover()
-    assert len(discovered) >= 1
-    assert any("test_*.py" in arg for cmd in discovered for arg in cmd)
+    assert len(discovered) == 1
+    cmd = discovered[0]
+    assert "pytest" in cmd or any("pytest" in arg for arg in cmd)
+    assert not any("unittest" in arg for arg in cmd)
+
+
+def test_check_runner_discover_python_venv(tmp_path: Path) -> None:
+    test_dir = tmp_path / "tests"
+    test_dir.mkdir()
+    (test_dir / "test_example.py").write_text("def test_ok(): pass\n", encoding="utf-8")
+
+    # Create mock .venv with pytest binary
+    venv_bin = tmp_path / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    pytest_bin = venv_bin / "pytest"
+    pytest_bin.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    pytest_bin.chmod(0o755)
+
+    runner = CheckRunner(tmp_path)
+    discovered = runner.discover()
+    assert len(discovered) == 1
+    assert discovered[0] == [str(pytest_bin), "-q"]
+
+
+def test_check_runner_discover_python_venv_python_without_pytest_bin(
+    tmp_path: Path,
+) -> None:
+    test_dir = tmp_path / "tests"
+    test_dir.mkdir()
+    (test_dir / "test_example.py").write_text("def test_ok(): pass\n", encoding="utf-8")
+
+    # Create mock .venv with only python binary
+    venv_bin = tmp_path / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    python_bin = venv_bin / "python"
+    python_bin.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    python_bin.chmod(0o755)
+
+    runner = CheckRunner(tmp_path)
+    discovered = runner.discover()
+    assert len(discovered) == 1
+    assert discovered[0] == [str(python_bin), "-m", "pytest", "-q"]
+
+
+def test_check_runner_discover_python_uv(tmp_path: Path) -> None:
+    test_dir = tmp_path / "tests"
+    test_dir.mkdir()
+    (test_dir / "test_example.py").write_text("def test_ok(): pass\n", encoding="utf-8")
+    (tmp_path / "uv.lock").write_text("", encoding="utf-8")
+
+    runner = CheckRunner(tmp_path)
+    discovered = runner.discover()
+    assert len(discovered) == 1
+    assert discovered[0] == ["uv", "run", "pytest", "-q"]
 
 
 def test_parse_user_command_safety() -> None:

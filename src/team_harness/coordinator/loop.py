@@ -381,6 +381,7 @@ async def _perform_compaction(
         messages[:] = replacement_messages
         ctx.consecutive_compact_failures = 0
         ctx.breaker_tripped = False
+        ctx.set_estimated_total(messages)
         after_tokens = _approximate_tokens(messages)
         return True
     finally:

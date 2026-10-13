@@ -10,6 +10,7 @@ from dataclasses import dataclass
 import hashlib
 from pathlib import Path
 import re
+import shutil
 import subprocess
 
 _SAFE_TASK_ID = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -79,6 +80,7 @@ def create_worktree(
     base_commit: str,
     *,
     worktrees_base_dir: str | Path | None = None,
+    symlink_dirs: list[str] | tuple[str, ...] | None = None,
 ) -> WorktreeRef:
     """Create a new task worktree branching from *base_commit*.
 
@@ -106,9 +108,66 @@ def create_worktree(
     wt_path.parent.mkdir(parents=True, exist_ok=True)
     _git(["worktree", "add", "-b", branch, str(wt_path), base_commit], cwd=root)
 
+    if symlink_dirs:
+        for rel_dir in symlink_dirs:
+            cleaned = rel_dir.strip().strip("/")
+            if not cleaned:
+                continue
+            src = root / cleaned
+            dest = wt_path / cleaned
+            if src.exists() and not dest.exists() and not dest.is_symlink():
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.symlink_to(src.resolve(), target_is_directory=src.is_dir())
+
     return WorktreeRef(
         label=label, branch=branch, path=str(wt_path), base_commit=base_commit
     )
+
+
+def _resolve_repo_root(worktree_path: Path) -> Path | None:
+    """Attempt to resolve the main repository root from a worktree path."""
+    wt = worktree_path.resolve()
+    if not wt.exists():
+        return None
+    git_file = wt / ".git"
+    if not git_file.exists():
+        return None
+    try:
+        res = subprocess.run(
+            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            cwd=wt,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        common_dir = Path(res.stdout.strip()).resolve()
+        if common_dir.name == ".git":
+            return common_dir.parent
+        return common_dir
+    except (subprocess.CalledProcessError, OSError):
+        pass
+
+    try:
+        content = git_file.read_text(encoding="utf-8").strip()
+        if content.startswith("gitdir:"):
+            gitdir = Path(content.split(":", 1)[1].strip())
+            if not gitdir.is_absolute():
+                gitdir = (wt / gitdir).resolve()
+            commondir_file = gitdir / "commondir"
+            if commondir_file.exists():
+                rel_common = commondir_file.read_text(encoding="utf-8").strip()
+                common_dir = (gitdir / rel_common).resolve()
+                if common_dir.name == ".git":
+                    return common_dir.parent
+                return common_dir
+            curr = gitdir
+            while curr != curr.parent:
+                if curr.name == ".git":
+                    return curr.parent
+                curr = curr.parent
+    except OSError:
+        pass
+    return None
 
 
 def remove_worktree(
@@ -116,17 +175,21 @@ def remove_worktree(
 ) -> None:
     """Safely remove a worktree and prune Git worktree references."""
     wt = Path(worktree_path).resolve()
-    root = Path(repo_root).resolve() if repo_root else None
+    root = Path(repo_root).resolve() if repo_root else _resolve_repo_root(wt)
     cmd = ["worktree", "remove"]
     if force:
         cmd.append("--force")
     cmd.append(str(wt))
-    try:
-        _git(cmd, cwd=root or wt.parent)
-    except (subprocess.CalledProcessError, OSError):
-        # Fallback prune
-        if root:
+    if root and root.exists():
+        try:
+            _git(cmd, cwd=root)
+        except (subprocess.CalledProcessError, OSError):
+            if wt.exists():
+                shutil.rmtree(wt, ignore_errors=True)
             _git(["worktree", "prune"], cwd=root)
+    else:
+        if wt.exists():
+            shutil.rmtree(wt, ignore_errors=True)
 
 
 def checkpoint_worktree(worktree_path: str | Path, task_id: str, label: str) -> str:

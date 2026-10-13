@@ -18,6 +18,7 @@ from team_harness.protocol.git import git_preflight
 from team_harness.protocol.mode_c import _block
 from team_harness.protocol.mode_c import _run_checks
 from team_harness.protocol.mode_c import AgentRunner
+from team_harness.protocol.models import AgentResult
 from team_harness.protocol.models import CheckStatus
 from team_harness.protocol.models import ProtocolState
 from team_harness.protocol.models import Stage
@@ -179,11 +180,15 @@ async def run_mode_a(
     state.base_branch = preflight.branch
     state.base_commit = preflight.head
     if preflight.dirty:
-        return _block(
-            state,
-            state_mgr,
-            Stage.GIT_PREFLIGHT.value,
-            f"Repository has uncommitted changes: {preflight.status_lines[:5]}",
+        warning_msg = (
+            f"Repository has tracked uncommitted changes (proceeding from HEAD): "
+            f"{preflight.status_lines[:5]}"
+        )
+        state.warnings.append(warning_msg)
+        state_mgr.append_event(
+            "git_preflight.warning",
+            warning=warning_msg,
+            status_lines=preflight.status_lines[:5],
         )
     state.stage_statuses[Stage.GIT_PREFLIGHT.value] = StageStatus.DONE.value
     state_mgr.save_state(state)
@@ -195,7 +200,13 @@ async def run_mode_a(
 
     for worker in workers:
         try:
-            wt = create_worktree(target_repo, task_id, worker, state.base_commit)
+            wt = create_worktree(
+                target_repo,
+                task_id,
+                worker,
+                state.base_commit,
+                symlink_dirs=proto_cfg.symlink_ignored_dirs,
+            )
         except Exception as exc:
             return _block(state, state_mgr, Stage.WORKTREE_SETUP.value, str(exc))
         state.worktrees[worker] = {
@@ -249,15 +260,26 @@ async def run_mode_a(
         )
 
     independent_results = await asyncio.gather(
-        *(_independent_work(worker) for worker in workers)
+        *(_independent_work(worker) for worker in workers), return_exceptions=True
     )
 
-    for worker, result in zip(workers, independent_results, strict=True):
+    for worker, raw_result in zip(workers, independent_results, strict=True):
         wt_info = state.worktrees[worker]
         wt_path = wt_info["path"]
 
         worker_spec = worker_specs[worker]
         agent_type = worker_spec.agent_type
+        if isinstance(raw_result, BaseException):
+            result = AgentResult(
+                agent=agent_type,
+                agent_type=agent_type,
+                stage=Stage.INDEPENDENT_WORK.value,
+                success=False,
+                error_message=f"Worker exception: {type(raw_result).__name__}: {raw_result}",
+                spawned=False,
+            )
+        else:
+            result = raw_result
         effective_model = result.resolve_effective_model(worker_spec.model)
         result.agent = agent_type
         result.agent_type = agent_type
@@ -409,12 +431,24 @@ async def run_mode_a(
         )
 
     review_results = await asyncio.gather(
-        *(_cross_review(reviewer, target) for reviewer, target in pairs)
+        *(_cross_review(reviewer, target) for reviewer, target in pairs),
+        return_exceptions=True,
     )
 
-    for (reviewer, target), result in zip(pairs, review_results, strict=True):
+    for (reviewer, target), raw_result in zip(pairs, review_results, strict=True):
         reviewer_spec = worker_specs[reviewer]
         reviewer_type = reviewer_spec.agent_type
+        if isinstance(raw_result, BaseException):
+            result = AgentResult(
+                agent=reviewer_type,
+                agent_type=reviewer_type,
+                stage=Stage.CROSS_REVIEW.value,
+                success=False,
+                error_message=f"Reviewer exception: {type(raw_result).__name__}: {raw_result}",
+                spawned=False,
+            )
+        else:
+            result = raw_result
         effective_model = result.resolve_effective_model(reviewer_spec.model)
         result.agent = reviewer_type
         result.agent_type = reviewer_type
@@ -500,14 +534,26 @@ async def run_mode_a(
         )
 
     response_results = await asyncio.gather(
-        *(_response(worker, reviewer) for worker, reviewer in response_pairs)
+        *(_response(worker, reviewer) for worker, reviewer in response_pairs),
+        return_exceptions=True,
     )
 
-    for (worker, _reviewer), result in zip(
+    for (worker, _reviewer), raw_result in zip(
         response_pairs, response_results, strict=True
     ):
         worker_spec = worker_specs[worker]
         worker_type = worker_spec.agent_type
+        if isinstance(raw_result, BaseException):
+            result = AgentResult(
+                agent=worker_type,
+                agent_type=worker_type,
+                stage=Stage.RESPONSE.value,
+                success=False,
+                error_message=f"Responder exception: {type(raw_result).__name__}: {raw_result}",
+                spawned=False,
+            )
+        else:
+            result = raw_result
         effective_model = result.resolve_effective_model(worker_spec.model)
         result.agent = worker_type
         result.agent_type = worker_type
@@ -658,16 +704,23 @@ async def resume_mode_a(
     except Exception as exc:
         return _block(state, state_mgr, Stage.CODEX_MERGE.value, str(exc))
 
-    if (
-        preflight.branch != state.base_branch
-        or preflight.head != state.base_commit
-        or preflight.dirty
-    ):
+    if preflight.dirty:
+        warning_msg = (
+            f"Repository has tracked uncommitted changes: {preflight.status_lines[:5]}"
+        )
+        state.warnings.append(warning_msg)
+        state_mgr.append_event(
+            "git_preflight.warning",
+            warning=warning_msg,
+            status_lines=preflight.status_lines[:5],
+        )
+
+    if preflight.branch != state.base_branch or preflight.head != state.base_commit:
         return _block(
             state,
             state_mgr,
             Stage.CODEX_MERGE.value,
-            "Base branch/HEAD/dirty state changed since MODE A started",
+            "Base branch/HEAD changed since MODE A started",
         )
 
     # Verify checkpoints
@@ -727,7 +780,11 @@ async def resume_mode_a(
     # merging the result into the base branch remains the human's decision.
     try:
         integration = create_worktree(
-            target_repo, task_id, "integration", state.base_commit
+            target_repo,
+            task_id,
+            "integration",
+            state.base_commit,
+            symlink_dirs=proto_cfg.symlink_ignored_dirs,
         )
     except Exception as exc:
         return _block(state, state_mgr, Stage.CODEX_MERGE.value, str(exc))

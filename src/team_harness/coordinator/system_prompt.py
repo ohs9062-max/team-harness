@@ -263,6 +263,13 @@ def _render_skills_section(skills: list) -> str:
     return "\n".join(lines)
 
 
+def _safe_format_prompt(template: str, replacements: dict[str, str]) -> str:
+    result = template
+    for key, value in replacements.items():
+        result = result.replace(f"{{{key}}}", value)
+    return result
+
+
 def build_system_prompt(
     config: object, allowed_types: list[str], skills: list, session_output_dir: str
 ) -> str:
@@ -272,15 +279,16 @@ def build_system_prompt(
         getattr(config, "coordinator_prompt", COORDINATOR_PROMPT),
     )
     current_utc_time = datetime.now(timezone.utc).isoformat()
-    prompt = base_prompt.format(
-        allowed_agent_types=", ".join(allowed_types),
-        cwd=getattr(config, "cwd", "."),
-        current_utc_time=current_utc_time,
-        session_output_dir=session_output_dir,
-        min_agent_lifetime_before_kill_s=int(
-            getattr(config, "min_agent_lifetime_before_kill_s", 600.0)
+    replacements = {
+        "allowed_agent_types": ", ".join(allowed_types),
+        "cwd": str(getattr(config, "cwd", ".")),
+        "current_utc_time": current_utc_time,
+        "session_output_dir": session_output_dir,
+        "min_agent_lifetime_before_kill_s": str(
+            int(getattr(config, "min_agent_lifetime_before_kill_s", 600.0))
         ),
-    )
+    }
+    prompt = _safe_format_prompt(base_prompt, replacements)
     parts = [prompt]
 
     extension = getattr(config, "system_prompt_extension", "")

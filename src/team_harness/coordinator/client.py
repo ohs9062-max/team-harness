@@ -306,7 +306,7 @@ class CoordinatorClient:
             raise _translate_api_error(exc) from exc
 
     async def aclose(self) -> None:
-        return None
+        await self._client.close()
 
     def _normalize_completion(self, completion: Any) -> ChatResponse:
         message = completion.choices[0].message
