@@ -263,3 +263,21 @@ async def test_glob_grep_and_ls(tmp_path):
     assert "needle" in await fs_tools.grep(pattern="needle", path=str(tmp_path / "dir"))
     listing = await fs_tools.ls(str(tmp_path))
     assert "dir\tdir" in listing
+
+
+@pytest.mark.asyncio
+async def test_ls_and_glob_bounded_truncation(tmp_path):
+    fs_tools.setup_fs()
+    folder = tmp_path / "big_dir"
+    folder.mkdir()
+    # Create 550 files
+    for i in range(550):
+        (folder / f"file_{i:04d}.txt").write_text("x")
+
+    ls_result = await fs_tools.ls(str(folder))
+    assert "[output truncated: 50 items omitted]" in ls_result
+    assert ls_result.count("\n") == 500  # 500 items + 1 truncation line = 500 newlines
+
+    glob_result = await fs_tools.glob(pattern="*.txt", cwd=str(folder))
+    assert "[output truncated: 50 items omitted]" in glob_result
+    assert glob_result.count("\n") == 500

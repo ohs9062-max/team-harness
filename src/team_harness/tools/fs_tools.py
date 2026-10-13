@@ -11,6 +11,8 @@ _file_locks: dict[str, asyncio.Lock] = {}
 READ_FILE_DEFAULT_LIMIT_CHARS = 32_768
 READ_FILE_MAX_LIMIT_CHARS = 32_768
 READ_FILE_MAX_CONTENT_BYTES = 32 * 1024
+LS_MAX_ENTRIES = 500
+GLOB_MAX_ENTRIES = 500
 
 READ_FILE_SCHEMA = {
     "type": "function",
@@ -309,9 +311,13 @@ async def ls(path: str) -> str:
                     rows.append((prefix, f"{entry.name}\tdir"))
                 else:
                     rows.append((prefix, f"{entry.name}\tfile\t{entry.stat().st_size}"))
-        return "\n".join(
-            row for _, row in sorted(rows, key=lambda item: (item[0], item[1]))
-        )
+        sorted_rows = sorted(rows, key=lambda item: (item[0], item[1]))
+        total = len(sorted_rows)
+        if total > LS_MAX_ENTRIES:
+            omitted = total - LS_MAX_ENTRIES
+            visible = [row for _, row in sorted_rows[:LS_MAX_ENTRIES]]
+            return "\n".join(visible) + f"\n[output truncated: {omitted} items omitted]"
+        return "\n".join(row for _, row in sorted_rows)
 
     return await asyncio.to_thread(_scan)
 
@@ -320,7 +326,14 @@ async def glob(pattern: str, cwd: str = ".") -> str:
     def _glob() -> str:
         base = Path(cwd)
         matches = sorted(str(match.relative_to(base)) for match in base.glob(pattern))
-        return "\n".join(matches) if matches else "(no matches)"
+        if not matches:
+            return "(no matches)"
+        total = len(matches)
+        if total > GLOB_MAX_ENTRIES:
+            omitted = total - GLOB_MAX_ENTRIES
+            visible = matches[:GLOB_MAX_ENTRIES]
+            return "\n".join(visible) + f"\n[output truncated: {omitted} items omitted]"
+        return "\n".join(matches)
 
     return await asyncio.to_thread(_glob)
 
