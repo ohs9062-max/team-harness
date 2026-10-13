@@ -384,6 +384,7 @@ confidence_threshold = 0.85
 ## 12. 코디네이터 작업일지
 
 모든 코디네이터는 작업 공간에 두 파일을 유지합니다(정본: `design/coordinator_journal.md`).
+단, `th run`/`th repl` 내장 조율자는 `<run_dir>/journal/`에 기록하며 작업 공간의 `.claude/` 작업일지는 읽기 전용입니다.
 
 | 파일 | 내용 |
 |---|---|

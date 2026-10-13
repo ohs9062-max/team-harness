@@ -25,3 +25,10 @@ standing rule, not a project-specific policy.
 Use `templates/current_status.md` and `templates/work_log.md` for new
 workspaces.  Global agent instructions make this rule apply even without a
 skill.
+
+`th run` and `th repl` have an embedded coordinator, but it is not the outer
+workspace coordinator.  Its journal belongs to its dedicated run directory:
+`<run_dir>/journal/current_status.md` and `<run_dir>/journal/work_log.md`.
+The embedded coordinator may read the workspace's `.claude/current_status.md`,
+`.claude/work_log.md`, and `.claude/inbox.md` for context, but must never write
+them; those files remain owned by the coordinator working in that workspace.
