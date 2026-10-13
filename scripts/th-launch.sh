@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# th-launch: 최신 worker_suffix.md를 반드시 덧붙여 워커(codex|agy)를 분리 실행하고 등록한다.
-# 사용: th-launch.sh <작업폴더> [codex|agy] <모델> <effort> <작업트리> [추가 인자]
+# th-launch: 최신 worker_suffix.md를 반드시 덧붙여 워커(codex|agy|claude)를 분리 실행하고 등록한다.
+# 사용: th-launch.sh <작업폴더> [codex|agy|claude] <모델> <effort> <작업트리> [추가 인자]
 #       (워커 생략 시 기본값: codex)
 # 정책 변경은 다음 launch부터 적용하며 실행 중 워커는 교체하지 않는다.
 set -euo pipefail
@@ -29,11 +29,11 @@ journal_append() {
     "$(date '+%F %R')" "$task_dir" "$worker_type" "$model" "$task_dir/task.md" "$journal_workspace" >> "$journal_log"
 }
 
-(( $# >= 1 )) || { echo '사용: th-launch.sh <작업폴더> [codex|agy] <모델> <effort> <작업트리> [추가 인자]'; exit 2; }
+(( $# >= 1 )) || { echo '사용: th-launch.sh <작업폴더> [codex|agy|claude] <모델> <effort> <작업트리> [추가 인자]'; exit 2; }
 task_dir=$(realpath "$1"); shift
 
 worker_type="codex"
-if (( $# >= 1 )) && [[ "$1" == "codex" || "$1" == "agy" ]]; then
+if (( $# >= 1 )) && [[ "$1" == "codex" || "$1" == "agy" || "$1" == "claude" ]]; then
   worker_type="$1"
   shift
 fi
@@ -53,6 +53,19 @@ elif [[ "$worker_type" == "agy" ]]; then
   fi
   if [[ -z "$model" || "$model" == "-" || "$model" == "default" ]]; then
     model="Gemini 3.8 Flash (High)"
+  fi
+elif [[ "$worker_type" == "claude" ]]; then
+  if (( $# >= 3 )); then
+    model=$1; effort=$2; worktree=$3; shift 3
+  elif (( $# == 2 )); then
+    model=$1; effort="none"; worktree=$2; shift 2
+  elif (( $# == 1 )); then
+    model=$1; effort="none"; worktree="$task_dir"; shift 1
+  else
+    model="claude-sonnet-5"; effort="none"; worktree="$task_dir"
+  fi
+  if [[ -z "$model" || "$model" == "-" || "$model" == "default" ]]; then
+    model="claude-sonnet-5"
   fi
 fi
 
@@ -120,6 +133,9 @@ elif [[ "$worker_type" == "agy" ]]; then
     printf 'warning: agy reparented PID not found within 20s; recording initial PID %s\n' "$init_pid" >&2
     printf '%s\n' "$init_pid" > "$task_dir/worker.pid"
   fi
+elif [[ "$worker_type" == "claude" ]]; then
+  setsid nohup claude -p --dangerously-skip-permissions --model "$model" --strict-mcp-config "$@" "$prompt" < /dev/null > claude.log 2>&1 &
+  printf '%s\n' "$!" > "$task_dir/worker.pid"
 fi
 
 (

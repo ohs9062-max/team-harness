@@ -366,7 +366,7 @@ for task in valid_tasks:
         state = '실패'
     else:
         is_quota_err = False
-        for cand in ("codex.log", "agy.log", "worker.log"):
+        for cand in ("codex.log", "agy.log", "claude.log", "worker.log"):
             cand_path = os.path.join(task, cand)
             if not os.path.isfile(cand_path):
                 continue

@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import stat
 import subprocess
+import time
 
 import pytest
 
@@ -34,11 +35,8 @@ def test_env(tmp_path: Path):
     for cli_name in ("codex", "agy", "claude"):
         stub_path = bin_dir / cli_name
         stub_content = f"""#!/usr/bin/env bash
-log_file="{cli_name}.log"
-echo "{cli_name} invoked with $@" >> "$log_file"
-# Spawn a short background sleep so worker.pid points to a process
+echo "{cli_name} invoked with $@"
 sleep 15 &
-echo $!
 """
         stub_path.write_text(stub_content, encoding="utf-8")
         stub_path.chmod(stub_path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
@@ -366,6 +364,73 @@ def test_th_status_both_pids_dead_shows_stopped(test_env: dict):
     res = subprocess.run([str(status_script)], env=test_env["env"], capture_output=True, text=True)
     assert res.returncode == 0
     assert "중단?" in res.stdout
+
+
+def test_th_launch_claude_worker(test_env: dict):
+    """ops-04: th-launch correctly launches claude worker with flags and writes claude.log."""
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_launch_claude")
+    launch_script = SCRIPTS_DIR / "th-launch.sh"
+
+    cmd = [
+        str(launch_script),
+        str(task_dir),
+        "claude",
+        "claude-sonnet-5",
+        "high",
+        str(task_dir),
+    ]
+    res = subprocess.run(cmd, env=test_env["env"], capture_output=True, text=True)
+    assert res.returncode == 0, f"launch failed: {res.stderr}\n{res.stdout}"
+    assert "launched [claude]" in res.stdout
+
+    claude_log = task_dir / "claude.log"
+    deadline = time.time() + 3
+    log_content = ""
+    while time.time() < deadline:
+        if claude_log.is_file():
+            log_content = claude_log.read_text(encoding="utf-8")
+            if "claude invoked with" in log_content:
+                break
+        time.sleep(0.1)
+    assert "claude invoked with" in log_content
+    assert "-p --dangerously-skip-permissions --model claude-sonnet-5 --strict-mcp-config" in log_content
+
+
+def test_th_watch_recognizes_claude_log_quota(test_env: dict):
+    """ops-04: th-watch recognizes quota/rate-limit error in claude.log."""
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_claude_quota")
+    (task_dir / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
+    (task_dir / "claude.log").write_text("ERROR: 429 rate limit exceeded\n", encoding="utf-8")
+
+    tasks_txt = test_env["watch_dir"] / "tasks.txt"
+    tasks_txt.write_text(f"{task_dir}\n", encoding="utf-8")
+
+    watch_script = SCRIPTS_DIR / "th-watch.sh"
+    env = dict(test_env["env"])
+    env["TH_POLL_SEC"] = "1"
+    res = subprocess.run([str(watch_script), "2"], env=env, capture_output=True, text=True)
+    assert res.returncode == 0
+    assert "워커 오류(쿼터·용량)" in res.stdout
+    assert "새 claude 실행 잠금" in res.stdout
+
+    quota_lock = test_env["watch_dir"] / "quota_lock.claude"
+    assert quota_lock.is_file(), "quota_lock.claude must be created"
+
+
+def test_th_status_recognizes_claude_log_quota(test_env: dict):
+    """ops-04: th-status recognizes quota error in claude.log."""
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_claude_status_quota")
+    (task_dir / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
+    (task_dir / "claude.log").write_text("ERROR: 429 rate limit reached\n", encoding="utf-8")
+
+    tasks_txt = test_env["watch_dir"] / "tasks.txt"
+    tasks_txt.write_text(f"{task_dir}\n", encoding="utf-8")
+
+    status_script = SCRIPTS_DIR / "th-status.sh"
+    res = subprocess.run([str(status_script)], env=test_env["env"], capture_output=True, text=True)
+    assert res.returncode == 0
+    assert "워커 오" in res.stdout
+
 
 
 

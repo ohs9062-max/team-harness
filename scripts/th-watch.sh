@@ -110,7 +110,7 @@ while (( $(date +%s) < deadline )); do
       fi
     fi
     if [[ -n $owner && $owner != "$journal_workspace" ]]; then
-      for cand in "$task/codex.log" "$task/agy.log"; do
+      for cand in "$task/codex.log" "$task/agy.log" "$task/claude.log"; do
         [[ -f $cand ]] || continue
         lock="$watch_dir/quota_lock.$(basename "$cand" .log)"
         [[ -f $lock || -f $task/DONE || -f $task/FAILED ]] && continue
@@ -143,7 +143,7 @@ while (( $(date +%s) < deadline )); do
 
     # 3. 워커 오류(쿼터·용량) - ERROR: test_x 오탐 방지
     log_file=""
-    for cand in "$task/codex.log" "$task/agy.log" "$task/worker.log"; do
+    for cand in "$task/codex.log" "$task/agy.log" "$task/claude.log" "$task/worker.log"; do
       [[ -f $cand ]] || continue
       if grep -iE '^ERROR: ' "$cand" 2>/dev/null | grep -vE '^ERROR: test_' | grep -qiE '(quota|rate limit|usage limit|at capacity|capacity exceeded)'; then
         log_file=$cand
