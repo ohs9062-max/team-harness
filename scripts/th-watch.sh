@@ -98,6 +98,14 @@ while (( $(date +%s) < deadline )); do
     # 다른 작업 공간이 띄운 작업은 그쪽 감시자 몫이다. 표시·등록부를 건드리지 않는다.
     # 쿼터 오류는 알리지 않고 quota_lock만 만든다(모든 th-launch가 공유).
     owner=$(cat "$task/.th_owner" 2>/dev/null || true)
+    # 소유자 파일 이전 작업: 이 작업 공간 작업일지에 th-launch 지시 기록이 있으면 내 것.
+    if [[ -z $owner ]]; then
+      if grep -qsF "| $task |" "$(dirname "$journal_log")"/work_log*.md; then
+        owner=$journal_workspace
+      else
+        owner="(unknown)"
+      fi
+    fi
     if [[ -n $owner && $owner != "$journal_workspace" ]]; then
       for cand in "$task/codex.log" "$task/agy.log"; do
         [[ -f $cand ]] || continue
