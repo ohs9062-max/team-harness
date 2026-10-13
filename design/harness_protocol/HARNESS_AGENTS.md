@@ -110,7 +110,7 @@ Git repository가 아닌 대상에 대해 사용자가 "직접 수정 허용"을
 MODE A Worker는 Codex/Gemini 독립 worktree, MODE B는 기존 task worktree,
 MODE C는 pipeline worktree에서 작업한다. base/master는 Worker write 장소가 아니다.
 
-MODE A 사용자 선택 전 통합 금지. 선택 후 `CODEX_MERGE`만 base에 쓸 수 있다.
+MODE A 사용자 선택 전 통합 금지. 선택 후 `CODEX_MERGE`는 `task/<TASK-ID>/integration` 워크트리에 통합하며, base working tree는 직접 수정하지 않고 사람이 최종 merge한다 (TH-D16).
 push, force push, reset, branch 삭제는 계속 금지한다.
 
 ## 6. 구현 규칙

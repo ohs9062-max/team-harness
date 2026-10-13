@@ -126,8 +126,8 @@ USER_SELECT
     CANCEL
   ↓
 CODEX_MERGE (사용자 선택에 따라)
-  Codex가 선택된 결과만 base working tree에 통합
-  CHECK 실행, push/commit 없음
+  Codex가 선택된 결과를 task/<TASK-ID>/integration 워크트리에 통합 (base working tree는 절대 직접 수정하지 않음, TH-D16)
+  CHECK 실행, base 반영은 사람의 최종 merge로 수행
   ↓
 FINAL
 ```
@@ -173,7 +173,7 @@ Research A:
 - Worker는 반드시 독립 worktree에서 작업한다.
 - 사용자 merge 승인 전: merge, cherry-pick, 수동 파일 복사 통합, push 금지
 - local worker checkpoint는 MODE A 실행 승인 범위이며 사용자 선택 승인이 아니다.
-- 사용자 선택 후 최종 통합 담당은 항상 Codex다.
+- 사용자 선택 후 최종 통합은 Codex가 task/<TASK-ID>/integration 워크트리에서 수행하며, base 브랜치 반영은 사용자가 직접 merge한다 (TH-D16).
 
 ---
 
@@ -193,7 +193,7 @@ RELAY_TRIGGER
   현재 AI가 진행 불가
   ↓
 CONTEXT_SAVE
-  넘겨주는 AI가 shared/context.md에 기록:
+  인계 정보 기록 (자동 러너: protocol_state.json, 수동 워크플로: shared/context.md):
     - TASK-ID, MODE
     - CURRENT-STAGE, STATUS
     - 이전/현재 작업자, 모델, 역할
@@ -208,7 +208,7 @@ CONTEXT_SAVE
 NEXT_AI_START
   이어받는 AI가 확인:
     1. AGENTS.md, MODES.md, 자신의 역할 문서
-    2. shared/TASK.md, shared/context.md
+    2. shared/TASK.md, shared/context.md (또는 protocol_state.json)
     3. 관련 작업 문서
     4. Git 상태 (branch, diff, checkpoint)
   ↓
@@ -220,8 +220,9 @@ GIT_VERIFY
   ↓
 CONTINUE
   인계된 CURRENT-STAGE와 역할을 유지
-  미완료 지점부터 같은 목표를 계속
+  미완료 지점부터 지정된 릴레이 에이전트가 단일 턴 실행(지정 작업 계속)
   완료된 범위를 불필요하게 다시 작성하지 않음
+  체크 통과 시 checkpoint 커밋 후 종료 (잔여 복합 파이프라인 지속이 필요한 경우 `th protocol resume` 또는 추가 릴레이로 연계)
 ```
 
 ### 핵심 규칙
@@ -261,22 +262,22 @@ GIT_PREFLIGHT
   ↓
 DESIGN (Claude)
   요구사항 분석, 설계, 제약, 검증 기준
-  shared/DESIGN.md에 기록
+  산출물 기록 (자동 러너: protocol_outputs/DESIGN/<agent>.md, 수동: shared/DESIGN.md)
   ↓
 IMPLEMENT (Codex)
   설계 기반 구현
-  shared/IMPLEMENTATION.md에 기록
+  산출물 기록 (자동 러너: protocol_outputs/IMPLEMENT/<agent>.md, 수동: shared/IMPLEMENTATION.md)
   ↓
 TEST (Codex)
   실행, 테스트
-  결과를 IMPLEMENTATION.md에 추가
+  결과 기록 (자동 러너: protocol_outputs/TEST/<agent>.md, 수동: IMPLEMENTATION.md에 추가)
   ↓
 CHECK (System)
   발견/지정된 결정론적 검사를 실행
   ↓
 REVIEW (Gemini)
   독립 검수
-  shared/REVIEW.md에 판정:
+  판정 기록 (자동 러너: protocol_outputs/REVIEW/<agent>.md, 수동: shared/REVIEW.md):
     ├─ PASS → FINAL
     ├─ FIX_REQUIRED → FIX (Codex) → TEST → CHECK → REVIEW
     └─ BLOCKED → 사용자 판단 요청
@@ -413,10 +414,10 @@ Research A도 동일한 독립 → Cross Verification → Compare 흐름을 따�
 - Protocol: 이 문서와 `HARNESS_AGENTS.md`, `WORKFLOW.md`가 정본이다.
 - Runner: `src/team_harness/protocol/`이 Team Harness의 기존 Agent 실행 엔진 위에서 MODE A/B/C를 실행한다.
 - MODE A: 두 독립 worktree, required Worker Gate, checkpoint, Cross Review, Response, Compare, WAITING_USER와 Codex 통합을 지원한다.
-- MODE B: 기존 TASK-ID state와 worktree를 로드해 실제 Git을 대조하고 남은 Stage부터 relay한다.
+- MODE B: 기존 TASK-ID state와 worktree를 로드해 실제 Git을 대조하고, 인계된 미완료 Stage에서 지정된 릴레이 에이전트의 단일 턴 실행 및 결정론적 체크를 거쳐 checkpoint를 남긴다 (추가 진행은 resume/relay 연계).
 - MODE C: 하나의 pipeline worktree에서 DESIGN→IMPLEMENT/CHECK→REVIEW/FIX→FINAL과 checkpoint를 실행한다.
 
-Runner의 런타임 기록은 Team Harness run_dir 아래 `protocol_state.json`에 저장한다. 문서 상태와 실제 `protocol_state.json`, Git diff가 다르면 실제 상태를 정본으로 삼는다.
+Runner의 런타임 기록 및 산출물은 Team Harness run_dir 아래 `protocol_state.json` 및 `protocol_outputs/<STAGE>/<agent>.md`에 저장한다 (자동 러너는 `shared/` 디렉터리를 쓰지 않고 `protocol_outputs/`를 정본 산출물 경로로 사용). 문서 상태와 실제 `protocol_state.json`, Git diff가 다르면 실제 상태를 정본으로 삼는다.
 
 Agent 매핑:
 - 논리 역할 `gemini` → Team Harness agent type `antigravity` → CLI `agy`
