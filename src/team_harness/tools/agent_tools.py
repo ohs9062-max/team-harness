@@ -1534,6 +1534,16 @@ async def wait_for_any(agent_ids: list[str], timeout: float | None = None) -> st
     manager, _, config, _ = _require_setup()
     if not agent_ids:
         return json.dumps({"agent_id": None, "timed_out": False, "running": []})
+    missing = [aid for aid in agent_ids if aid not in manager._agents]
+    if missing:
+        return json.dumps(
+            {
+                "error": f"Agent(s) not found: {', '.join(missing)}",
+                "agent_id": None,
+                "timed_out": False,
+                "running": [],
+            }
+        )
     tasks = {
         asyncio.ensure_future(manager.wait_one(agent_id)): agent_id
         for agent_id in agent_ids
@@ -1993,6 +2003,16 @@ def build_agent_tool_bindings(
     async def _wait_for_any(agent_ids: list[str], timeout: float | None = None) -> str:
         if not agent_ids:
             return json.dumps({"agent_id": None, "timed_out": False, "running": []})
+        missing = [aid for aid in agent_ids if aid not in manager._agents]
+        if missing:
+            return json.dumps(
+                {
+                    "error": f"Agent(s) not found: {', '.join(missing)}",
+                    "agent_id": None,
+                    "timed_out": False,
+                    "running": [],
+                }
+            )
         tasks = {asyncio.ensure_future(manager.wait_one(aid)): aid for aid in agent_ids}
         try:
             done, pending = await asyncio.wait_for(

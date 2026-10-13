@@ -1377,3 +1377,32 @@ def test_build_direct_spawn_footer_contains_result_card_instruction(tmp_path):
     assert "result card" in footer
     assert "at most 15 lines" in footer
     assert "Write long reports to files, not stdout." in footer
+
+
+@pytest.mark.asyncio
+async def test_wait_for_any_handles_unknown_agent_id(tmp_path, config, manager, ui):
+    run_log = RunLogWriter(
+        run_id="run_1",
+        run_dir=tmp_path,
+        provider=config.provider,
+        model=config.model,
+        api_base=config.api_base,
+    )
+    agent_tools.setup(manager=manager, run_log=run_log, config=config, ui=ui)
+
+    result_raw = await agent_tools.wait_for_any(["nonexistent_worker"])
+    data = json.loads(result_raw)
+    assert "error" in data
+    assert "nonexistent_worker" in data["error"]
+
+    # Also test via bindings
+    bindings = agent_tools.build_agent_tool_bindings(
+        manager=manager, run_log=run_log, config=config, ui=ui, allowed_types=["codex"]
+    )
+    bound_wait = next(
+        fn for schema, fn in bindings if schema["function"]["name"] == "wait_for_any"
+    )
+    bound_res = json.loads(await bound_wait(["missing_1", "missing_2"]))
+    assert "error" in bound_res
+    assert "missing_1" in bound_res["error"]
+    assert "missing_2" in bound_res["error"]
