@@ -18,7 +18,7 @@ from team_harness.decisions.tool_routing import schemas_for_profile
 class FakeBackend:
     answer: JevAnswer | Exception
 
-    async def decide(self, request):
+    async def decide(self, request: DecisionRequest) -> JevAnswer:
         if isinstance(self.answer, Exception):
             raise self.answer
         return self.answer

@@ -269,3 +269,54 @@ def test_run_log_spawn_agent_detection_survives_truncation(tmp_path):
     # Short spawn id result is not truncated and still binds the turn index.
     assert data["turns"][0]["tool_calls"][0]["result"] == "agent_1"
     assert data["agents"][0]["coordinator_turn_index"] == 3
+
+
+def test_record_turn_and_agent_tokens(tmp_path):
+    writer = RunLogWriter(
+        run_id="run_token_test",
+        run_dir=tmp_path,
+        provider="openai_compat",
+        model="model",
+        api_base="base",
+    )
+    # 1. Turn tokens
+    writer.record_turn_delta(
+        index=0,
+        messages_appended_delta=[{"role": "user", "content": "hello"}],
+        response_text="hi",
+        usage={
+            "prompt_tokens": 150,
+            "completion_tokens": 25,
+            "cached_prompt_tokens": 100,
+        },
+    )
+    # 2. Worker agent tokens
+    stdout_file = tmp_path / "agent_1.stdout.log"
+    stdout_file.write_text(
+        '{"type":"turn.started"}\n'
+        '{"type":"turn.completed","usage":{"input_tokens":500,"output_tokens":80,"cache_read_input_tokens":350}}\n'
+    )
+    writer.record_agent_spawn(
+        AgentRecord(
+            id="agent_1",
+            agent_type="claude",
+            cwd=".",
+            prompt="p",
+            full_prompt="p",
+            command=["claude"],
+            spawned_at=datetime.now(timezone.utc),
+            stdout_log=str(stdout_file),
+            stderr_log=str(tmp_path / "agent_1.stderr.log"),
+        )
+    )
+    writer.update_agent("agent_1", exit_code=0, status="done")
+
+    data = json.loads((tmp_path / "run.json").read_text())
+    turn = data["turns"][0]
+    assert turn["input_tokens"] == 150
+    assert turn["cached_prompt_tokens"] == 100
+
+    agent = data["agents"][0]
+    assert agent["input_tokens"] == 500
+    assert agent["cached_prompt_tokens"] == 350
+    assert agent["output_tokens"] == 80

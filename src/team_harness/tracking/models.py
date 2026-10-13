@@ -23,6 +23,8 @@ class TurnRecord(BaseModel):
     response_text: str | None
     usage: dict
     tool_calls: list[ToolCallRecord] = Field(default_factory=list)
+    input_tokens: int | None = None
+    cached_prompt_tokens: int | None = None
 
 
 class AgentRecord(BaseModel):
@@ -64,6 +66,10 @@ class AgentRecord(BaseModel):
     delegated_task_id: str | None = None
     expected_outputs: list[str] = Field(default_factory=list)
     state_responsibility: str | None = None
+    input_tokens: int | None = None
+    cached_prompt_tokens: int | None = None
+    output_tokens: int | None = None
+    total_tokens: int | None = None
 
 
 class WorkerResumeInfo(BaseModel):

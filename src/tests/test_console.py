@@ -434,6 +434,7 @@ def test_stream_token_bold_rendering(monkeypatch, tmp_path):
 
     from rich.console import Console as RichConsole
 
+    monkeypatch.setenv("TERM", "xterm-25color")
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
     console = TeamHarnessConsole(
         ContextTracker(model_id="m", model_limit=100), AgentManager(), tmp_path
@@ -454,6 +455,7 @@ def test_stream_token_heading_rendering(monkeypatch, tmp_path):
 
     from rich.console import Console as RichConsole
 
+    monkeypatch.setenv("TERM", "xterm-25color")
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
     console = TeamHarnessConsole(
         ContextTracker(model_id="m", model_limit=100), AgentManager(), tmp_path

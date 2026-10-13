@@ -136,13 +136,31 @@ class RunLogWriter:
         persisted_tool_calls = _truncate_tool_calls_for_persistence(
             tool_calls or [], self._tool_result_max_bytes
         )
+        usage_dict = dict(usage) if usage else {}
+        input_tokens = (
+            usage_dict.get("prompt_tokens")
+            if usage_dict.get("prompt_tokens") is not None
+            else usage_dict.get("input_tokens")
+        )
+        cached_prompt_tokens = (
+            usage_dict.get("cached_prompt_tokens")
+            if usage_dict.get("cached_prompt_tokens") is not None
+            else usage_dict.get("cached_tokens")
+        )
+        if cached_prompt_tokens is None:
+            details = usage_dict.get("prompt_tokens_details")
+            if isinstance(details, dict):
+                cached_prompt_tokens = details.get("cached_tokens")
+
         self._log.turns.append(
             TurnRecord(
                 index=index,
                 messages_appended_delta=persisted_delta,
                 response_text=response_text,
-                usage=usage,
+                usage=usage_dict,
                 tool_calls=persisted_tool_calls,
+                input_tokens=input_tokens,
+                cached_prompt_tokens=cached_prompt_tokens,
             )
         )
         # Agent-id detection runs on the original (untruncated) tool calls;
@@ -182,6 +200,10 @@ class RunLogWriter:
         finished_at: datetime | None = None,
         status: str | None = None,
         session_id: str | None = None,
+        input_tokens: int | None = None,
+        cached_prompt_tokens: int | None = None,
+        output_tokens: int | None = None,
+        total_tokens: int | None = None,
     ) -> None:
         for record in self._log.agents:
             if record.id == agent_id:
@@ -193,8 +215,44 @@ class RunLogWriter:
                     record.status = status
                 if session_id is not None:
                     record.session_id = session_id
+                if input_tokens is not None:
+                    record.input_tokens = input_tokens
+                if cached_prompt_tokens is not None:
+                    record.cached_prompt_tokens = cached_prompt_tokens
+                if output_tokens is not None:
+                    record.output_tokens = output_tokens
+                if total_tokens is not None:
+                    record.total_tokens = total_tokens
+                if (
+                    record.input_tokens is None or record.cached_prompt_tokens is None
+                ) and record.status in ("done", "failed", "killed"):
+                    self._try_populate_agent_tokens(record)
                 break
         self._flush()
+
+    def _try_populate_agent_tokens(self, record: AgentRecord) -> None:
+        try:
+            stdout_path = Path(record.stdout_log)
+            if not stdout_path.exists():
+                return
+            from team_harness.protocol.usage import extract_usage
+
+            content = stdout_path.read_text(encoding="utf-8", errors="replace")
+            usage = extract_usage(content)
+            if usage is not None:
+                if record.input_tokens is None and usage.input_tokens is not None:
+                    record.input_tokens = usage.input_tokens
+                if (
+                    record.cached_prompt_tokens is None
+                    and usage.cached_input_tokens is not None
+                ):
+                    record.cached_prompt_tokens = usage.cached_input_tokens
+                if record.output_tokens is None and usage.output_tokens is not None:
+                    record.output_tokens = usage.output_tokens
+                if record.total_tokens is None:
+                    record.total_tokens = usage.effective_total_tokens()
+        except Exception:
+            pass
 
     def record_coordinator_retry(self, record: CoordinatorRetryRecord) -> None:
         self._log.coordinator_retries.append(record)
