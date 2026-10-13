@@ -53,6 +53,7 @@ from team_harness.ui.console import ConsoleBase
 from team_harness.ui.console import make_console
 
 _WORKER_SIGTERM_GRACE_S = 1.0
+_WORKER_SWEEP_GRACE_S = 3.5
 
 
 class TeamHarness:
@@ -850,7 +851,9 @@ async def _finalize_run(
         ),
         name="team-harness-worker-shutdown",
     )
-    shutdown_phase_timeout_s = shutdown_timeout_s + _WORKER_SIGTERM_GRACE_S
+    shutdown_phase_timeout_s = (
+        shutdown_timeout_s + _WORKER_SIGTERM_GRACE_S + _WORKER_SWEEP_GRACE_S
+    )
     shutdown_done, _ = await asyncio.wait(
         (shutdown_task,), timeout=shutdown_phase_timeout_s
     )

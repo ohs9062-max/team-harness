@@ -18,6 +18,7 @@ from team_harness.config import Config
 from team_harness.coordinator.client import CoordinatorClient
 from team_harness.harness import _apply_agent_template_overrides
 from team_harness.harness import _extract_final_text
+from team_harness.harness import _finalize_run
 from team_harness.harness import _normalize_agents
 from team_harness.harness import _show_no_config_hint
 from team_harness.harness import _warn_provider_startup
@@ -31,6 +32,7 @@ from team_harness.tools.agent_tools import build_agent_tool_bindings
 from team_harness.tools.fs_tools import build_fs_tool_bindings
 from team_harness.tools.todo_tools import build_todo_tool_bindings
 from team_harness.tracking.context import ContextTracker
+from team_harness.tracking.models import AgentRecord
 from team_harness.tracking.run_log import RunLogWriter
 from team_harness.ui.console import make_console
 from team_harness.ui.console import PlainConsole
@@ -792,7 +794,7 @@ async def test_build_agent_tool_bindings_read_new_output_truncates_backlog(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_build_agent_tool_bindings_wait_for_any_advances_read_new_cursor(
+async def test_build_agent_tool_bindings_wait_for_any_does_not_advance_read_new_cursor(
     tmp_path,
 ):
     run_dir = tmp_path / "run"
@@ -854,7 +856,7 @@ async def test_build_agent_tool_bindings_wait_for_any_advances_read_new_cursor(
     kill_result = json.loads(await kill_agent("agent_1"))
 
     assert timeout_result["timed_out"] is True
-    assert new_output == "after\n"
+    assert new_output == "before\nafter\n"
     assert kill_result["killed"] is True
 
 
@@ -1196,3 +1198,68 @@ def test_harness_error_is_exception():
     err = TeamHarnessError("something went wrong")
     assert isinstance(err, Exception)
     assert str(err) == "something went wrong"
+
+
+@pytest.mark.asyncio
+async def test_finalize_run_straggler_does_not_timeout_sweep(tmp_path):
+    proc = await asyncio.create_subprocess_exec(
+        "bash", "-c", "trap 'sleep 2' TERM; sleep 20", start_new_session=True
+    )
+    manager = AgentManager()
+    now = datetime.now(timezone.utc)
+    stdout_log = tmp_path / "stdout.log"
+    stderr_log = tmp_path / "stderr.log"
+    stdout_log.touch()
+    stderr_log.touch()
+    state = AgentState(
+        id="worker_straggler",
+        agent_type="codex",
+        prompt="test",
+        cwd=str(tmp_path),
+        proc=proc,
+        spawn_time=now,
+        stdout_log=stdout_log,
+        stderr_log=stderr_log,
+        pgid=proc.pid,
+    )
+    manager.register(state)
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    run_log = RunLogWriter(
+        run_id="test_run",
+        run_dir=run_dir,
+        provider="test",
+        model="test",
+        api_base="test",
+        session_output_dir=str(run_dir),
+    )
+    record = AgentRecord(
+        id="worker_straggler",
+        agent_type="codex",
+        status="running",
+        cwd=str(tmp_path),
+        prompt="test",
+        full_prompt="test",
+        command=["bash"],
+        spawned_at=now,
+        stdout_log=str(stdout_log),
+        stderr_log=str(stderr_log),
+        pgid=proc.pid,
+    )
+    run_log.record_agent_spawn(record)
+
+    try:
+        await _finalize_run(
+            manager=manager,
+            run_log=run_log,
+            session_output_dir=run_dir,
+            shutdown_timeout_s=0.2,
+            ui=None,
+        )
+        assert run_log.error is None
+    finally:
+        try:
+            proc.kill()
+        except Exception:
+            pass
