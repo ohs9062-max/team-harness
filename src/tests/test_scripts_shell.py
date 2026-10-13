@@ -474,6 +474,27 @@ def test_th_watch_cpu_ticks_includes_grandchild_processes():
         root.wait(timeout=5)
 
 
+def test_th_watch_failed_reason_preserves_utf8_boundaries(test_env: dict):
+    """ops-08: FAILED notifications stay decodable when the reason exceeds 200 bytes."""
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_utf8_failed")
+    (task_dir / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
+    (task_dir / "FAILED").write_text("가" * 70, encoding="utf-8")
+    (test_env["watch_dir"] / "tasks.txt").write_text(f"{task_dir}\n", encoding="utf-8")
+
+    env = dict(test_env["env"])
+    env["TH_POLL_SEC"] = "1"
+    result = subprocess.run(
+        [str(SCRIPTS_DIR / "th-watch.sh"), "2"],
+        env=env,
+        check=True,
+        capture_output=True,
+    )
+
+    output = result.stdout.decode("utf-8")
+    assert "실패" in output
+    assert "가" in output
+
+
 
 
 

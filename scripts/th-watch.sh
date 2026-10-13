@@ -146,7 +146,7 @@ while (( $(date +%s) < deadline )); do
       if [[ ! -f $marker.failed ]]; then
         touch "$marker.failed"
         remove_task "$task"
-        reason=$(tail -c 200 "$task/FAILED" 2>/dev/null | tr '\n' ' ')
+        reason=$(tail -n 5 "$task/FAILED" 2>/dev/null | tr '\n' ' ')
         notify "$name" "실패 — $reason"
       fi
       continue
