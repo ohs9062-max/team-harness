@@ -128,27 +128,6 @@ def _render_agent_output(
     return f"{banner}=== stdout ===\n{stdout_text}\n=== stderr ===\n{stderr_text}"
 
 
-def truncate_worker_output(
-    text: str,
-    *,
-    max_head: int = 1000,
-    max_tail: int = 1000,
-    full_path: Path | str | None = None,
-) -> str:
-    """Truncate worker output to head + tail chars with full path reference.
-
-    Keeps coordinator context bounded when reading or reporting worker outputs
-    while preserving TH-D3 semantics (failure/success details retained).
-    """
-    if len(text) <= max_head + max_tail:
-        return text
-    head = text[:max_head]
-    tail = text[-max_tail:] if max_tail > 0 else ""
-    omitted = len(text) - max_head - max_tail
-    path_note = f" Full output file: {full_path}" if full_path else ""
-    return f"{head}\n\n[... omitted {omitted} characters.{path_note} ...]\n\n{tail}"
-
-
 def _build_worker_output_footer(
     output_dir: str = "", config: "Config | None" = None
 ) -> str:

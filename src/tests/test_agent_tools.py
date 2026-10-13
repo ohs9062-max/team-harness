@@ -1295,20 +1295,3 @@ def test_build_direct_spawn_footer_contains_result_card_instruction(tmp_path):
     assert "result card" in footer
     assert "at most 15 lines" in footer
     assert "Write long reports to files, not stdout." in footer
-
-
-def test_truncate_worker_output():
-    short_text = "short output"
-    assert (
-        agent_tools.truncate_worker_output(short_text, max_head=50, max_tail=50)
-        == short_text
-    )
-
-    long_text = "HEAD_" + ("x" * 2000) + "_TAIL"
-    truncated = agent_tools.truncate_worker_output(
-        long_text, max_head=5, max_tail=5, full_path="/path/to/stdout.log"
-    )
-    assert truncated.startswith("HEAD_")
-    assert truncated.endswith("_TAIL")
-    assert "omitted 2000 characters" in truncated
-    assert "Full output file: /path/to/stdout.log" in truncated
