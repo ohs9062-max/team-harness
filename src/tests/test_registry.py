@@ -16,7 +16,7 @@ from team_harness.config import Config
 def test_build_command_default_codex_fresh():
     command = build_command(agent_type="codex", prompt="do thing", config=Config())
 
-    # The built-in codex default includes default_model="gpt-5.6-sol" so the
+    # The built-in codex default includes default_model="gpt-5.6-terra" so the
     # --model flag is injected even without an explicit override.
     assert command == [
         "codex",
@@ -27,7 +27,7 @@ def test_build_command_default_codex_fresh():
         "-c",
         "mcp_servers={}",
         "--model",
-        "gpt-5.6-sol",
+        "gpt-5.6-terra",
         "do thing",
     ]
 
@@ -51,7 +51,7 @@ def test_build_command_default_codex_resume():
         "-c",
         "mcp_servers={}",
         "--model",
-        "gpt-5.6-sol",
+        "gpt-5.6-terra",
         "sid-123",
         "continue",
     ]
@@ -78,7 +78,7 @@ def test_build_command_codex_explicit_model_overrides_default():
     # Explicit model wins over template.default_model.
     assert "--model" in command
     assert "gpt-5.5-mini" in command
-    assert "gpt-5.6-sol" not in command
+    assert "gpt-5.6-terra" not in command
 
 
 def test_build_command_codex_default_model_cleared_by_user_override():
@@ -103,7 +103,7 @@ def test_build_command_codex_default_model_cleared_by_user_override():
     command = build_command(agent_type="codex", prompt="do thing", config=config)
 
     assert "--model" not in command
-    assert "gpt-5.6-sol" not in command
+    assert "gpt-5.6-terra" not in command
 
 
 # ---------------------------------------------------------------------------

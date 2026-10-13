@@ -1335,11 +1335,11 @@ def test_20_13_effective_model_explicit_requested():
 # 14. requested None + Template default_model 존재: effective == template default
 def test_20_14_effective_model_requested_none_template_has_default():
     template = resolve_template("codex", Config())
-    assert template.default_model == "gpt-5.6-sol"
+    assert template.default_model == "gpt-5.6-terra"
     requested = None
     effective = requested if requested is not None else template.default_model
     assert requested is None
-    assert effective == "gpt-5.6-sol"
+    assert effective == "gpt-5.6-terra"
     assert effective == template.default_model
 
 

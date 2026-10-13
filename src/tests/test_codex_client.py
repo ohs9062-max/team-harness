@@ -341,3 +341,45 @@ async def test_codex_client_detects_missing_response_completed():
         )
 
     assert caught.value.retryable is True
+
+
+@pytest.mark.asyncio
+async def test_codex_client_does_not_repeat_streamed_text_from_done_item():
+    response = FakeResponse(
+        [
+            'data: {"type":"response.output_text.delta","delta":"10"}',
+            "",
+            'data: {"type":"response.output_item.done","item":{"type":"message","content":[{"type":"output_text","text":"10"}]}}',
+            "",
+            'data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":3,"output_tokens":1}}}',
+            "",
+        ]
+    )
+    client, _ = _make_client(response=response)
+    tokens = []
+
+    result = await client.chat(
+        [{"role": "user", "content": "count"}],
+        stream=True,
+        token_callback=tokens.append,
+    )
+
+    assert result.choices[0].message.content == "10"
+    assert tokens == ["10"]
+
+
+@pytest.mark.asyncio
+async def test_codex_client_uses_done_item_text_when_not_streamed():
+    response = FakeResponse(
+        [
+            'data: {"type":"response.output_item.done","item":{"type":"message","content":[{"type":"output_text","text":"10"}]}}',
+            "",
+            'data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":3,"output_tokens":1}}}',
+            "",
+        ]
+    )
+    client, _ = _make_client(response=response)
+
+    result = await client.chat([{"role": "user", "content": "count"}], stream=False)
+
+    assert result.choices[0].message.content == "10"

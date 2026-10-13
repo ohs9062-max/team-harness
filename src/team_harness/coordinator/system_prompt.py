@@ -237,6 +237,8 @@ IMPORTANT — output requirements:
 - Session output directory: {session_output_dir}
   Place outputs, notes, and scratchpads there.
 - Report blockers, errors, and any final result clearly in your response.
+- You are a worker: do not read coordinator skills. Read only the parts of
+  project rule files the task needs; everything you read is re-sent each step.
 ---""".strip()
 
 

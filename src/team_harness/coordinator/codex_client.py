@@ -66,6 +66,7 @@ class CodexCoordinatorClient:
             body["parallel_tool_calls"] = True
 
         text_chunks: list[str] = []
+        message_streamed = False
         tool_calls: list[ToolCallRecord] = []
         saw_completed = False
         completed_response: dict[str, Any] | None = None
@@ -89,6 +90,7 @@ class CodexCoordinatorClient:
                     if event_type == "response.output_text.delta":
                         delta = event.get("delta")
                         if isinstance(delta, str) and delta:
+                            message_streamed = True
                             text_chunks.append(delta)
                             if stream and token_callback is not None:
                                 token_callback(delta)
@@ -99,8 +101,12 @@ class CodexCoordinatorClient:
                             continue
                         item_type = item.get("type")
                         if item_type == "message":
+                            # The finished item repeats text already received as
+                            # deltas; using both duplicated the answer.
+                            already_streamed = message_streamed
+                            message_streamed = False
                             text = _message_text_from_item(item)
-                            if text:
+                            if text and not already_streamed:
                                 text_chunks.append(text)
                                 if stream and token_callback is not None:
                                     token_callback(text)

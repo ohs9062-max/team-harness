@@ -13,3 +13,7 @@
 - Do not claim checks you did not run.
 - Do not poll in a loop (sleep → check → sleep). Each check re-sends your whole
   context. Wait on the process itself, or write DONE/FAILED and exit.
+- You are a worker, not the coordinator: do not read coordinator skills
+  (`orca-harness-protocol`, `orchestration`). Read only the sections of project
+  rule files (AGENTS.md etc.) that the task needs; everything you read is re-sent
+  on every later step.
