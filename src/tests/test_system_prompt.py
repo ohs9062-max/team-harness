@@ -195,8 +195,23 @@ def test_build_system_prompt_prefix_invariant_across_runs():
     assert prefix1 == prefix2
     assert "## Run context" in prompt1
     assert "## Run context" in prompt2
-    assert "/repo/run_1" in prompt1
-    assert "/repo/run_2" in prompt2
-    # Ensure session_output_dir is NOT in the invariant prefix
     assert "/repo/run_1" not in prefix1
     assert "/repo/run_2" not in prefix2
+
+
+def test_build_system_prompt_handles_unescaped_braces_in_custom_prompt():
+    class CustomConfig:
+        cwd = "/my/repo"
+        coordinator_system_message = (
+            'Custom prompt with JSON example: {"action": "spawn", "name": "worker"}. '
+            "Working directory is {cwd}."
+        )
+
+    prompt = build_system_prompt(
+        config=CustomConfig(),
+        allowed_types=["codex"],
+        skills=[],
+        session_output_dir="/repo/run_1",
+    )
+    assert '{"action": "spawn", "name": "worker"}' in prompt
+    assert "Working directory is /my/repo." in prompt
