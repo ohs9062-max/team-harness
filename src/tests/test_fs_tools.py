@@ -26,7 +26,9 @@ async def test_fs_tools_round_trip(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_run_fs_bindings_protect_workspace_journal_and_allow_run_journal(tmp_path):
+async def test_run_fs_bindings_protect_workspace_journal_and_allow_run_journal(
+    tmp_path,
+):
     workspace_dir = tmp_path / "workspace"
     run_dir = tmp_path / "runs" / "run_123"
     protected = workspace_dir / ".claude" / "current_status.md"
@@ -44,7 +46,9 @@ async def test_run_fs_bindings_protect_workspace_journal_and_allow_run_journal(t
         ("multi_edit_file", {"edits": [{"old": "outer", "new": "inner"}]}),
     ):
         result = await by_name[name](path=str(protected), **arguments)
-        assert result.startswith("ERROR: refusing to write the workspace coordinator journal")
+        assert result.startswith(
+            "ERROR: refusing to write the workspace coordinator journal"
+        )
     assert protected.read_text() == "outer coordinator state"
 
     run_journal = run_dir / "journal" / "current_status.md"
