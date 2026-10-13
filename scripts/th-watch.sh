@@ -95,6 +95,19 @@ while (( $(date +%s) < deadline )); do
     [[ -n $task && -d $task ]] || continue
     name=${task#"$HOME"/}
     marker="$task/.th_notified"
+    # 다른 작업 공간이 띄운 작업은 그쪽 감시자 몫이다. 표시·등록부를 건드리지 않는다.
+    # 쿼터 오류는 알리지 않고 quota_lock만 만든다(모든 th-launch가 공유).
+    owner=$(cat "$task/.th_owner" 2>/dev/null || true)
+    if [[ -n $owner && $owner != "$journal_workspace" ]]; then
+      for cand in "$task/codex.log" "$task/agy.log"; do
+        [[ -f $cand ]] || continue
+        lock="$watch_dir/quota_lock.$(basename "$cand" .log)"
+        [[ -f $lock || -f $task/DONE || -f $task/FAILED ]] && continue
+        qline=$(grep -iE '^ERROR: ' "$cand" 2>/dev/null | grep -vE '^ERROR: test_' | grep -iE '(quota|rate limit|usage limit|at capacity|capacity exceeded)' | tail -n 1 | cut -c1-180)
+        [[ -n $qline ]] && printf '%s | %s | %s\n' "$(date '+%F %R')" "$task" "$qline" > "$lock"
+      done
+      continue
+    fi
 
     # 1. 완료 판정
     if [[ -f $task/DONE ]]; then

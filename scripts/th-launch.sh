@@ -69,6 +69,8 @@ fi
 [[ -f $task_dir/task.md ]] || { echo "task.md 없음: $task_dir"; exit 1; }
 [[ -f $suffix ]] || { echo "worker_suffix.md 없음(최신 정책을 붙일 수 없음): $suffix"; exit 1; }
 journal_append
+# 이 작업을 띄운 작업 공간. th-watch는 소유자 작업만 알린다(다른 코디네이터 사건을 가로채지 않게).
+printf '%s\n' "$journal_workspace" > "$task_dir/.th_owner"
 mkdir -p "$watch_dir"; touch "$watch_dir/tasks.txt"
 rm -f "$task_dir"/DONE "$task_dir"/FAILED "$task_dir"/.th_* "$task_dir"/job.pid
 prompt="$(<"$task_dir/task.md")
