@@ -521,6 +521,17 @@ def test_th_watch_signature_ignores_deep_files(test_env: dict):
     assert result.stdout.strip() == "100"
 
 
+def test_th_launch_reads_each_agy_cmdline_once():
+    """ops-15: agy reparenting detection parses each /proc cmdline from one read."""
+    launch_source = (SCRIPTS_DIR / "th-launch.sh").read_text(encoding="utf-8")
+    agy_search = launch_source.split("for p in /proc/[0-9]*/cmdline; do", 1)[1].split(
+        "done", 1
+    )[0]
+
+    assert 'IFS= read -r -d \'\' exe < "$p"' not in agy_search
+    assert agy_search.count('< "$p"') == 1
+
+
 
 
 

@@ -115,10 +115,9 @@ elif [[ "$worker_type" == "agy" ]]; then
       pid=${pid%/cmdline}
       [[ $pid != "$$" && $pid != "$init_pid" ]] || continue
       [[ -r $p ]] || continue
-      exe=""
-      IFS= read -r -d '' exe < "$p" || true
-      [[ ${exe##*/} == "agy" ]] || continue
       cmd=$(tr '\0' ' ' < "$p" 2>/dev/null || true)
+      exe=${cmd%% *}
+      [[ ${exe##*/} == "agy" ]] || continue
       [[ $cmd == *"$task_dir"* ]] || continue
       kill -0 "$pid" 2>/dev/null || continue
       actual_pid="$pid"
