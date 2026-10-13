@@ -532,6 +532,30 @@ def test_th_launch_reads_each_agy_cmdline_once():
     assert agy_search.count('< "$p"') == 1
 
 
+def test_th_watch_skips_owner_inference_without_work_logs(test_env: dict):
+    """ops-25: an empty work_log glob is not forwarded as a literal grep file."""
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_without_owner")
+    (test_env["watch_dir"] / "tasks.txt").write_text(f"{task_dir}\n", encoding="utf-8")
+    grep_args = test_env["tmp_path"] / "grep-args.txt"
+    grep_stub = test_env["bin_dir"] / "grep"
+    grep_stub.write_text(
+        f'#!/usr/bin/env bash\nprintf "%s\\n" "$@" > "{grep_args}"\nexec /usr/bin/grep "$@"\n',
+        encoding="utf-8",
+    )
+    grep_stub.chmod(grep_stub.stat().st_mode | stat.S_IEXEC)
+
+    env = dict(test_env["env"])
+    env["TH_POLL_SEC"] = "1"
+    subprocess.run(
+        [str(SCRIPTS_DIR / "th-watch.sh"), "1"],
+        env=env,
+        check=True,
+        capture_output=True,
+    )
+
+    assert not grep_args.exists()
+
+
 
 
 

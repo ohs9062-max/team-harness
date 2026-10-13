@@ -4,6 +4,7 @@
 # 사용: TH_WATCH_DIR=... TH_STALL_SEC=600 TH_POLL_SEC=30 th-watch.sh [max-wait-sec]
 # 작업 규약: 분리된 본 작업 PID는 job.pid, 워커 PID는 worker.pid, 종료는 DONE/FAILED.
 set -u
+shopt -s nullglob
 
 journal_workspace=${TH_WORKSPACE:-}
 if [[ -z $journal_workspace ]]; then
@@ -115,7 +116,8 @@ while (( $(date +%s) < deadline )); do
     owner=$(cat "$task/.th_owner" 2>/dev/null || true)
     # 소유자 파일 이전 작업: 이 작업 공간 작업일지에 th-launch 지시 기록이 있으면 내 것.
     if [[ -z $owner ]]; then
-      if grep -qsF "| $task |" "$(dirname "$journal_log")"/work_log*.md; then
+      journal_logs=("$(dirname "$journal_log")"/work_log*.md)
+      if (( ${#journal_logs[@]} > 0 )) && grep -qsF "| $task |" "${journal_logs[@]}"; then
         owner=$journal_workspace
       else
         owner="(unknown)"
