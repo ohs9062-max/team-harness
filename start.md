@@ -14,9 +14,9 @@
 | 6 | Harness Protocol A/B/C | 저장소 코드 변경 | `th protocol run/resume/relay/status` |
 | 7 | 로그·정리 | 실행 기록 확인, 고아 워커 정리 | `th logs`, `th reap` |
 | 8 | 토큰 절감 | 기본 적용, 측정 | `worker_isolate_mcp`, `measure_preamble.py` |
-| 9 | 모델·추론 노력 | 역할별 모델 변경 | `--set-role`, `[protocol.roles.*]` |
-| 10 | graft 코드 그래프 | 워커 코드 탐색 토큰 절감(선택) | `TEAM_HARNESS_CONTEXT_GRAPH=1` |
-| 11 | Jev 결정 라우터 | 조율자 도구 묶음 축소(선택) | `TEAM_HARNESS_JEV=1` |
+| 9 | 모델·추론 노력 | **코디네이터가 자동 선택** | (직접 쓸 일 없음) |
+| 10 | graft 코드 그래프 | **코디네이터 판단**, 기본 꺼짐 | (직접 쓸 일 없음) |
+| 11 | Jev 결정 라우터 | 사용 안 함(외부 유료 키 필요) | — |
 | 12 | 코디네이터 작업일지 | 상태·이력 보존 | `.claude/current_status.md`, `work_log.md` |
 
 ---
@@ -233,7 +233,19 @@ worker_isolate_mcp = false
 uv run python scripts/measure_preamble.py   # 시스템 프롬프트 + 도구 스키마 토큰(근사)
 ```
 
-## 9. 모델·추론 노력
+## 9~11. 코디네이터가 관리하는 옵션
+
+평소에는 `th cord` 코디네이터에게 하고 싶은 일만 말하면 됩니다. 아래 옵션은 코디네이터가
+작업에 맞춰 정하고 보고에 한 줄로 알립니다(규칙: `skills/orca-harness-protocol/SKILL.md`
+"옵션은 코디네이터가 판단한다"). 아래 명령은 직접 `th`를 실행할 때의 참고용입니다.
+
+| 옵션 | 현재 동작 |
+|---|---|
+| 모델·effort | 코디네이터가 워커 선택 기준으로 `th-launch` 인자에 넣음 |
+| graft | 기본 꺼짐. `th-launch` 워커에는 아직 연결되지 않음. `th run`·protocol로 큰 저장소 코드 작업을 할 때만 코디네이터가 켬 |
+| Jev | 켜지 않음. 외부 유료 키가 필요하고 `th run` 내장 조율자에만 효과 |
+
+### 9. 모델·추론 노력 (참고)
 
 ```bash
 th protocol run --mode c "복잡한 작업" --repo . \
@@ -246,7 +258,7 @@ th protocol run --mode c "복잡한 작업" --repo . \
 terra medium(기본) → terra high(중간 중요도) → sol(terra 실패·설계 판단만),
 agy(단순·대량, 결과 검증 필요).
 
-## 10. graft 코드 그래프 (선택)
+### 10. graft 코드 그래프 (참고)
 
 워커가 코드 심볼·호출 관계를 그래프로 찾게 해 탐색 토큰을 줄입니다(브랜치 병합 도구가
 아닙니다).
@@ -262,7 +274,7 @@ enabled = true
 
 그래프는 `~/.team-harness/graft/`에 저장되며 빌드가 실패해도 작업은 계속됩니다.
 
-## 11. Jev 결정 라우터 (선택)
+### 11. Jev 결정 라우터 (참고)
 
 조율자의 다음 턴에 필요한 도구 묶음만 골라 보냅니다. 실패하거나 confidence가 낮으면
 전체 도구를 씁니다.
