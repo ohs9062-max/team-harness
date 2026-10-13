@@ -88,13 +88,27 @@ B codex                             # 진행 중 작업을 codex에 인계 → M
 
 | 파일 | 쓰는 쪽 | 의미 |
 |---|---|---|
-| `task.md` | 코디네이터 | 워커 지시서 (필수) |
+| `task.md` | 코디네이터 | 워커 지시서 (필수, `## 검수` 블록 포함 가능) |
+| `verify.sh` | th-launch | `task.md`에서 추출된 보조 검수 스크립트 |
+| `VERIFIED` / `VERIFY_FAILED` | th-watch/th-watchd | 보조 검수 결과 (통과 / 실패 항목+출력 끝 40줄) |
 | `worker.pid` / `job.pid` | th-launch / 워커 | 워커 PID / 분리 실행한 본 작업 PID |
 | `STATUS` | 워커 | 단계 변화마다 한 줄 |
 | `WORKLOG.md` | 워커 | 60줄 이내 현재 상태 (목표·진행·방법·문제·산출물 경로) |
 | `DONE` / `FAILED` | 워커 | 완료 / 실패와 이유 |
 | `codex.log` / `agy.log` | th-launch | 워커 출력 |
 | `.th_owner` | th-launch | 이 작업을 띄운 작업 공간 (감시 소유자 판정) |
+| `.th_worktree` | th-launch | 보조 검수를 실행할 작업 트리 경로 |
+
+### task.md 검수 블록 예시
+
+`task.md` 끝에 `## 검수`와 bash 코드 블록을 작성하면 `th-launch`가 자동으로 `verify.sh`로 추출해 워커 완료 시 보조 검수를 수행합니다:
+
+```markdown
+## 검수
+```bash
+uv run --frozen pytest src/tests/ -q
+```
+```
 
 ### th-launch — 워커 분리 실행
 
@@ -106,13 +120,40 @@ scripts/th-launch.sh ./job codex gpt-5.6-terra medium /path/to/repo
 
 - `task.md` 뒤에 `~/.team-harness/worker_suffix.md`(워커 공통 규칙)를 항상 붙입니다.
   정책 변경은 다음 launch부터 적용됩니다.
+- `task.md`의 `## 검수` 블록을 `verify.sh`로 추출해 저장합니다(없으면 경고만).
+- 데몬(`th-watchd.sh`)이 아직 실행 중이지 않으면 `setsid nohup`으로 자동 띄웁니다.
 - 워커 종류를 생략하면 codex. agy 모델 생략·`default`는 Gemini 3.8 Flash (High).
 - codex는 `-c mcp_servers={}`로 MCP 서버 상속 없이 실행합니다(사용자 config는 유지).
 - agy는 시작 직후 다른 PID로 재부모화되므로 최대 20초 동안 실제 PID를 다시 찾아 기록합니다.
 - 실행 기록은 작업 공간 `.claude/work_log.md`에 "지시" 줄로 남습니다.
 - 같은 종류 워커에 쿼터 잠금이 있으면 실행을 거부합니다(4번).
 
-### th-watch — 사건 하나만 알리고 종료
+### th-watchd — 상시 감시 데몬 (권장)
+
+```bash
+scripts/th-watchd.sh
+```
+
+- 등록부(`tasks.txt`)를 상시 감시하며 사건 발생 시마다:
+  1. 소유 작업 공간의 `.claude/inbox.md`에 한 줄 기록 (`시각 | 작업 | 사건 | 요약 | 검수결과`)
+  2. `notify-send`가 설치되어 있으면 데스크톱 알림 (없으면 건너뜀)
+  3. `~/.team-harness/watch/events.log`에 기록
+  4. (옵션) Jev 관찰 CLI(`watch_cli.py`)를 호출하여 `jev_decisions.log`에 기록 (`TH_JEV_WATCH=off`로 비활성화 가능)
+- 단일 인스턴스(`watchd.lock`), 스크립트 수정 시 자동 `exec` 재실행.
+- 표시 파일로 `.th_daemon.*`을 사용하므로 코디네이터 깨우기용 `th-watch.sh`와 간섭하지 않습니다.
+
+#### systemd 사용자 서비스 설치 방법 (선택 사항)
+
+실제 백그라운드 상주를 systemd로 관리하려면 다음 단계를 따릅니다 (자동 등록되지 않으므로 필요 시 직접 등록):
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp scripts/th-watchd.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now th-watchd.service
+```
+
+### th-watch — 사건 하나만 알리고 종료 (코디네이터 깨우기용)
 
 ```bash
 scripts/th-watch.sh [최대대기초]          # 기본 21600초
@@ -121,9 +162,8 @@ TH_WATCH_DIR=... TH_STALL_SEC=600 TH_POLL_SEC=30 scripts/th-watch.sh
 
 - 알리는 사건: **완료, 실패, 쿼터·용량 오류, 프로세스 소실(1분 이내), 멈춤(CPU·산출물
   10분 무변화)**. 정상 진행은 알리지 않습니다. 사건을 하나 출력하면 종료하므로 다시 실행합니다.
-- **자기 작업 공간이 띄운 작업만 알립니다.** 여러 코디네이터가 동시에 일해도 남의 사건을
-  가로채지 않습니다. 소유자는 `.th_owner`로, 그 파일이 없는 예전 작업은 작업 공간
-  `work_log*.md`의 launch 기록으로 판정합니다.
+- 완료 시 `verify.sh` 및 공통 검사를 실행해 "완료 (검수 통과/실패/없음)"을 출력합니다.
+- **자기 작업 공간이 띄운 작업만 알립니다.** 표시 파일로 `.th_notified.*`를 사용합니다.
 - 등록부: `~/.team-harness/watch/tasks.txt`, 사건 기록: `~/.team-harness/watch/events.log`.
 - 시험할 때는 실제 등록부 대신 임시 `TH_WATCH_DIR`을 씁니다.
 
@@ -133,7 +173,7 @@ TH_WATCH_DIR=... TH_STALL_SEC=600 TH_POLL_SEC=30 scripts/th-watch.sh
 scripts/th-status.sh
 ```
 
-작업·내용·상태·마지막 변화·진행 요약·완료 예상(속도·진행률·epoch 기반)을 표로 출력합니다.
+작업·내용·상태·검수(통과/실패/대기/-)·마지막 변화·완료 예상·진행을 표로 출력합니다.
 
 ## 4. 쿼터 잠금
 
