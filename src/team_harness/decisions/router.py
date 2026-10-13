@@ -10,6 +10,8 @@ from team_harness.decisions.models import DecisionRequest
 from team_harness.decisions.models import DecisionResult
 from team_harness.decisions.models import DecisionRouterSettings
 
+_MAX_CONSECUTIVE_FAILURES = 3
+
 
 class DecisionBackend(Protocol):
     async def decide(self, request: DecisionRequest) -> JevAnswer: ...
@@ -25,6 +27,7 @@ class DecisionRouter:
         backend: DecisionBackend | None = None,
     ) -> None:
         self.settings = settings
+        self._consecutive_failures = 0
         api_key = os.environ.get("TYPESAFE_API_KEY") or os.environ.get("JEV_API_KEY")
         self._backend = backend
         self._unavailable_reason: str | None = None
@@ -51,11 +54,20 @@ class DecisionRouter:
         try:
             answer = await self._backend.decide(request)
         except Exception as exc:
+            # Quota exhaustion or an outage fails every call; stop paying the
+            # timeout on each turn and use the full fallback for the rest of the run.
+            self._consecutive_failures += 1
+            reason = f"{type(exc).__name__}: {exc}"
+            if self._consecutive_failures >= _MAX_CONSECUTIVE_FAILURES:
+                self._backend = None
+                self._unavailable_reason = (
+                    f"disabled after {self._consecutive_failures} consecutive "
+                    f"errors (last: {reason})"
+                )
             return self._fallback(
-                request=request,
-                reason=f"{type(exc).__name__}: {exc}",
-                input_chars=input_chars,
+                request=request, reason=reason, input_chars=input_chars
             )
+        self._consecutive_failures = 0
         if answer.choice not in request.options:
             return self._fallback(
                 request=request,
