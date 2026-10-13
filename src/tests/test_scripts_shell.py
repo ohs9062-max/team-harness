@@ -30,7 +30,9 @@ def test_env(tmp_path: Path):
     bin_dir.mkdir(parents=True, exist_ok=True)
 
     suffix_file = tmp_path / "worker_suffix.md"
-    suffix_file.write_text("## Test worker rules\nFollow instructions.\n", encoding="utf-8")
+    suffix_file.write_text(
+        "## Test worker rules\nFollow instructions.\n", encoding="utf-8"
+    )
 
     # Stub scripts for worker CLIs
     for cli_name in ("codex", "agy", "claude"):
@@ -40,7 +42,9 @@ echo "{cli_name} invoked with $@"
 sleep 15 &
 """
         stub_path.write_text(stub_content, encoding="utf-8")
-        stub_path.chmod(stub_path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+        stub_path.chmod(
+            stub_path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH
+        )
 
     env = dict(os.environ)
     env["TH_WATCH_DIR"] = str(watch_dir)
@@ -58,7 +62,9 @@ sleep 15 &
     }
 
 
-def _create_task_dir(parent: Path, name: str = "task_1", title: str = "Test Task") -> Path:
+def _create_task_dir(
+    parent: Path, name: str = "task_1", title: str = "Test Task"
+) -> Path:
     task_dir = parent / name
     task_dir.mkdir(parents=True, exist_ok=True)
     task_md = task_dir / "task.md"
@@ -113,7 +119,9 @@ def test_th_watch_owner_filtering(test_env: dict):
     # Run with max_wait=1 sec and poll_sec=1
     env = dict(test_env["env"])
     env["TH_POLL_SEC"] = "1"
-    res = subprocess.run([str(watch_script), "1"], env=env, capture_output=True, text=True)
+    res = subprocess.run(
+        [str(watch_script), "1"], env=env, capture_output=True, text=True
+    )
     assert res.returncode == 0
     # Should not notify for other workspace
     assert str(task_other) not in res.stdout
@@ -122,7 +130,9 @@ def test_th_watch_owner_filtering(test_env: dict):
 
     # Now add task_my
     tasks_txt.write_text(f"{task_other}\n{task_my}\n", encoding="utf-8")
-    res2 = subprocess.run([str(watch_script), "2"], env=env, capture_output=True, text=True)
+    res2 = subprocess.run(
+        [str(watch_script), "2"], env=env, capture_output=True, text=True
+    )
     assert res2.returncode == 0
     assert "완료" in res2.stdout
     assert str(task_my.name) in res2.stdout
@@ -147,7 +157,9 @@ def test_th_watch_owner_inference_from_work_log(test_env: dict):
     watch_script = SCRIPTS_DIR / "th-watch.sh"
     env = dict(test_env["env"])
     env["TH_POLL_SEC"] = "1"
-    res = subprocess.run([str(watch_script), "2"], env=env, capture_output=True, text=True)
+    res = subprocess.run(
+        [str(watch_script), "2"], env=env, capture_output=True, text=True
+    )
     assert res.returncode == 0
     assert "완료" in res.stdout
     assert str(task_dir.name) in res.stdout
@@ -171,7 +183,9 @@ def test_th_watch_quota_lock_for_other_workspace(test_env: dict):
     watch_script = SCRIPTS_DIR / "th-watch.sh"
     env = dict(test_env["env"])
     env["TH_POLL_SEC"] = "1"
-    res = subprocess.run([str(watch_script), "1"], env=env, capture_output=True, text=True)
+    res = subprocess.run(
+        [str(watch_script), "1"], env=env, capture_output=True, text=True
+    )
     assert res.returncode == 0
 
     quota_lock = test_env["watch_dir"] / "quota_lock.codex"
@@ -211,16 +225,18 @@ done
     with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
         futures = [
             executor.submit(
-                subprocess.run,
-                [str(helper)] + [str(t) for t in chunk],
-                check=True,
+                subprocess.run, [str(helper)] + [str(t) for t in chunk], check=True
             )
             for chunk in chunks
         ]
         for f in futures:
             f.result()
 
-    lines = [line.strip() for line in registry.read_text(encoding="utf-8").splitlines() if line.strip()]
+    lines = [
+        line.strip()
+        for line in registry.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
     assert len(lines) == tasks_count
     for t in task_dirs:
         assert str(t) in lines
@@ -230,19 +246,15 @@ def test_th_launch_concurrent_registry_integrity(test_env: dict):
     """ops-02: Concurrently execute th-launch.sh and verify all tasks exist in tasks.txt."""
     launch_script = SCRIPTS_DIR / "th-launch.sh"
     tasks_count = 10
-    task_dirs = [_create_task_dir(test_env["tmp_path"], f"conc_launch_{i}") for i in range(tasks_count)]
+    task_dirs = [
+        _create_task_dir(test_env["tmp_path"], f"conc_launch_{i}")
+        for i in range(tasks_count)
+    ]
 
     import concurrent.futures
 
     def launch_one(t: Path):
-        cmd = [
-            str(launch_script),
-            str(t),
-            "codex",
-            "gpt-5.6-terra",
-            "medium",
-            str(t),
-        ]
+        cmd = [str(launch_script), str(t), "codex", "gpt-5.6-terra", "medium", str(t)]
         res = subprocess.run(cmd, env=test_env["env"], capture_output=True, text=True)
         assert res.returncode == 0, f"launch failed: {res.stderr}"
 
@@ -250,7 +262,11 @@ def test_th_launch_concurrent_registry_integrity(test_env: dict):
         list(executor.map(launch_one, task_dirs))
 
     tasks_txt = test_env["watch_dir"] / "tasks.txt"
-    lines = [line.strip() for line in tasks_txt.read_text(encoding="utf-8").splitlines() if line.strip()]
+    lines = [
+        line.strip()
+        for line in tasks_txt.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
     for t in task_dirs:
         assert str(t) in lines
 
@@ -267,7 +283,9 @@ def test_th_watch_quota_error_removes_task(test_env: dict):
     watch_script = SCRIPTS_DIR / "th-watch.sh"
     env = dict(test_env["env"])
     env["TH_POLL_SEC"] = "1"
-    res = subprocess.run([str(watch_script), "2"], env=env, capture_output=True, text=True)
+    res = subprocess.run(
+        [str(watch_script), "2"], env=env, capture_output=True, text=True
+    )
     assert res.returncode == 0
     assert "워커 오류(쿼터·용량)" in res.stdout
 
@@ -287,7 +305,9 @@ def test_th_watch_dead_process_removes_task(test_env: dict):
     watch_script = SCRIPTS_DIR / "th-watch.sh"
     env = dict(test_env["env"])
     env["TH_POLL_SEC"] = "1"
-    res = subprocess.run([str(watch_script), "2"], env=env, capture_output=True, text=True)
+    res = subprocess.run(
+        [str(watch_script), "2"], env=env, capture_output=True, text=True
+    )
     assert res.returncode == 0
     assert "중단 — 실행 중인 프로세스 없음" in res.stdout
 
@@ -317,7 +337,9 @@ def test_th_watch_stall_retains_task_in_registry(test_env: dict):
         env = dict(test_env["env"])
         env["TH_POLL_SEC"] = "1"
         env["TH_STALL_SEC"] = "1"  # stall threshold 1s
-        res = subprocess.run([str(watch_script), "2"], env=env, capture_output=True, text=True)
+        res = subprocess.run(
+            [str(watch_script), "2"], env=env, capture_output=True, text=True
+        )
         assert res.returncode == 0
         assert "멈춤" in res.stdout
 
@@ -342,7 +364,9 @@ def test_th_status_worker_pid_alive_shows_running(test_env: dict):
         tasks_txt.write_text(f"{task_dir}\n", encoding="utf-8")
 
         status_script = SCRIPTS_DIR / "th-status.sh"
-        res = subprocess.run([str(status_script)], env=test_env["env"], capture_output=True, text=True)
+        res = subprocess.run(
+            [str(status_script)], env=test_env["env"], capture_output=True, text=True
+        )
         assert res.returncode == 0
         assert "진행" in res.stdout
         assert "중단?" not in res.stdout
@@ -362,7 +386,9 @@ def test_th_status_both_pids_dead_shows_stopped(test_env: dict):
     tasks_txt.write_text(f"{task_dir}\n", encoding="utf-8")
 
     status_script = SCRIPTS_DIR / "th-status.sh"
-    res = subprocess.run([str(status_script)], env=test_env["env"], capture_output=True, text=True)
+    res = subprocess.run(
+        [str(status_script)], env=test_env["env"], capture_output=True, text=True
+    )
     assert res.returncode == 0
     assert "중단?" in res.stdout
 
@@ -394,14 +420,19 @@ def test_th_launch_claude_worker(test_env: dict):
                 break
         time.sleep(0.1)
     assert "claude invoked with" in log_content
-    assert "-p --dangerously-skip-permissions --model claude-sonnet-5 --strict-mcp-config" in log_content
+    assert (
+        "-p --dangerously-skip-permissions --model claude-sonnet-5 --strict-mcp-config"
+        in log_content
+    )
 
 
 def test_th_watch_recognizes_claude_log_quota(test_env: dict):
     """ops-04: th-watch recognizes quota/rate-limit error in claude.log."""
     task_dir = _create_task_dir(test_env["tmp_path"], "task_claude_quota")
     (task_dir / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
-    (task_dir / "claude.log").write_text("ERROR: 429 rate limit exceeded\n", encoding="utf-8")
+    (task_dir / "claude.log").write_text(
+        "ERROR: 429 rate limit exceeded\n", encoding="utf-8"
+    )
 
     tasks_txt = test_env["watch_dir"] / "tasks.txt"
     tasks_txt.write_text(f"{task_dir}\n", encoding="utf-8")
@@ -409,7 +440,9 @@ def test_th_watch_recognizes_claude_log_quota(test_env: dict):
     watch_script = SCRIPTS_DIR / "th-watch.sh"
     env = dict(test_env["env"])
     env["TH_POLL_SEC"] = "1"
-    res = subprocess.run([str(watch_script), "2"], env=env, capture_output=True, text=True)
+    res = subprocess.run(
+        [str(watch_script), "2"], env=env, capture_output=True, text=True
+    )
     assert res.returncode == 0
     assert "워커 오류(쿼터·용량)" in res.stdout
     assert "새 claude 실행 잠금" in res.stdout
@@ -422,13 +455,17 @@ def test_th_status_recognizes_claude_log_quota(test_env: dict):
     """ops-04: th-status recognizes quota error in claude.log."""
     task_dir = _create_task_dir(test_env["tmp_path"], "task_claude_status_quota")
     (task_dir / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
-    (task_dir / "claude.log").write_text("ERROR: 429 rate limit reached\n", encoding="utf-8")
+    (task_dir / "claude.log").write_text(
+        "ERROR: 429 rate limit reached\n", encoding="utf-8"
+    )
 
     tasks_txt = test_env["watch_dir"] / "tasks.txt"
     tasks_txt.write_text(f"{task_dir}\n", encoding="utf-8")
 
     status_script = SCRIPTS_DIR / "th-status.sh"
-    res = subprocess.run([str(status_script)], env=test_env["env"], capture_output=True, text=True)
+    res = subprocess.run(
+        [str(status_script)], env=test_env["env"], capture_output=True, text=True
+    )
     assert res.returncode == 0
     assert "워커 오" in res.stdout
 
@@ -445,19 +482,29 @@ def test_th_watch_cpu_ticks_includes_grandchild_processes():
     try:
         time.sleep(0.2)
         child_pid = int(
-            subprocess.check_output(["pgrep", "-P", str(root.pid)], text=True).splitlines()[0]
+            subprocess.check_output(
+                ["pgrep", "-P", str(root.pid)], text=True
+            ).splitlines()[0]
         )
         hog_pid = int(
-            subprocess.check_output(["pgrep", "-P", str(child_pid)], text=True).splitlines()[0]
+            subprocess.check_output(
+                ["pgrep", "-P", str(child_pid)], text=True
+            ).splitlines()[0]
         )
-        hog_ticks = int(Path(f"/proc/{hog_pid}/stat").read_text().split(") ", 1)[1].split()[11])
+        hog_ticks = int(
+            Path(f"/proc/{hog_pid}/stat").read_text().split(") ", 1)[1].split()[11]
+        )
 
-        command = (
-            'source <(sed -n \'/^cpu_ticks() {/,/^}$/p\' "$1"); '
-            'cpu_ticks "$2"'
-        )
+        command = 'source <(sed -n \'/^cpu_ticks() {/,/^}$/p\' "$1"); cpu_ticks "$2"'
         result = subprocess.run(
-            ["bash", "-c", command, "bash", str(SCRIPTS_DIR / "th-watch.sh"), str(root.pid)],
+            [
+                "bash",
+                "-c",
+                command,
+                "bash",
+                str(SCRIPTS_DIR / "th-watch.sh"),
+                str(root.pid),
+            ],
             check=True,
             capture_output=True,
             text=True,
@@ -508,11 +555,18 @@ def test_th_watch_signature_ignores_deep_files(test_env: dict):
     os.utime(deep_log, (200, 200))
 
     command = (
-        'source <(sed -n \'/^latest_signature() {/,/^}$/p\' "$1"); '
+        "source <(sed -n '/^latest_signature() {/,/^}$/p' \"$1\"); "
         'latest_signature "$2"'
     )
     result = subprocess.run(
-        ["bash", "-c", command, "bash", str(SCRIPTS_DIR / "th-watch.sh"), str(task_dir)],
+        [
+            "bash",
+            "-c",
+            command,
+            "bash",
+            str(SCRIPTS_DIR / "th-watch.sh"),
+            str(task_dir),
+        ],
         check=True,
         capture_output=True,
         text=True,
@@ -528,7 +582,7 @@ def test_th_launch_reads_each_agy_cmdline_once():
         "done", 1
     )[0]
 
-    assert 'IFS= read -r -d \'\' exe < "$p"' not in agy_search
+    assert "IFS= read -r -d '' exe < \"$p\"" not in agy_search
     assert agy_search.count('< "$p"') == 1
 
 
@@ -554,8 +608,3 @@ def test_th_watch_skips_owner_inference_without_work_logs(test_env: dict):
     )
 
     assert not grep_args.exists()
-
-
-
-
-
