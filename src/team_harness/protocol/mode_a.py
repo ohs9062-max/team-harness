@@ -200,7 +200,13 @@ async def run_mode_a(
 
     for worker in workers:
         try:
-            wt = create_worktree(target_repo, task_id, worker, state.base_commit)
+            wt = create_worktree(
+                target_repo,
+                task_id,
+                worker,
+                state.base_commit,
+                symlink_dirs=proto_cfg.symlink_ignored_dirs,
+            )
         except Exception as exc:
             return _block(state, state_mgr, Stage.WORKTREE_SETUP.value, str(exc))
         state.worktrees[worker] = {
@@ -774,7 +780,11 @@ async def resume_mode_a(
     # merging the result into the base branch remains the human's decision.
     try:
         integration = create_worktree(
-            target_repo, task_id, "integration", state.base_commit
+            target_repo,
+            task_id,
+            "integration",
+            state.base_commit,
+            symlink_dirs=proto_cfg.symlink_ignored_dirs,
         )
     except Exception as exc:
         return _block(state, state_mgr, Stage.CODEX_MERGE.value, str(exc))

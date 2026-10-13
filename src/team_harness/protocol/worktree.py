@@ -80,6 +80,7 @@ def create_worktree(
     base_commit: str,
     *,
     worktrees_base_dir: str | Path | None = None,
+    symlink_dirs: list[str] | tuple[str, ...] | None = None,
 ) -> WorktreeRef:
     """Create a new task worktree branching from *base_commit*.
 
@@ -106,6 +107,17 @@ def create_worktree(
 
     wt_path.parent.mkdir(parents=True, exist_ok=True)
     _git(["worktree", "add", "-b", branch, str(wt_path), base_commit], cwd=root)
+
+    if symlink_dirs:
+        for rel_dir in symlink_dirs:
+            cleaned = rel_dir.strip().strip("/")
+            if not cleaned:
+                continue
+            src = root / cleaned
+            dest = wt_path / cleaned
+            if src.exists() and not dest.exists() and not dest.is_symlink():
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.symlink_to(src.resolve(), target_is_directory=src.is_dir())
 
     return WorktreeRef(
         label=label, branch=branch, path=str(wt_path), base_commit=base_commit

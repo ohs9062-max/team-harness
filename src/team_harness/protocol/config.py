@@ -114,6 +114,7 @@ class ProtocolConfig:
             agent_type="antigravity", model="Gemini 3.8 Flash (High)"
         )
     )
+    symlink_ignored_dirs: tuple[str, ...] = field(default_factory=tuple)
 
 
 # Every role the Harness Protocol maps onto an agent backend. Used to reject a
@@ -257,6 +258,7 @@ def load_protocol_config(
     mode_c_review: ProtocolAgentSpec | str | None = None,
     mode_c_review_model: str | None = None,
     mode_c_review_effort: str | None = None,
+    symlink_ignored_dirs: list[str] | tuple[str, ...] | None = None,
     role_tables: dict[str, dict[str, str]] | None = None,
     runtime_roles: dict[str, dict[str, str]] | None = None,
     config_start_dir: str | Path | None = None,
@@ -398,6 +400,19 @@ def load_protocol_config(
         toml_role=role_tables.get("mode_c_review"),
     )
 
+    resolved_symlink_dirs: tuple[str, ...]
+    if symlink_ignored_dirs is not None:
+        resolved_symlink_dirs = tuple(symlink_ignored_dirs)
+    elif "HARNESS_PROTOCOL_SYMLINK_IGNORED_DIRS" in merged_env:
+        raw_env_symlinks = merged_env["HARNESS_PROTOCOL_SYMLINK_IGNORED_DIRS"].strip()
+        resolved_symlink_dirs = (
+            tuple(x.strip() for x in raw_env_symlinks.split(",") if x.strip())
+            if raw_env_symlinks
+            else ()
+        )
+    else:
+        resolved_symlink_dirs = ()
+
     return ProtocolConfig(
         mode_a_worker_1=spec_a_w1,
         mode_a_worker_2=spec_a_w2,
@@ -406,6 +421,7 @@ def load_protocol_config(
         mode_c_design=spec_c_design,
         mode_c_implement=spec_c_impl,
         mode_c_review=spec_c_rev,
+        symlink_ignored_dirs=resolved_symlink_dirs,
     )
 
 

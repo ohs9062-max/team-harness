@@ -517,6 +517,7 @@ async def run_mode_c(
             "pipeline",
             state.base_commit,
             worktrees_base_dir=worktrees_base_dir,
+            symlink_dirs=proto_cfg.symlink_ignored_dirs,
         )
     except (OSError, subprocess.CalledProcessError, ValueError, RuntimeError) as exc:
         return _block(
@@ -609,6 +610,17 @@ async def resume_mode_c(
             "MODE A runs are continued with resume_mode_a."
         )
 
+    pipeline = state.worktrees.get("pipeline")
+    worktree_path = (pipeline or {}).get("path", "")
+    if not pipeline or not worktree_path:
+        failed_stage = state.stage
+        reason = state.blocker or "pre-worktree setup stage"
+        raise ValueError(
+            f"Cannot resume MODE C run {state.task_id}: worktree was never created "
+            f"(run failed before WORKTREE_SETUP at stage {failed_stage}: {reason}). "
+            "Start a fresh run with `th protocol run` instead."
+        )
+
     stage = from_stage or _first_unfinished_stage(state)
     if stage not in RESUMABLE_MODE_C_STAGES:
         raise ValueError(
@@ -616,14 +628,12 @@ async def resume_mode_c(
             f"Resumable stages: {list(RESUMABLE_MODE_C_STAGES)}"
         )
 
-    pipeline = state.worktrees.get("pipeline")
-    worktree_path = (pipeline or {}).get("path", "")
-    if not worktree_path or not Path(worktree_path).is_dir():
+    if not Path(worktree_path).is_dir():
         return _block(
             state,
             state_mgr,
             stage,
-            f"Task worktree is missing ({worktree_path or 'not recorded'}); "
+            f"Task worktree is missing ({worktree_path}); "
             "cannot resume. Start a fresh run instead.",
         )
 
@@ -695,6 +705,8 @@ def _first_unfinished_stage(state: ProtocolState) -> str:
                 Stage.WORKTREE_SETUP.value,
             ):
                 return Stage.DESIGN.value
+            if candidate in (Stage.TEST.value, Stage.CHECK.value):
+                return Stage.IMPLEMENT.value
             return Stage.REVIEW.value
     return Stage.REVIEW.value
 
