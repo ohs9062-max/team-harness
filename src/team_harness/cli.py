@@ -1251,3 +1251,78 @@ async def _protocol_relay(
         check_timeout_sec=check_timeout_sec,
     )
     _print_protocol_state(state, run_dir=resolved_run_dir)
+
+
+@protocol.command("clean")
+@click.option(
+    "--repo",
+    type=click.Path(exists=True, file_okay=False),
+    default=None,
+    help="Target git repository path (defaults to auto-detection from runs).",
+)
+@click.option(
+    "--runs-dir",
+    type=click.Path(file_okay=False),
+    default=None,
+    help="Base directory containing protocol run logs (default: ~/.team-harness/runs).",
+)
+@click.option("--task-id", default=None, help="Specific task ID to clean up.")
+@click.option(
+    "--run-dir",
+    type=click.Path(file_okay=False),
+    default=None,
+    help="Specific run directory to clean up.",
+)
+@click.option(
+    "--yes",
+    is_flag=True,
+    default=False,
+    help="Perform actual deletion. Without this flag, only a dry-run preview is shown.",
+)
+def protocol_clean(
+    repo: str | None,
+    runs_dir: str | None,
+    task_id: str | None,
+    run_dir: str | None,
+    yes: bool,
+) -> None:
+    """Clean up worktrees and branches from completed, blocked, or cancelled runs.
+
+    By default, this command performs a dry run and lists items that would be deleted.
+    Pass `--yes` to perform the actual deletion.
+    """
+    from team_harness.protocol.clean import clean_protocol_runs
+
+    result = clean_protocol_runs(
+        runs_dir=runs_dir,
+        repo_root=repo,
+        task_id=task_id,
+        run_dir=run_dir,
+        dry_run=not yes,
+    )
+
+    if not result.targets:
+        click.echo("[protocol] 정리할 대상(DONE/BLOCKED/CANCELLED)이 없습니다.")
+        return
+
+    mode_label = "실제 삭제" if yes else "dry-run (시뮬레이션)"
+    click.echo(f"[protocol] 정리 대상 실행 ({mode_label}): {len(result.targets)}개")
+    for t in result.targets:
+        click.echo(f"  - task_id={t.task_id} status={t.status} stage={t.stage}")
+        for wt in t.worktrees:
+            click.echo(f"      워크트리: {wt}")
+        for br in t.branches:
+            click.echo(f"      브랜치: {br}")
+
+    if not yes:
+        click.echo(
+            "[protocol] (dry-run) 실제 삭제를 수행하려면 --yes 옵션을 추가하여 실행하십시오."
+        )
+    else:
+        click.echo(
+            f"[protocol] 정리 완료: 워크트리 {len(result.removed_worktrees)}개 삭제, "
+            f"브랜치 {len(result.removed_branches)}개 삭제."
+        )
+        if result.errors:
+            for err in result.errors:
+                click.echo(f"[protocol] [경고] {err}", err=True)
