@@ -19,6 +19,32 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 
 
+def _watchd_pids_for(watch_dir: Path) -> list[int]:
+    """Return th-watchd processes whose environment targets ``watch_dir``."""
+    expected = f"TH_WATCH_DIR={watch_dir}".encode()
+    pids = []
+    for proc_dir in Path("/proc").iterdir():
+        if not proc_dir.name.isdigit():
+            continue
+        try:
+            cmdline = (proc_dir / "cmdline").read_bytes()
+            environ = (proc_dir / "environ").read_bytes().split(b"\0")
+        except OSError:
+            continue
+        if b"th-watchd.sh" in cmdline and expected in environ:
+            pids.append(int(proc_dir.name))
+    return pids
+
+
+def _stop_watchd_for(watch_dir: Path) -> None:
+    """Stop the session-owning daemon process for one isolated watch directory."""
+    for pid in _watchd_pids_for(watch_dir):
+        try:
+            os.killpg(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+
+
 @pytest.fixture
 def test_env(tmp_path: Path):
     """Sets up an isolated environment with stub binaries and test directories."""
@@ -50,9 +76,11 @@ sleep 15 &
     env["TH_WATCH_DIR"] = str(watch_dir)
     env["TH_WORKSPACE"] = str(workspace)
     env["TH_WORKER_SUFFIX"] = str(suffix_file)
+    # Individual daemon-start tests opt in; ordinary th-launch tests must not leak one.
+    env["TH_NO_DAEMON"] = "1"
     env["PATH"] = f"{bin_dir}:{env.get('PATH', '')}"
 
-    return {
+    yield {
         "watch_dir": watch_dir,
         "workspace": workspace,
         "bin_dir": bin_dir,
@@ -60,6 +88,8 @@ sleep 15 &
         "env": env,
         "tmp_path": tmp_path,
     }
+
+    _stop_watchd_for(watch_dir)
 
 
 def _create_task_dir(
@@ -959,25 +989,28 @@ def test_th_watchd_single_instance_flock(test_env: dict):
 
 
 def test_th_launch_starts_daemon_if_not_running(test_env: dict):
-    """A. th-launch는 실행 시 데몬이 없으면 setsid nohup으로 띄움."""
+    """A. Relative th-launch invocation starts a daemon from the repository cwd."""
     task_dir = _create_task_dir(test_env["tmp_path"], "task_launch_daemon")
-    launch_script = SCRIPTS_DIR / "th-launch.sh"
 
     cmd = [
-        str(launch_script),
+        "bash",
+        "scripts/th-launch.sh",
         str(task_dir),
         "codex",
         "gpt-5.6-terra",
         "medium",
         str(task_dir),
     ]
-    res = subprocess.run(cmd, env=test_env["env"], capture_output=True, text=True)
+    env = dict(test_env["env"])
+    env.pop("TH_NO_DAEMON")
+    res = subprocess.run(cmd, cwd=REPO_ROOT, env=env, capture_output=True, text=True)
     assert res.returncode == 0
 
     lock_file = test_env["watch_dir"] / "watchd.lock"
     assert lock_file.is_file(), (
         "Daemon lock file should be touched/created by daemon launch"
     )
+    assert _watchd_pids_for(test_env["watch_dir"]), "Daemon should be running"
 
 
 def test_watch_cli_completed_verified_records_jev_decision(test_env: dict):

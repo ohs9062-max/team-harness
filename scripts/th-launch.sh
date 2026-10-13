@@ -5,6 +5,8 @@
 # 정책 변경은 다음 launch부터 적용하며 실행 중 워커는 교체하지 않는다.
 set -euo pipefail
 
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+
 journal_workspace=${TH_WORKSPACE:-}
 if [[ -z $journal_workspace ]]; then
   journal_workspace=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null || printf '%s' "$PWD")
@@ -162,7 +164,6 @@ fi
 ) 200>"$watch_dir/tasks.lock"
 
 # 상시 감시 데몬: 데몬이 없으면 setsid nohup으로 띄움
-script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 if [[ ${TH_NO_DAEMON:-0} != 1 && -x "$script_dir/th-watchd.sh" ]]; then
   touch "$watch_dir/watchd.lock"
   if flock -n "$watch_dir/watchd.lock" true 2>/dev/null; then
