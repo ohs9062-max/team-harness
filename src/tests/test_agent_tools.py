@@ -898,7 +898,7 @@ async def test_read_new_output_truncates_large_initial_backlog(
 
 
 @pytest.mark.asyncio
-async def test_wait_for_any_advances_read_new_output_cursor(
+async def test_wait_for_any_does_not_advance_read_new_output_cursor(
     tmp_path, config, manager, ui
 ):
     stdout = tmp_path / "agent_stdout.log"
@@ -934,8 +934,45 @@ async def test_wait_for_any_advances_read_new_output_cursor(
     result = json.loads(await agent_tools.kill_agent("agent_1"))
 
     assert timeout_result["timed_out"] is True
-    assert new_output == "after\n"
+    assert new_output == "before\nafter\n"
     assert result["killed"] is True
+
+
+@pytest.mark.asyncio
+async def test_wait_for_any_does_not_swallow_unread_output(
+    tmp_path, config, manager, ui
+):
+    stdout = tmp_path / "agent_stdout.log"
+    stderr = tmp_path / "agent_stderr.log"
+    stdout.write_text("important log output\n")
+    stderr.write_text("")
+    proc = await asyncio.create_subprocess_exec("sleep", "5")
+    state = AgentState(
+        id="agent_2",
+        agent_type="codex",
+        prompt="p",
+        cwd=str(tmp_path),
+        proc=proc,
+        spawn_time=datetime.now(timezone.utc),
+        stdout_log=stdout,
+        stderr_log=stderr,
+    )
+    manager.register(state)
+    run_log = RunLogWriter(
+        run_id="run_2",
+        run_dir=tmp_path,
+        provider=config.provider,
+        model=config.model,
+        api_base=config.api_base,
+    )
+    agent_tools.setup(manager=manager, run_log=run_log, config=config, ui=ui)
+
+    # Calling wait_for_any should not swallow output for read_new_agent_output
+    await agent_tools.wait_for_any(["agent_2"], timeout=0.1)
+    output = await agent_tools.read_new_agent_output("agent_2")
+    await agent_tools.kill_agent("agent_2")
+
+    assert output == "important log output\n"
 
 
 @pytest.mark.asyncio

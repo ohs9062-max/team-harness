@@ -546,13 +546,12 @@ def _read_new_stdout_chunk(
     *,
     stdout_log: Path,
     output_cursor: int,
-    seen_stdout_cursor: int,
+    seen_stdout_cursor: int = 0,
     max_bytes: int = READ_NEW_AGENT_OUTPUT_MAX_BYTES,
 ) -> tuple[int, bytes, int, int]:
     """Read the unread stdout tail and return the cursor advanced to EOF.
 
-    The unread span starts at the later of the explicit read cursor and the
-    cursor maintained by wait_for_any snapshots. If that span is larger than
+    The unread span starts at the explicit read cursor. If that span is larger than
     max_bytes, only the latest max_bytes are returned, while the next cursor is
     still advanced to the current file size so the omitted backlog is not
     replayed on a later read.
@@ -560,7 +559,7 @@ def _read_new_stdout_chunk(
     if not stdout_log.exists():
         return output_cursor, b"", 0, 0
     size = stdout_log.stat().st_size
-    cursor = max(output_cursor, seen_stdout_cursor)
+    cursor = output_cursor
     if size <= cursor:
         return cursor, b"", 0, 0
     total_new_bytes = size - cursor
@@ -751,8 +750,7 @@ def _build_running_snapshot(
 
     Cursor stores are injectable so per-run tool bindings keep their own state,
     while the module-level tool functions can share the global stores. Advancing
-    the stdout cursor here lets read_new_agent_output skip output already
-    accounted for by wait_for_any.
+    the stdout cursor here tracks delta bytes produced between wait_for_any calls.
     """
     stdout_cursor_store = (
         stdout_cursors if stdout_cursors is not None else _wait_stdout_cursors
@@ -1441,19 +1439,16 @@ async def read_new_agent_output(agent_id: str) -> str:
     lock = _output_locks.setdefault(agent_id, asyncio.Lock())
     async with lock:
         cursor = _output_cursors.get(agent_id, 0)
-        seen_cursor = _wait_stdout_cursors.get(agent_id, 0)
 
         new_cursor, data, omitted_bytes, total_new_bytes = await asyncio.to_thread(
             _read_new_stdout_chunk,
             stdout_log=state.stdout_log,
             output_cursor=cursor,
-            seen_stdout_cursor=seen_cursor,
             max_bytes=max_bytes,
         )
         if not data:
             return ""
         _output_cursors[agent_id] = new_cursor
-        _wait_stdout_cursors[agent_id] = new_cursor
         return _format_new_stdout_chunk(
             data=data,
             omitted_bytes=omitted_bytes,
@@ -1911,19 +1906,16 @@ def build_agent_tool_bindings(
         lock = output_locks.setdefault(agent_id, asyncio.Lock())
         async with lock:
             cursor = output_cursors.get(agent_id, 0)
-            seen_cursor = wait_stdout_cursors.get(agent_id, 0)
 
             new_cursor, data, omitted_bytes, total_new_bytes = await asyncio.to_thread(
                 _read_new_stdout_chunk,
                 stdout_log=state.stdout_log,
                 output_cursor=cursor,
-                seen_stdout_cursor=seen_cursor,
                 max_bytes=max_bytes,
             )
             if not data:
                 return ""
             output_cursors[agent_id] = new_cursor
-            wait_stdout_cursors[agent_id] = new_cursor
             return _format_new_stdout_chunk(
                 data=data,
                 omitted_bytes=omitted_bytes,
