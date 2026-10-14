@@ -251,7 +251,7 @@ def test_system_prompt_worker_model_selection_in_fixed_prefix():
     assert "gpt-5.6-terra" in prefix
     assert 'effort="medium"' in prefix
     assert 'effort="high"' in prefix
-    assert "gpt-5.6-sol" in prefix
+    assert "gpt-6.1-sol" in prefix
     assert "antigravity" in prefix
     assert "spawn_agent" in prefix
 
@@ -264,3 +264,13 @@ def test_system_prompt_worker_model_selection_in_fixed_prefix():
         line for line in section_chunk.strip().splitlines() if line.strip()
     ]
     assert len(section_lines) <= 6
+    assert "gpt-5.6-sol" not in section_chunk
+    assert (
+        'Default code implementation and ordinary fixes use `gpt-5.6-terra` with `effort="medium"`.'
+        in section_chunk
+    )
+    assert '`gpt-6.1-sol` with `effort="medium"`' in section_chunk
+    assert (
+        '`gpt-6.1-sol` with `effort="high"` only for high difficulty or a failed medium attempt.'
+        in section_chunk
+    )

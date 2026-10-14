@@ -129,6 +129,43 @@ def test_th_launch_retains_th_owner(test_env: dict):
     assert str(task_dir) in tasks_txt.read_text(encoding="utf-8")
 
 
+def test_th_launch_passes_sol_model_and_effort_to_codex(test_env: dict):
+    """th-launch forwards explicit Sol model and effort without invoking real Codex."""
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_sol_arguments")
+    launch_script = SCRIPTS_DIR / "th-launch.sh"
+    captured_args = test_env["tmp_path"] / "codex-args.txt"
+    codex_stub = test_env["bin_dir"] / "codex"
+    codex_stub.write_text(
+        f'#!/usr/bin/env bash\nprintf "%s\\n" "$@" > "{captured_args}"\n',
+        encoding="utf-8",
+    )
+    codex_stub.chmod(codex_stub.stat().st_mode | stat.S_IEXEC)
+
+    result = subprocess.run(
+        [
+            str(launch_script),
+            str(task_dir),
+            "codex",
+            "gpt-6.1-sol",
+            "medium",
+            str(task_dir),
+        ],
+        env=test_env["env"],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    time.sleep(0.1)
+    assert captured_args.read_text(encoding="utf-8").splitlines()[:5] == [
+        "exec",
+        "-m",
+        "gpt-6.1-sol",
+        "-c",
+        "model_reasoning_effort=medium",
+    ]
+
+
 def test_th_watch_owner_filtering(test_env: dict):
     """ops-07: Verify th-watch filters events by workspace owner (.th_owner)."""
     task_my = _create_task_dir(test_env["tmp_path"], "task_my")

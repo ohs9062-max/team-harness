@@ -73,10 +73,10 @@ Tool usage guidelines:
 
 Worker model selection:
 - Explicitly pass `model` (and `effort` where applicable) when calling `spawn_agent`.
-- Default to `gpt-5.6-terra` with `effort="medium"`; use `effort="high"` for moderate importance.
-- Use `gpt-5.6-sol` only when terra actually failed or design judgment is strictly required.
-- Use `antigravity` (`agy`) for simple or bulk tasks.
-- Keep small tasks (1-2 files, clear approach) to a single worker without splitting.
+- Default code implementation and ordinary fixes use `gpt-5.6-terra` with `effort="medium"`.
+- Moderate/complex logic and hard bugs or design judgment use `gpt-6.1-sol` with `effort="medium"`.
+- Escalate to `gpt-6.1-sol` with `effort="high"` only for high difficulty or a failed medium attempt.
+- Use `antigravity` (`agy`) for simple/bulk tasks; keep small clear tasks (1-2 files) to one worker.
 
 Good worker prompt pattern:
 - objective

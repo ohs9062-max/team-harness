@@ -338,14 +338,15 @@ uv run python scripts/measure_preamble.py   # 시스템 프롬프트 + 도구 �
 
 ```bash
 th protocol run --mode c "복잡한 작업" --repo . \
-  --set-role mode_c_implement.model=gpt-5.6-sol \
+  --set-role mode_c_implement.model=gpt-6.1-sol \
   --set-role mode_c_implement.effort=medium
 ```
 
 고정 설정은 `.team-harness/config.toml`의 `[protocol.roles.<역할>]`에 저장합니다.
 `th-launch` 워커는 실행 인자(모델, effort)로 고릅니다. 기본 선택 기준:
-terra medium(기본) → terra high(중간 중요도) → sol(terra 실패·설계 판단만),
-agy(단순·대량, 결과 검증 필요).
+terra medium(기본 코드 구현·일반 수정) → gpt-6.1-sol medium(중간 중요도·복잡한 로직,
+어려운 버그·설계 판단) → gpt-6.1-sol high(고난도 또는 medium 실패 시만),
+agy(단순·대량·비코드, 결과 검증 필요). A/B/C 역할 기본값은 terra를 유지합니다.
 
 ### 10. graft 코드 그래프 (참고)
 
