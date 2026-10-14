@@ -49,120 +49,37 @@ remove_task_from_registry() {
 }
 
 latest_signature() {
+  # Include actual artifacts, excluding digest/watch bookkeeping and input files.
   find "$1" -maxdepth 3 -type f ! -name '.th_*' \
-    \( -name STATUS -o -name WORKLOG.md -o -name '*.log' \) -printf '%T@\n' 2>/dev/null |
-    sort -n | tail -n 1 | cut -d. -f1
+    ! -name 'digest.md' ! -name 'verify_result.*' ! -name VERIFIED ! -name VERIFY_FAILED \
+    ! -name task.md ! -name verify.sh ! -name '*.pid' ! -name 'workers*.md' \
+    -printf '%T@ %p\n' 2>/dev/null | sort
+}
+
+worker_digest_program() {
+  local lib_dir
+  lib_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  printf '%s/../src/team_harness/worker_digest.py\n' "$lib_dir"
 }
 
 run_verification() {
-  local task=$1
-  local verify_sh="$task/verify.sh"
-  local verified_file="$task/VERIFIED"
-  local failed_file="$task/VERIFY_FAILED"
-
-  if [[ -f $verified_file ]]; then
-    echo "통과"
-    return 0
-  fi
-  if [[ -f $failed_file ]]; then
+  local task=$1 program
+  program=$(worker_digest_program)
+  python3 "$program" verify "$task" >/dev/null 2>&1 || true
+  if [[ -f $task/VERIFY_FAILED ]]; then
     echo "실패"
-    return 0
-  fi
-  if [[ ! -f $verify_sh ]]; then
+  elif [[ ! -f $task/verify.sh ]]; then
     echo "없음"
-    return 0
-  fi
-
-  local worktree
-  worktree=$(cat "$task/.th_worktree" 2>/dev/null || true)
-  [[ -n $worktree && -d $worktree ]] || worktree="$task"
-
-  local timeout_sec=${TH_VERIFY_TIMEOUT:-600}
-  local verify_out_file
-  verify_out_file=$(mktemp) || verify_out_file="$task/.verify.tmp"
-
-  local verify_code=0
-  (
-    cd "$worktree"
-    timeout "$timeout_sec" bash "$verify_sh"
-  ) > "$verify_out_file" 2>&1 || verify_code=$?
-
-  local failed_items=()
-  local warnings=()
-
-  if (( verify_code != 0 )); then
-    if (( verify_code == 124 )); then
-      failed_items+=("verify.sh 타임아웃 (${timeout_sec}s 초과)")
-    else
-      failed_items+=("verify.sh 실패 (종료 코드 $verify_code)")
-    fi
-  fi
-
-  # 공통 검사: git 저장소인 경우
-  local repo_root
-  repo_root=$(git -C "$worktree" rev-parse --show-toplevel 2>/dev/null || true)
-  if [[ -n $repo_root && -d $repo_root ]]; then
-    # 1. 저장소 루트 새 *.md / RESULTS.md / WORKLOG.md 검사
-    while IFS= read -r line; do
-      [[ -n $line ]] || continue
-      local status_code="${line:0:2}"
-      local file_path="${line:3}"
-      if [[ $status_code == "??" && $file_path != */* ]]; then
-        if [[ $file_path == *.md || $file_path == "RESULTS.md" || $file_path == "WORKLOG.md" ]]; then
-          failed_items+=("저장소 루트 새 마크다운 파일 생성 금지 위반: $file_path")
-        fi
-      fi
-    done < <(git -C "$repo_root" status --porcelain 2>/dev/null || true)
-
-    # 2. uv.lock, pyproject.toml 변경 확인
-    local pyproject_changed=0 uv_lock_changed=0
-    while IFS= read -r diff_file; do
-      [[ -n $diff_file ]] || continue
-      local base_name
-      base_name=$(basename "$diff_file")
-      if [[ $base_name == "pyproject.toml" ]]; then
-        pyproject_changed=1
-      elif [[ $base_name == "uv.lock" ]]; then
-        uv_lock_changed=1
-      fi
-    done < <(git -C "$worktree" status --porcelain 2>/dev/null | awk '{print $NF}' || true)
-
-    if (( pyproject_changed != 0 )); then
-      failed_items+=("pyproject.toml 변경 감지 (검토 필요)")
-    fi
-    if (( uv_lock_changed != 0 )); then
-      warnings+=("검토 필요: uv.lock 변경 감지")
-    fi
-  fi
-
-  if (( ${#failed_items[@]} > 0 )); then
-    {
-      printf '=== 검수 실패 항목 ===\n'
-      for item in "${failed_items[@]}"; do
-        printf -- '- %s\n' "$item"
-      done
-      printf '\n=== verify.sh 출력 (끝 40줄) ===\n'
-      tail -n 40 "$verify_out_file"
-    } > "$failed_file"
-    rm -f "$verify_out_file"
-    echo "실패"
-    return 0
   else
-    {
-      printf '=== 검수 통과 ===\n'
-      if (( ${#warnings[@]} > 0 )); then
-        printf '=== 경고 (검토 필요) ===\n'
-        for w in "${warnings[@]}"; do
-          printf -- '- %s\n' "$w"
-        done
-      fi
-      printf '\n=== verify.sh 출력 (끝 40줄) ===\n'
-      tail -n 40 "$verify_out_file"
-    } > "$verified_file"
-    rm -f "$verify_out_file"
     echo "통과"
-    return 0
   fi
+}
+
+quota_error_line() {
+  grep -iE '(ERROR[: ]|RESOURCE_EXHAUSTED|quota exceeded|rate limit exceeded|usage limit reached|at capacity|capacity exceeded)' "$1" 2>/dev/null |
+    grep -vE '^ERROR: test_' |
+    grep -iE '(quota|rate[ _-]?limit|usage[ _-]?limit|at capacity|capacity exceeded|RESOURCE_EXHAUSTED)' |
+    tail -n 1 | cut -c1-180
 }
 
 inspect_task_event() {
@@ -190,29 +107,44 @@ inspect_task_event() {
       local lock="$watch_dir/quota_lock.$(basename "$cand" .log)"
       [[ -f $lock || -f $task/DONE || -f $task/FAILED ]] && continue
       local qline
-      qline=$(grep -iE '^ERROR: ' "$cand" 2>/dev/null | grep -vE '^ERROR: test_' | grep -iE '(quota|rate limit|usage limit|at capacity|capacity exceeded)' | tail -n 1 | cut -c1-180)
+      qline=$(quota_error_line "$cand")
       [[ -n $qline ]] && printf '%s | %s | %s\n' "$(date '+%F %R')" "$task" "$qline" > "$lock"
     done
     return 0
   fi
 
+  local terminal failed_file program
+  program=$(worker_digest_program)
+  terminal=$(python3 "$program" terminal "$task")
+  failed_file="$task/FAILED"
+  if [[ ! -f $failed_file ]]; then
+    for cand in "$task"/FAILED.*; do
+      [[ -f $cand ]] && { failed_file=$cand; break; }
+    done
+  fi
+
+  # Failures take precedence over a stale DONE marker.
   # 1. 완료 판정
-  if [[ -f $task/DONE ]]; then
+  if [[ $terminal == DONE ]]; then
     if [[ ! -f $marker.done ]]; then
       touch "$marker.done"
       local v_res
-      v_res=$(run_verification "$task")
+      if [[ $marker_prefix == .th_daemon ]]; then
+        [[ -f $task/verify.sh ]] && v_res="대기" || v_res="없음"
+      else
+        v_res=$(run_verification "$task")
+      fi
       "$callback_fn" "$task" "완료" "완료" "$v_res" "$owner"
     fi
     return 0
   fi
 
   # 2. 실패 판정
-  if [[ -f $task/FAILED ]]; then
+  if [[ $terminal == FAILED ]]; then
     if [[ ! -f $marker.failed ]]; then
       touch "$marker.failed"
       local reason
-      reason=$(tail -n 5 "$task/FAILED" 2>/dev/null | tr '\n' ' ')
+      reason=$(tail -n 5 "$failed_file" 2>/dev/null | tr '\n' ' ')
       "$callback_fn" "$task" "실패" "실패 — $reason" "-" "$owner"
     fi
     return 0
@@ -222,7 +154,7 @@ inspect_task_event() {
   local log_file=""
   for cand in "$task/codex.log" "$task/agy.log" "$task/claude.log" "$task/worker.log"; do
     [[ -f $cand ]] || continue
-    if grep -iE '^ERROR: ' "$cand" 2>/dev/null | grep -vE '^ERROR: test_' | grep -qiE '(quota|rate limit|usage limit|at capacity|capacity exceeded)'; then
+    if [[ -n $(quota_error_line "$cand") ]]; then
       log_file=$cand
       break
     fi
@@ -230,7 +162,7 @@ inspect_task_event() {
   if [[ -n $log_file && ! -f $marker.quota ]]; then
     touch "$marker.quota" "$marker.dead"
     local line
-    line=$(grep -iE '^ERROR: ' "$log_file" | grep -vE '^ERROR: test_' | grep -iE '(quota|rate limit|usage limit|at capacity|capacity exceeded)' | tail -n 1 | cut -c1-180)
+    line=$(quota_error_line "$log_file")
     local lock_type
     lock_type=$(basename "$log_file" .log)
     [[ $lock_type == worker ]] && lock_type=unknown
@@ -240,13 +172,11 @@ inspect_task_event() {
   fi
 
   # 4. 프로세스 상태 확인 (job.pid / worker.pid)
-  local job_pid worker_pid
-  job_pid=$(cat "$task/job.pid" 2>/dev/null || true)
-  worker_pid=$(cat "$task/worker.pid" 2>/dev/null || true)
   local alive_pids=()
 
-  pid_alive "$job_pid" && alive_pids+=("$job_pid")
-  pid_alive "$worker_pid" && alive_pids+=("$worker_pid")
+  while IFS= read -r p; do
+    [[ $p =~ ^[1-9][0-9]*$ ]] && alive_pids+=("$p")
+  done < <(python3 "$program" pids "$task")
 
   if (( ${#alive_pids[@]} == 0 )); then
     if [[ -f $task/DONE || -f $task/FAILED ]]; then

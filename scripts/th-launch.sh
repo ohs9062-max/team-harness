@@ -92,10 +92,15 @@ fi
 [[ -f $suffix ]] || { echo "worker_suffix.md 없음(최신 정책을 붙일 수 없음): $suffix"; exit 1; }
 journal_append
 mkdir -p "$watch_dir"; touch "$watch_dir/tasks.txt"
-rm -f "$task_dir"/DONE "$task_dir"/FAILED "$task_dir"/.th_* "$task_dir"/job.pid
+rm -f "$task_dir"/DONE "$task_dir"/FAILED "$task_dir"/FAILED.* "$task_dir"/.th_* "$task_dir"/job.pid \
+  "$task_dir"/VERIFIED "$task_dir"/VERIFY_FAILED "$task_dir"/verify_result.json \
+  "$task_dir"/verify_result.txt "$task_dir"/digest.md
 # 이 작업을 띄운 작업 공간. th-watch는 소유자 작업만 알린다(다른 코디네이터 사건을 가로채지 않게).
 printf '%s\n' "$journal_workspace" > "$task_dir/.th_owner"
 printf '%s\n' "$worktree" > "$task_dir/.th_worktree"
+if [[ -n ${TH_WORKERS_FILE:-} ]]; then
+  printf '%s\n' "$TH_WORKERS_FILE" > "$task_dir/.th_workers_file"
+fi
 
 # 보조 검수: task.md의 ## 검수 블록을 verify.sh로 저장 (없으면 경고만)
 verify_script="$task_dir/verify.sh"

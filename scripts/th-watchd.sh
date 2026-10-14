@@ -36,6 +36,26 @@ get_script_sig() {
   stat -c '%Y-%i' "$self_path" "$lib_path" 2>/dev/null || true
 }
 last_sig=$(get_script_sig)
+digest_jobs=()
+queue_digest() {
+  local task=$1 event=$2 event_id
+  event_id=$(stat -c '%y-%i' "$task/.th_daemon.$event" 2>/dev/null || printf '%s' "$event")
+  # Close the daemon singleton descriptor and detach all standard streams:
+  # digest must never keep watchd.lock or a caller's capture pipe open.
+  "$script_dir/th-digest.sh" "$task" --event "$event" --event-id "$event_id" \
+    201>&- </dev/null >>"$watch_dir/digest.log" 2>&1 &
+  digest_jobs+=("$!")
+}
+
+stop_digest_jobs() {
+  trap - TERM INT EXIT
+  for digest_pid in "${digest_jobs[@]}"; do
+    kill -TERM "$digest_pid" 2>/dev/null || true
+  done
+  for digest_pid in "${digest_jobs[@]}"; do wait "$digest_pid" 2>/dev/null || true; done
+}
+trap 'stop_digest_jobs; exit 0' TERM INT
+trap stop_digest_jobs EXIT
 
 handle_daemon_event() {
   local task=$1 event_type=$2 summary=$3 v_res=$4 owner=$5
@@ -44,6 +64,17 @@ handle_daemon_event() {
   now_time=$(date '+%F %R')
   local now_sec
   now_sec=$(date '+%F %T')
+
+  local digest_event
+  case "$event_type" in
+    완료) digest_event=done ;;
+    실패) digest_event=failed ;;
+    '워커 오류(쿼터·용량)') digest_event=quota ;;
+    중단) digest_event=dead ;;
+    멈춤) digest_event=stall ;;
+    *) digest_event=unknown ;;
+  esac
+  queue_digest "$task" "$digest_event"
 
   # 1. 소유 작업 공간의 .claude/inbox.md에 한 줄 append
   if [[ -n $owner && -d $owner ]]; then
@@ -74,6 +105,7 @@ while true; do
   current_sig=$(get_script_sig)
   if [[ -n $current_sig && -n $last_sig && $current_sig != "$last_sig" ]]; then
     echo "th-watchd: script updated, restarting via exec..." >&2
+    stop_digest_jobs
     exec "$self_path" "$@"
   fi
 
@@ -85,9 +117,21 @@ while true; do
   fi
 
   if [[ ${TH_ONCE:-0} == 1 ]]; then
+    # Test/one-shot mode owns its children and returns with no background jobs.
+    for digest_pid in "${digest_jobs[@]}"; do wait "$digest_pid" || true; done
     break
   fi
 
+  # Reap completed summary requests without retaining a growing PID list.
+  active_jobs=()
+  for digest_pid in "${digest_jobs[@]}"; do
+    if kill -0 "$digest_pid" 2>/dev/null; then
+      active_jobs+=("$digest_pid")
+    else
+      wait "$digest_pid" 2>/dev/null || true
+    fi
+  done
+  digest_jobs=("${active_jobs[@]}")
   sleep "$poll_sec"
 done
 

@@ -78,6 +78,7 @@ sleep 15 &
     env["TH_WORKER_SUFFIX"] = str(suffix_file)
     # Individual daemon-start tests opt in; ordinary th-launch tests must not leak one.
     env["TH_NO_DAEMON"] = "1"
+    env["TH_DIGEST_COMMAND"] = "/bin/true"
     env["PATH"] = f"{bin_dir}:{env.get('PATH', '')}"
 
     yield {
@@ -105,6 +106,14 @@ def _create_task_dir(
 def test_th_launch_retains_th_owner(test_env: dict):
     """ops-07: Verify th-launch leaves .th_owner in task directory pointing to TH_WORKSPACE."""
     task_dir = _create_task_dir(test_env["tmp_path"], "task_launch")
+    for stale in (
+        "FAILED.quota",
+        "VERIFY_FAILED",
+        "VERIFIED",
+        "verify_result.json",
+        "digest.md",
+    ):
+        (task_dir / stale).write_text("stale", encoding="utf-8")
     launch_script = SCRIPTS_DIR / "th-launch.sh"
 
     cmd = [
@@ -120,6 +129,14 @@ def test_th_launch_retains_th_owner(test_env: dict):
 
     owner_file = task_dir / ".th_owner"
     assert owner_file.is_file(), ".th_owner must exist after th-launch"
+    for stale in (
+        "FAILED.quota",
+        "VERIFY_FAILED",
+        "VERIFIED",
+        "verify_result.json",
+        "digest.md",
+    ):
+        assert not (task_dir / stale).exists()
     assert owner_file.read_text(encoding="utf-8").strip() == str(test_env["workspace"])
 
     # Worker pid and registration in tasks.txt must also exist
@@ -398,10 +415,23 @@ def test_th_watch_stall_retains_task_in_registry(test_env: dict):
     try:
         (task_dir / "worker.pid").write_text(f"{proc.pid}\n", encoding="utf-8")
 
-        # Fake existing signature state file older than TH_STALL_SEC
+        # Seed the actual idle signature with an elapsed threshold. A made-up
+        # signature resets the timer and depends on a second poll fitting into
+        # the short watcher deadline (which uses whole seconds).
         state_file = task_dir / ".th_sig"
-        # 10 ticks, older than 10 seconds ago
-        state_file.write_text("10:12345|1000000000\n", encoding="utf-8")
+        signature = subprocess.check_output(
+            [
+                "bash",
+                "-c",
+                'source "$1"; printf "%s:%s" "$(cpu_ticks "$2")" "$(latest_signature "$3")"',
+                "bash",
+                str(SCRIPTS_DIR / "th-watch-lib.sh"),
+                str(proc.pid),
+                str(task_dir),
+            ],
+            text=True,
+        )
+        state_file.write_text(f"{signature}|1000000000\n", encoding="utf-8")
 
         tasks_txt = test_env["watch_dir"] / "tasks.txt"
         tasks_txt.write_text(f"{task_dir}\n", encoding="utf-8")

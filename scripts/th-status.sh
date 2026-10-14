@@ -2,9 +2,16 @@
 # th-status: 요청받았을 때만 등록 작업을 한 번 요약 표로 출력한다.
 set -u
 
-exec python3 - "$@" << 'EOF'
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+exec python3 - "$script_dir/../src/team_harness/worker_digest.py" "$@" << 'EOF'
 import sys, os, time, subprocess, re, unicodedata
 from datetime import datetime
+from pathlib import Path
+import importlib.util
+
+spec = importlib.util.spec_from_file_location("worker_digest", sys.argv[1])
+observer = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(observer)
 
 def char_width(c):
     return 2 if unicodedata.east_asian_width(c) in ('W', 'F') else 1
@@ -24,18 +31,6 @@ def fit_width(s, width):
     truncated = "".join(res)
     padding = " " * (width - cur_w)
     return truncated + padding
-
-def pid_alive(pid_str):
-    if not pid_str:
-        return False
-    try:
-        pid = int(pid_str.strip())
-        if pid <= 0:
-            return False
-        os.kill(pid, 0)
-        return True
-    except (OSError, ValueError):
-        return False
 
 def get_latest_output(task):
     try:
@@ -359,6 +354,8 @@ def get_verify_status(task_dir):
     failed_file = os.path.join(task_dir, "VERIFY_FAILED")
     verify_sh = os.path.join(task_dir, "verify.sh")
 
+    if os.path.isfile(os.path.join(task_dir, "verify_result.json")):
+        return "VERIFY_FAILED" if os.path.isfile(failed_file) else "VERIFIED"
     if os.path.isfile(verified_file):
         return "통과"
     elif os.path.isfile(failed_file):
@@ -373,9 +370,10 @@ now_ts = time.time()
 
 for task in valid_tasks:
     state = '진행'
-    if os.path.isfile(os.path.join(task, "DONE")):
+    terminal = observer.terminal_status(Path(task))
+    if terminal == 'DONE':
         state = '완료'
-    elif os.path.isfile(os.path.join(task, "FAILED")):
+    elif terminal == 'FAILED':
         state = '실패'
     else:
         is_quota_err = False
@@ -386,8 +384,8 @@ for task in valid_tasks:
             try:
                 with open(cand_path, "r", encoding="utf-8", errors="replace") as cf:
                     for line in cf:
-                        if re.search(r"^ERROR:\s*", line, re.IGNORECASE) and not re.search(r"^ERROR:\s*test_", line, re.IGNORECASE):
-                            if re.search(r"(quota|rate limit|usage limit|at capacity|capacity exceeded)", line, re.IGNORECASE):
+                        if re.search(r"ERROR[: ]|RESOURCE_EXHAUSTED|quota exceeded|rate limit exceeded|usage limit reached|at capacity|capacity exceeded", line, re.IGNORECASE) and not re.search(r"^ERROR:\s*test_", line, re.IGNORECASE):
+                            if re.search(r"(quota|rate[ _-]?limit|usage[ _-]?limit|at capacity|capacity exceeded|RESOURCE_EXHAUSTED)", line, re.IGNORECASE):
                                 is_quota_err = True
                                 break
             except Exception:
@@ -398,24 +396,7 @@ for task in valid_tasks:
         if is_quota_err:
             state = '워커 오류(쿼터·용량)'
         else:
-            job_pid = ""
-            worker_pid = ""
-            j_file = os.path.join(task, "job.pid")
-            w_file = os.path.join(task, "worker.pid")
-            if os.path.isfile(j_file):
-                try:
-                    with open(j_file, "r") as pf:
-                        job_pid = pf.read().strip()
-                except Exception:
-                    pass
-            if os.path.isfile(w_file):
-                try:
-                    with open(w_file, "r") as pf:
-                        worker_pid = pf.read().strip()
-                except Exception:
-                    pass
-            
-            if not pid_alive(job_pid) and not pid_alive(worker_pid):
+            if not observer.live_pids(Path(task)):
                 state = '중단?'
 
     latest_ts = get_latest_output(task)
@@ -437,7 +418,7 @@ raw_w = [max(str_width(headers[i]), max((str_width(r[i]) for r in rows), default
 
 w0 = min(max(raw_w[0], str_width(headers[0])), 24)
 w2 = min(max(raw_w[2], str_width(headers[2])), 8)
-w3 = min(max(raw_w[3], str_width(headers[3])), 6)
+w3 = max(raw_w[3], str_width(headers[3]))
 w4 = min(max(raw_w[4], str_width(headers[4])), 11)
 w5 = min(max(raw_w[5], str_width(headers[5])), 15)
 
