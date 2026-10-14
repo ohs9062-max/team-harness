@@ -367,3 +367,11 @@ medium을 전달한다. 역할 해석은 `protocol/config.py`, 모델 생략 lau
 캐시에 없어 기존 unknown-model 처리를 따른다. Codex 계정 쿼터 잠금 시 코디네이터가
 Claude/agy로 대체하는 규칙과 사용자 지정 모델 우선 규칙은 유지한다. TH-D18의
 protocol backend 자동 교체 금지는 바꾸지 않는다.
+
+## TH-D28. Worker digest의 판정은 스크립트가 보존하고 LLM은 사건별 요약만 쓴다
+
+**결정.** `scripts/th-watch-lib.sh`의 기존 사건 감지를 확장하고 `th-watchd.sh`에서 `th-digest.sh`를 백그라운드 요청한다. `worker_digest.py::verify`가 상태·산출물·수치·기존 verify.sh·프로젝트 hook을 PASS/WARN/FAIL/SKIP으로 판정하고 최악 항목을 전체 판정으로 저장한다. LLM은 읽기 전용 격리 아래 한 번 요약하며 제목과 검수 원문을 수정할 수 없다. 쿼터 잠금·실패·최대 10분 시간 초과 시 검수만 기록한다. 새 감시 데몬이나 감시용 LLM은 만들지 않는다.
+
+**맥락.** 코디네이터가 모든 워커 로그와 보고서를 직접 읽으면 비용이 늘고 주장한 수치를 사실로 오인할 수 있다. 예를 들어 보고서의 0.812가 results.json에 없으면 스크립트가 WARN을 기록하고 LLM이 이를 누락해도 동일한 WARN 줄이 workers.md에 남는다. 프로젝트별 데이터 규칙은 verify_hooks.py에서 검사하며 하네스에 하드코딩하지 않는다. 상세 메커니즘은 [worker digest 설계](designs/worker_digest.md)에 둔다.
+
+**결과.** 기본 agy 요약은 사건마다 한 번이며 flock으로 동시 한 개만 실행한다. 코디네이터는 workers.md를 보고 FAIL/WARN이나 이상이 있을 때만 원본을 연다. TH-D26의 inbox·알림·깨우기는 유지하되 데몬의 검수는 비동기로 완료되어 최초 알림에서 `대기`일 수 있다. ths는 새 검수 결과가 있는 작업을 VERIFIED/VERIFY_FAILED로 표시한다. TH-D2/TH-D3의 세션·정상 반환 계약과 SDK/Protocol API는 유지한다.

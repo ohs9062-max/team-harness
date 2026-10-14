@@ -131,3 +131,7 @@ MODE C/A를 쓸 때 역할 모델은 작업 경중에 맞춰 `--set-role <역할
 
 `th protocol` 명령의 정확한 인자와 현재 상태 확인은 저장소의 Harness Protocol 정본 문서와
 CLI 도움말을 따른다. 데이터·GPU 작업에 코드 변경용 worktree/MODE 흐름을 강제하지 않는다.
+
+## 워커 결과 확인
+
+작업 결과는 소유 작업 공간의 `.claude/workers.md` 요약으로 판단한다. 스크립트가 만든 PASS/WARN/FAIL 제목과 검수 원문을 기준으로 보고, FAIL·WARN이거나 이상할 때만 원본 로그·보고서·결과 파일을 연다. 감시용 LLM 워커는 띄우지 않는다. 기존 `th-watchd`의 사건 감지가 한 번씩 digest를 요청하며, 요약 LLM은 판정을 바꾸거나 작업을 재실행하지 않는다.

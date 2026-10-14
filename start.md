@@ -402,3 +402,25 @@ confidence_threshold = 0.85
 scripts/install-journal-rule.sh   # 전역 지시 파일에 작업일지 규칙 설치(멱등)
 # scripts/journal-hook.sh         # Claude Code SessionStart 훅: current_status.md를 맥락으로 제공
 ```
+
+### worker digest — 스크립트 판정과 짧은 요약
+
+```bash
+scripts/th-verify.sh /path/to/task       # LLM 없이 verify_result.json/txt와 검수 마커 작성
+scripts/th-digest.sh /path/to/task       # 검수 후 agy 요약 한 번, digest.md와 workers.md 기록
+TH_WATCH_DIR=/path/to/watch scripts/th-watchd.sh  # 기존 사건 감지에서 자동 요청
+```
+
+작업 결과는 `.claude/workers.md`의 요약으로 판단합니다. FAIL·WARN이거나 이상할 때만 원본을 엽니다. 감시용 LLM 워커는 띄우지 않습니다. 기존 데몬이 새 사건을 감지할 때만 digest를 요청하고, 요약 호출은 전역 `digest.lock`으로 한 개씩 실행합니다. 알림·inbox·깨우기 경로는 유지하며 데몬 완료 알림의 검수는 `대기`일 수 있습니다. 실제 판정은 생성된 요약과 `ths`의 `VERIFIED` / `VERIFY_FAILED` 열에서 확인합니다. WARN은 VERIFIED에 사유를 남기고 FAIL만 VERIFY_FAILED입니다. 기존 마커만 있는 작업의 한국어 표시는 유지합니다.
+
+기본 기록 위치는 inbox와 같은 소유 작업 공간(`.th_owner`)의 `.claude/workers.md`입니다. 소유 정보가 없으면 `.th_worktree`의 저장소 루트, `TH_WORKSPACE`, 작업 폴더 순으로 사용합니다. `TH_WORKERS_FILE`로 바꾸거나 작업별 `.th_workers_file`에 경로를 기록할 수 있습니다. `th-launch`는 지정된 `TH_WORKERS_FILE`을 작업 폴더에 저장하므로 이미 실행 중인 데몬에도 적용됩니다. 상대 경로는 소유 작업 공간 기준입니다. 200줄을 넘으면 오래된 요약 블록을 같은 폴더의 `workers_archive.md`로 옮깁니다.
+
+- `TH_DIGEST_WORKER=agy|claude|codex` (기본 agy), `TH_DIGEST_MODEL`로 요약 모델 선택. Claude 기본은 sonnet, Codex는 gpt-6.1-sol입니다.
+- `TH_DIGEST_TIMEOUT` / `TH_VERIFY_TIMEOUT`: 각 외부 호출 제한 초, 기본·최대 600. 해당 요약 워커의 `quota_lock.<worker>`가 있거나 LLM 실패·시간 초과·읽기 전용 격리 실패 시 스크립트 검수만 기록합니다.
+- `TH_DIGEST_COMMAND`: 시험용 신뢰된 가짜 실행 명령(인자는 shell 문법으로 분리, shell 자체는 실행하지 않음). 프롬프트는 stdin으로 전달합니다. 이 override는 CLI/OS 격리를 대체하므로 실제 LLM 실행에는 사용하지 않습니다.
+- 기대 산출물은 `task.md`의 `## 기대 산출물` 절에 백틱 경로 목록으로 씁니다. 상대 경로는 작업 폴더 기준이며 디렉터리·glob은 파일 수를 셉니다. 예: ``- `images/`: 3개 파일``. 누락·수 불일치는 FAIL입니다.
+- 프로젝트 검사는 작업 폴더부터 상위로 찾은 첫 `verify_hooks.py` 또는 `TH_VERIFY_HOOK`의 Python 스크립트에 둡니다. 작업 폴더 절대경로를 인자로 받고 stdout에 `{"items":{"검사명":{"verdict":"PASS|WARN|FAIL|SKIP","reason":"한 줄 사유"}}}`를 반환합니다. 실패·잘못된 JSON·시간 초과는 FAIL입니다.
+
+수치 대조는 `report.md`(없으면 `RESULTS.md`)의 `0.xxx`를 작업 폴더 아래 `results.json`의 중첩 숫자 값과 3자리 반올림으로 비교합니다. JSON이 없으면 SKIP이고 불일치는 WARN입니다. 설정 JSON이나 하네스의 검수 JSON을 근거로 쓰지 않습니다. 기존 `verify.sh`와 공통 git 검사는 `verify` 항목으로 합치며 같은 스크립트/작업 트리의 검수 실행을 캐시합니다. 새 `th-launch`에서 사건·검수 캐시를 초기화합니다.
+
+LLM은 고정 프롬프트 뒤에 검수·보고서·STATUS 사본을 받고 5줄까지만 출력합니다. 판정 제목과 검수 원문은 스크립트가 직접 넣습니다. Linux `bwrap`의 읽기 전용 파일시스템과 CLI의 읽기 전용/도구 차단 플래그를 사용하며, 지원되지 않는 환경에서는 요약 호출을 생략합니다. 자세한 계약은 [worker digest 설계](design/designs/worker_digest.md)를 참고합니다.
