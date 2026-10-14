@@ -27,7 +27,7 @@ PROMPT_FILE_MAX_BYTES = 100 * 1024
 @dataclass
 class Config:
     provider: str = "openai_compat"
-    model: str = "gpt-5.6-sol"
+    model: str = "gpt-6.1-sol"
     api_base: str = "https://openrouter.ai/api/v1"
     api_key: str = ""
     codex_auth_path: str = ""
@@ -124,8 +124,7 @@ _STRUCTURED_AGENTS_BLOCK = """# Worker agent invocations. Each agent is describe
 # `thread.started` event and capture the session id for future resume.
 # `default_model` is the model passed to codex when the coordinator does
 # not override it via `spawn_agent(model="...")`.
-# `reasoning_effort_flag` tells the harness how to pass the level; set
-# `reasoning_effort` (commented) to actually enable it.
+# `reasoning_effort_flag` passes the configured level; Codex defaults to medium.
 # `deduplicate_flags` lists standalone shared flags that should be treated
 # as idempotent if spawn_agent(flags=[...]) repeats them.
 [agents.codex]
@@ -140,14 +139,14 @@ shared_flags = [
 resume_prefix = ["resume"]
 resume_flags = ["{session_id}"]
 model_flag = "--model"
-default_model = "gpt-5.6-terra"
+default_model = "gpt-6.1-sol"
 deduplicate_flags = [
     "--dangerously-bypass-approvals-and-sandbox",
     "--skip-git-repo-check",
     "--json",
 ]
 reasoning_effort_flag = ["-c", "model_reasoning_effort={effort}"]
-# reasoning_effort = "high"   # uncomment to pin a level (low|medium|high|xhigh)
+reasoning_effort = "medium"   # override with high for difficult tasks
 
 [agents.codex.session_capture]
 strategy = "stream_json_event"
@@ -343,7 +342,7 @@ def _default_config_text() -> str:
 provider = "openai_compat"
 
 # Model name passed to the coordinator API.
-model = "gpt-5.6-sol"
+model = "gpt-6.1-sol"
 
 # Base URL for the coordinator API.
 api_base = "https://openrouter.ai/api/v1"
@@ -425,7 +424,7 @@ min_agent_lifetime_before_kill_s = 600.0
 
 # --- Experimental Codex subscription coordinator ---
 # provider = "codex"
-# model = "gpt-5.6-sol"   # codex-mini-latest is rejected for ChatGPT-account tokens
+# model = "gpt-6.1-sol"   # codex-mini-latest is rejected for ChatGPT-account tokens
 # codex_auth_path = "~/.codex/auth.json"
 
 # --- Harness Protocol role mapping (`th protocol`) ---
@@ -437,12 +436,12 @@ min_agent_lifetime_before_kill_s = 600.0
 # Precedence, highest first: `th protocol ... --set-role role.field=value`,
 # then HARNESS_MODE_<ROLE>_{AGENT,MODEL,EFFORT} env vars, then these tables
 # (project config.toml over global), then the built-in defaults, which
-# deliberately pick the cheap tier (TH-D17).
+# use gpt-6.1-sol medium for Codex (TH-D27).
 #
 # [protocol.roles.mode_c_implement]
 # agent = "codex"
-# model = "gpt-5.6-terra"
-# effort = "high"
+# model = "gpt-6.1-sol"
+# effort = "medium"
 #
 # [protocol.roles.mode_c_review]
 # agent = "antigravity"
@@ -465,7 +464,7 @@ def _local_config_text() -> str:
 provider = "openai_compat"
 
 # Model name passed to the coordinator API.
-model = "gpt-5.6-sol"
+model = "gpt-6.1-sol"
 
 # Base URL for the coordinator API.
 api_base = "https://openrouter.ai/api/v1"
@@ -545,7 +544,7 @@ min_agent_lifetime_before_kill_s = 600.0
 
 # --- Experimental Codex subscription coordinator ---
 # provider = "codex"
-# model = "gpt-5.6-sol"   # codex-mini-latest is rejected for ChatGPT-account tokens
+# model = "gpt-6.1-sol"   # codex-mini-latest is rejected for ChatGPT-account tokens
 # codex_auth_path = ".team-harness/codex-auth.json"
 
 
@@ -558,12 +557,12 @@ min_agent_lifetime_before_kill_s = 600.0
 # Precedence, highest first: `th protocol ... --set-role role.field=value`,
 # then HARNESS_MODE_<ROLE>_{AGENT,MODEL,EFFORT} env vars, then these tables
 # (project config.toml over global), then the built-in defaults, which
-# deliberately pick the cheap tier (TH-D17).
+# use gpt-6.1-sol medium for Codex (TH-D27).
 #
 # [protocol.roles.mode_c_implement]
 # agent = "codex"
-# model = "gpt-5.6-terra"
-# effort = "high"
+# model = "gpt-6.1-sol"
+# effort = "medium"
 #
 # [protocol.roles.mode_c_review]
 # agent = "antigravity"
@@ -976,7 +975,7 @@ def load_protocol_role_tables(start: Path | None = None) -> dict[str, dict[str, 
     protocol defaults.
 
     Values are returned as plain strings keyed by role name, e.g.
-    ``{"mode_c_implement": {"agent": "codex", "model": "gpt-5.6-terra"}}``.
+    ``{"mode_c_implement": {"agent": "codex", "model": "gpt-6.1-sol"}}``.
     Unparseable entries are dropped here rather than raising, so an unrelated
     typo in a rarely used table cannot break every protocol run; role and field
     names are validated by the protocol layer that consumes this.
@@ -1455,16 +1454,16 @@ def load_config(
         provider=provider_value,
         model=str(raw_model)
         if raw_model
-        else "gpt-5.6-sol"
+        else "gpt-6.1-sol"
         if provider_value == "openai_compat"
         # ChatGPT-subscription Codex accounts (this provider's whole point —
         # see auth.py) reject "codex-mini-latest": confirmed live against
         # https://chatgpt.com/backend-api/codex/responses on 2026-09-18,
         # error: "The 'codex-mini-latest' model is not supported when using
-        # Codex with a ChatGPT account." gpt-5.6-sol is not codex-specific
+        # Codex with a ChatGPT account." gpt-6.1-sol is not codex-specific
         # (it is the same default as openai_compat above) but it is the one
         # verified to work for a ChatGPT-account token.
-        else "gpt-5.6-sol",
+        else "gpt-6.1-sol",
         api_base=str(raw_api_base)
         if raw_api_base
         else "https://openrouter.ai/api/v1"

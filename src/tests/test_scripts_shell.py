@@ -111,7 +111,7 @@ def test_th_launch_retains_th_owner(test_env: dict):
         str(launch_script),
         str(task_dir),
         "codex",
-        "gpt-5.6-terra",
+        "gpt-6.1-sol",
         "medium",
         str(task_dir),
     ]
@@ -129,8 +129,13 @@ def test_th_launch_retains_th_owner(test_env: dict):
     assert str(task_dir) in tasks_txt.read_text(encoding="utf-8")
 
 
-def test_th_launch_passes_sol_model_and_effort_to_codex(test_env: dict):
-    """th-launch forwards explicit Sol model and effort without invoking real Codex."""
+@pytest.mark.parametrize(
+    "arguments", [[], ["codex"], ["codex", "worktree"], ["explicit"]]
+)
+def test_th_launch_passes_sol_model_and_effort_to_codex(
+    test_env: dict, arguments: list[str]
+):
+    """PATH stub verifies explicit and omitted Codex model/effort arguments."""
     task_dir = _create_task_dir(test_env["tmp_path"], "task_sol_arguments")
     launch_script = SCRIPTS_DIR / "th-launch.sh"
     captured_args = test_env["tmp_path"] / "codex-args.txt"
@@ -145,10 +150,11 @@ def test_th_launch_passes_sol_model_and_effort_to_codex(test_env: dict):
         [
             str(launch_script),
             str(task_dir),
-            "codex",
-            "gpt-6.1-sol",
-            "medium",
-            str(task_dir),
+            *(
+                ["codex", "gpt-6.1-sol", "medium", str(task_dir)]
+                if arguments == ["explicit"]
+                else [str(task_dir) if a == "worktree" else a for a in arguments]
+            ),
         ],
         env=test_env["env"],
         capture_output=True,
@@ -321,7 +327,7 @@ def test_th_launch_concurrent_registry_integrity(test_env: dict):
     import concurrent.futures
 
     def launch_one(t: Path):
-        cmd = [str(launch_script), str(t), "codex", "gpt-5.6-terra", "medium", str(t)]
+        cmd = [str(launch_script), str(t), "codex", "gpt-6.1-sol", "medium", str(t)]
         res = subprocess.run(cmd, env=test_env["env"], capture_output=True, text=True)
         assert res.returncode == 0, f"launch failed: {res.stderr}"
 
@@ -693,7 +699,7 @@ def test_th_launch_extracts_verify_sh(test_env: dict):
         str(launch_script),
         str(task_dir),
         "codex",
-        "gpt-5.6-terra",
+        "gpt-6.1-sol",
         "medium",
         str(worktree_dir),
     ]
@@ -718,7 +724,7 @@ def test_th_launch_warns_when_no_verify_block(test_env: dict):
         str(launch_script),
         str(task_dir),
         "codex",
-        "gpt-5.6-terra",
+        "gpt-6.1-sol",
         "medium",
         str(task_dir),
     ]
@@ -1034,7 +1040,7 @@ def test_th_launch_starts_daemon_if_not_running(test_env: dict):
         "scripts/th-launch.sh",
         str(task_dir),
         "codex",
-        "gpt-5.6-terra",
+        "gpt-6.1-sol",
         "medium",
         str(task_dir),
     ]

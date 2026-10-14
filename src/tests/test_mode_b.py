@@ -221,7 +221,7 @@ async def test_relay_without_next_agent_uses_the_configured_default(tmp_path: Pa
     runner = RelayRunner()
     proto_cfg = ProtocolConfig(
         mode_b_default=ProtocolAgentSpec(
-            agent_type="codex", model="gpt-5.6-terra", effort="high"
+            agent_type="codex", model="gpt-6.1-sol", effort="high"
         )
     )
 
@@ -236,10 +236,10 @@ async def test_relay_without_next_agent_uses_the_configured_default(tmp_path: Pa
     )
 
     assert runner.calls[0]["agent_type"] == "codex"
-    assert runner.calls[0]["model"] == "gpt-5.6-terra"
+    assert runner.calls[0]["model"] == "gpt-6.1-sol"
     assert runner.calls[0]["effort"] == "high"
-    assert state.handoffs[-1]["requested_model"] == "gpt-5.6-terra"
-    assert state.handoffs[-1]["effective_model"] == "gpt-5.6-terra"
+    assert state.handoffs[-1]["requested_model"] == "gpt-6.1-sol"
+    assert state.handoffs[-1]["effective_model"] == "gpt-6.1-sol"
 
 
 async def test_an_explicit_next_agent_does_not_inherit_the_defaults_model(
@@ -250,7 +250,7 @@ async def test_an_explicit_next_agent_does_not_inherit_the_defaults_model(
     runner = RelayRunner()
     proto_cfg = ProtocolConfig(
         mode_b_default=ProtocolAgentSpec(
-            agent_type="codex", model="gpt-5.6-terra", effort="high"
+            agent_type="codex", model="gpt-6.1-sol", effort="high"
         )
     )
 
@@ -425,7 +425,7 @@ async def test_a_refused_relay_records_no_effective_model(tmp_path: Path):
     )
     proto_cfg = ProtocolConfig(
         mode_b_default=ProtocolAgentSpec(
-            agent_type="codex", model="gpt-5.6-terra", effort="high"
+            agent_type="codex", model="gpt-6.1-sol", effort="high"
         )
     )
 
@@ -441,7 +441,7 @@ async def test_a_refused_relay_records_no_effective_model(tmp_path: Path):
     handoff = state.handoffs[-1]
     assert handoff["spawned"] is False
     assert handoff["effective_model"] is None
-    assert handoff["requested_model"] == "gpt-5.6-terra"
+    assert handoff["requested_model"] == "gpt-6.1-sol"
     assert handoff["failure_classification"]["category"] == "rate_limit"
 
 

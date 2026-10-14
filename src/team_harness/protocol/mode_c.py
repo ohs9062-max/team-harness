@@ -388,16 +388,16 @@ class TeamHarnessAgentRunner:
 
 
 def _short_model_label(model: str | None, effort: str | None) -> str:
-    """Compact model+effort label, e.g. "gpt-5.6-terra"/"high" -> "terra-high".
+    """Compact model+effort label, e.g. "gpt-6.1-sol"/"medium" -> "sol-medium".
 
-    Only strips the "gpt-5.6-" prefix (codex's naming scheme, where the
+    Strips the "gpt-6.1-" and legacy "gpt-5.6-" prefixes (codex's naming scheme, where the
     tier name alone is unambiguous); other agents' model strings (claude,
     antigravity) are shown as-is since they aren't in that family.
     """
 
     if model is None:
         return "default"
-    short = model.removeprefix("gpt-5.6-")
+    short = model.removeprefix("gpt-6.1-").removeprefix("gpt-5.6-")
     return f"{short}-{effort}" if effort else short
 
 

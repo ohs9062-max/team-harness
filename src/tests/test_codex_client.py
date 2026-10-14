@@ -383,3 +383,19 @@ async def test_codex_client_uses_done_item_text_when_not_streamed():
     result = await client.chat([{"role": "user", "content": "count"}], stream=False)
 
     assert result.choices[0].message.content == "10"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["gpt-6.1-sol", "openai/gpt-6.1-sol", "user-model"])
+async def test_codex_coordinator_sol_medium_request(model):
+    response = FakeResponse(
+        ['data: {"type":"response.completed","response":{"output":[]}}', ""]
+    )
+    client, fake_http = _make_client(response=response)
+    client.model = model
+    await client.chat([{"role": "user", "content": "hi"}])
+    assert fake_http.last_json["model"] == model
+    if model == "user-model":
+        assert "reasoning" not in fake_http.last_json
+    else:
+        assert fake_http.last_json["reasoning"] == {"effort": "medium"}

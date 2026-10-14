@@ -16,7 +16,7 @@ from team_harness.config import Config
 def test_build_command_default_codex_fresh():
     command = build_command(agent_type="codex", prompt="do thing", config=Config())
 
-    # The built-in codex default includes default_model="gpt-5.6-terra" so the
+    # The built-in codex default includes default_model="gpt-6.1-sol" so the
     # --model flag is injected even without an explicit override.
     assert command == [
         "codex",
@@ -27,7 +27,9 @@ def test_build_command_default_codex_fresh():
         "-c",
         "mcp_servers={}",
         "--model",
-        "gpt-5.6-terra",
+        "gpt-6.1-sol",
+        "-c",
+        "model_reasoning_effort=medium",
         "do thing",
     ]
 
@@ -51,7 +53,9 @@ def test_build_command_default_codex_resume():
         "-c",
         "mcp_servers={}",
         "--model",
-        "gpt-5.6-terra",
+        "gpt-6.1-sol",
+        "-c",
+        "model_reasoning_effort=medium",
         "sid-123",
         "continue",
     ]
@@ -78,7 +82,7 @@ def test_build_command_codex_explicit_model_overrides_default():
     # Explicit model wins over template.default_model.
     assert "--model" in command
     assert "gpt-5.5-mini" in command
-    assert "gpt-5.6-terra" not in command
+    assert "gpt-6.1-sol" not in command
 
 
 def test_build_command_codex_default_model_cleared_by_user_override():
@@ -103,7 +107,7 @@ def test_build_command_codex_default_model_cleared_by_user_override():
     command = build_command(agent_type="codex", prompt="do thing", config=config)
 
     assert "--model" not in command
-    assert "gpt-5.6-terra" not in command
+    assert "gpt-6.1-sol" not in command
 
 
 # ---------------------------------------------------------------------------
@@ -160,12 +164,11 @@ def test_build_command_claude_with_reasoning_effort_high():
 
 
 def test_build_command_codex_no_reasoning_effort_by_default():
-    """The built-in codex default has reasoning_effort=None so even
-    though reasoning_effort_flag is set, no tokens are injected."""
+    """The built-in Codex default passes medium to the CLI."""
 
     command = build_command(agent_type="codex", prompt="do thing", config=Config())
     assert "model_reasoning_effort=high" not in command
-    assert not any(t.startswith("model_reasoning_effort") for t in command)
+    assert "model_reasoning_effort=medium" in command
 
 
 def test_build_command_effort_override_beats_template_level():

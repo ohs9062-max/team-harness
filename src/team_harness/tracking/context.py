@@ -16,11 +16,9 @@ KNOWN_LIMITS: dict[str, int] = {
     "openai/gpt-5.5": 1_000_000,
     "gpt-5.5-pro": 1_000_000,
     "openai/gpt-5.5-pro": 1_000_000,
-    # GPT-5.6 family (Sol / Terra / Luna) share a 1.5M-token context window.
-    "gpt-5.6-sol": 1_500_000,
-    "openai/gpt-5.6-sol": 1_500_000,
-    "gpt-5.6-terra": 1_500_000,
-    "openai/gpt-5.6-terra": 1_500_000,
+    # Local Codex models_cache.json (2026-10-14): context_window=500000.
+    "gpt-6.1-sol": 500_000,
+    "openai/gpt-6.1-sol": 500_000,
     "gpt-5.6-luna": 1_500_000,
     "openai/gpt-5.6-luna": 1_500_000,
     "openai/gpt-4.1": 1_047_576,
@@ -43,10 +41,6 @@ KNOWN_MAX_OUTPUT_TOKENS: dict[str, int] = {
     "openai/gpt-5.5": 128_000,
     "gpt-5.5-pro": 128_000,
     "openai/gpt-5.5-pro": 128_000,
-    "gpt-5.6-sol": 128_000,
-    "openai/gpt-5.6-sol": 128_000,
-    "gpt-5.6-terra": 128_000,
-    "openai/gpt-5.6-terra": 128_000,
     "gpt-5.6-luna": 128_000,
     "openai/gpt-5.6-luna": 128_000,
     "openai/gpt-4.1": 32_768,
@@ -59,6 +53,8 @@ KNOWN_MAX_OUTPUT_TOKENS: dict[str, int] = {
 }
 
 KNOWN_CODEX_MODELS = {
+    "gpt-6.1-sol",
+    "openai/gpt-6.1-sol",
     "codex-mini-latest",
     "openai/codex-mini-latest",
     "gpt-5.1-codex-mini",
@@ -66,10 +62,6 @@ KNOWN_CODEX_MODELS = {
     "gpt-5.1-codex-max",
     "openai/gpt-5.1-codex-max",
     "gpt-5.5",
-    "gpt-5.6-sol",
-    "openai/gpt-5.6-sol",
-    "gpt-5.6-terra",
-    "openai/gpt-5.6-terra",
     "gpt-5.6-luna",
     "openai/gpt-5.6-luna",
 }
@@ -78,11 +70,21 @@ KNOWN_CODEX_MODELS = {
 # window). GPT-5.6's subscription cap is not published, so we mirror gpt-5.5's
 # 400K until OpenAI documents otherwise.
 KNOWN_CODEX_LIMITS: dict[str, int] = {
+    # Cache: context_window=500000, effective_context_window_percent=95.
+    "gpt-6.1-sol": 475_000,
+    "openai/gpt-6.1-sol": 475_000,
     "gpt-5.5": 400_000,
-    "gpt-5.6-sol": 400_000,
-    "gpt-5.6-terra": 400_000,
     "gpt-5.6-luna": 400_000,
 }
+
+
+# Retain lookup metadata for explicit legacy requests, never as routing defaults.
+for _tier in ("sol", "terra"):
+    for _prefix in ("", "openai/"):
+        KNOWN_LIMITS[f"{_prefix}gpt-5.6-{_tier}"] = 1_500_000
+        KNOWN_MAX_OUTPUT_TOKENS[f"{_prefix}gpt-5.6-{_tier}"] = 128_000
+        KNOWN_CODEX_MODELS.add(f"{_prefix}gpt-5.6-{_tier}")
+    KNOWN_CODEX_LIMITS[f"gpt-5.6-{_tier}"] = 400_000
 
 
 async def resolve_model_limit(model_id: str, client: Any, config: Config) -> int:

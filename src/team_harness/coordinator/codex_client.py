@@ -60,6 +60,8 @@ class CodexCoordinatorClient:
             "instructions": instructions,
             "input": input_items,
         }
+        if self.model in {"gpt-6.1-sol", "openai/gpt-6.1-sol"}:
+            body["reasoning"] = {"effort": "medium"}
         if tools:
             body["tools"] = _tools_to_codex(tools)
             body["tool_choice"] = "auto"

@@ -72,16 +72,11 @@ class ProtocolAgentSpec:
 class ProtocolConfig:
     """Configuration mapping protocol roles to agent specifications across MODE A/B/C."""
 
-    # Defaults below deliberately pick the cheap/simple tier (TH-D17): Protocol
-    # has no per-task complexity judgment of its own, so an unset model must
-    # not silently fall through to each worker CLI's own default — for codex
-    # that default is gpt-5.6-sol, the *expensive* tier. A caller who knows a
-    # task is complex overrides via HARNESS_MODE_*_MODEL/_EFFORT or a runtime
-    # ProtocolAgentSpec; the failure mode of an unconsidered default should be
-    # "a bit weak on a hard task", not "burned quota on a trivial one".
+    # TH-D27: Codex roles default to gpt-6.1-sol medium. Explicit runtime,
+    # environment and TOML overrides retain their existing precedence.
     mode_a_worker_1: ProtocolAgentSpec = field(
         default_factory=lambda: ProtocolAgentSpec(
-            agent_type="codex", model="gpt-5.6-terra", effort="high"
+            agent_type="codex", model="gpt-6.1-sol", effort="medium"
         )
     )
     mode_a_worker_2: ProtocolAgentSpec = field(
@@ -91,12 +86,12 @@ class ProtocolConfig:
     )
     mode_a_final: ProtocolAgentSpec = field(
         default_factory=lambda: ProtocolAgentSpec(
-            agent_type="codex", model="gpt-5.6-terra", effort="high"
+            agent_type="codex", model="gpt-6.1-sol", effort="medium"
         )
     )
     mode_b_default: ProtocolAgentSpec = field(
         default_factory=lambda: ProtocolAgentSpec(
-            agent_type="codex", model="gpt-5.6-terra", effort="high"
+            agent_type="codex", model="gpt-6.1-sol", effort="medium"
         )
     )
     mode_c_design: ProtocolAgentSpec = field(
@@ -106,7 +101,7 @@ class ProtocolConfig:
     )
     mode_c_implement: ProtocolAgentSpec = field(
         default_factory=lambda: ProtocolAgentSpec(
-            agent_type="codex", model="gpt-5.6-terra", effort="high"
+            agent_type="codex", model="gpt-6.1-sol", effort="medium"
         )
     )
     mode_c_review: ProtocolAgentSpec = field(
@@ -309,10 +304,10 @@ def load_protocol_config(
         "HARNESS_MODE_A_WORKER_1_AGENT",
         "HARNESS_MODE_A_WORKER_1_MODEL",
         "codex",
-        "gpt-5.6-terra",
+        "gpt-6.1-sol",
         runtime_effort=mode_a_worker_1_effort,
         effort_var="HARNESS_MODE_A_WORKER_1_EFFORT",
-        default_effort="high",
+        default_effort="medium",
         runtime_role=runtime_roles.get("mode_a_worker_1"),
         toml_role=role_tables.get("mode_a_worker_1"),
     )
@@ -336,10 +331,10 @@ def load_protocol_config(
         "HARNESS_MODE_A_FINAL_AGENT",
         "HARNESS_MODE_A_FINAL_MODEL",
         "codex",
-        "gpt-5.6-terra",
+        "gpt-6.1-sol",
         runtime_effort=mode_a_final_effort,
         effort_var="HARNESS_MODE_A_FINAL_EFFORT",
-        default_effort="high",
+        default_effort="medium",
         runtime_role=runtime_roles.get("mode_a_final"),
         toml_role=role_tables.get("mode_a_final"),
     )
@@ -351,10 +346,10 @@ def load_protocol_config(
         "HARNESS_MODE_B_DEFAULT_AGENT",
         "HARNESS_MODE_B_DEFAULT_MODEL",
         "codex",
-        "gpt-5.6-terra",
+        "gpt-6.1-sol",
         runtime_effort=mode_b_default_effort,
         effort_var="HARNESS_MODE_B_DEFAULT_EFFORT",
-        default_effort="high",
+        default_effort="medium",
         runtime_role=runtime_roles.get("mode_b_default"),
         toml_role=role_tables.get("mode_b_default"),
     )
@@ -379,10 +374,10 @@ def load_protocol_config(
         "HARNESS_MODE_C_IMPLEMENT_AGENT",
         "HARNESS_MODE_C_IMPLEMENT_MODEL",
         "codex",
-        "gpt-5.6-terra",
+        "gpt-6.1-sol",
         runtime_effort=mode_c_implement_effort,
         effort_var="HARNESS_MODE_C_IMPLEMENT_EFFORT",
-        default_effort="high",
+        default_effort="medium",
         runtime_role=runtime_roles.get("mode_c_implement"),
         toml_role=role_tables.get("mode_c_implement"),
     )

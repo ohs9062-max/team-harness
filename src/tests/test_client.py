@@ -185,3 +185,18 @@ async def test_coordinator_client_aclose_closes_underlying_client():
     assert not client._client.is_closed()
     await client.aclose()
     assert client._client.is_closed()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["gpt-6.1-sol", "openai/gpt-6.1-sol", "user-model"])
+async def test_coordinator_sol_medium_request(model):
+    client = CoordinatorClient(
+        api_base="http://localhost:9999", api_key="k", model=model
+    )
+    completions = _install_fake_client(client, _make_completion())
+    await client.chat(messages=[{"role": "user", "content": "hi"}], tools=[])
+    assert completions.captured["model"] == model
+    if model == "user-model":
+        assert "reasoning_effort" not in completions.captured
+    else:
+        assert completions.captured["reasoning_effort"] == "medium"

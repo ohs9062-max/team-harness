@@ -34,7 +34,8 @@ def test_parse_structured_template_fields():
         resume_prefix=("resume",),
         resume_flags=("{session_id}",),
         model_flag="--model",
-        default_model="gpt-5.6-terra",
+        default_model="gpt-6.1-sol",
+        reasoning_effort="medium",
         deduplicate_flags=(
             "--dangerously-bypass-approvals-and-sandbox",
             "--skip-git-repo-check",
@@ -72,7 +73,7 @@ def test_parse_default_model_cleared_with_empty_string():
 
 def test_parse_default_model_inherits_from_base_when_absent():
     template = _parse_agent_template("codex", {"command": ["codex", "exec"]})
-    assert template.default_model == "gpt-5.6-terra"
+    assert template.default_model == "gpt-6.1-sol"
 
 
 def test_parse_model_env_vars_override():
@@ -128,9 +129,9 @@ def test_parse_reasoning_effort_cleared_with_empty_string():
 
 
 def test_parse_reasoning_effort_inherits_from_base_when_absent():
-    # Base has reasoning_effort=None, so inheritance returns None.
+    # Missing effort inherits the built-in medium default.
     template = _parse_agent_template("codex", {"command": ["codex", "exec"]})
-    assert template.reasoning_effort is None
+    assert template.reasoning_effort == "medium"
 
 
 def test_parse_reasoning_effort_wrong_type_raises():

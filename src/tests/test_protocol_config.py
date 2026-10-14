@@ -196,28 +196,28 @@ class FakeAgentRunner:
         )
 
 
-# 1. env empty -> Protocol's built-in cheap-tier defaults apply (TH-D17)
+# 1. env empty -> Protocol's built-in Sol medium defaults apply (TH-D27)
 def test_1_env_empty_defaults_maintained():
     cfg = load_protocol_config(environ={})
     assert cfg.mode_a_worker_1.agent_type == "codex"
-    assert cfg.mode_a_worker_1.model == "gpt-5.6-terra"
-    assert cfg.mode_a_worker_1.effort == "high"
+    assert cfg.mode_a_worker_1.model == "gpt-6.1-sol"
+    assert cfg.mode_a_worker_1.effort == "medium"
     assert cfg.mode_a_worker_2.agent_type == "antigravity"
     assert cfg.mode_a_worker_2.model == "Gemini 3.8 Flash (High)"
     assert cfg.mode_a_worker_2.effort is None
     assert cfg.mode_a_final.agent_type == "codex"
-    assert cfg.mode_a_final.model == "gpt-5.6-terra"
-    assert cfg.mode_a_final.effort == "high"
+    assert cfg.mode_a_final.model == "gpt-6.1-sol"
+    assert cfg.mode_a_final.effort == "medium"
 
     assert cfg.mode_b_default.agent_type == "codex"
-    assert cfg.mode_b_default.model == "gpt-5.6-terra"
-    assert cfg.mode_b_default.effort == "high"
+    assert cfg.mode_b_default.model == "gpt-6.1-sol"
+    assert cfg.mode_b_default.effort == "medium"
 
     assert cfg.mode_c_design.agent_type == "claude"
     assert cfg.mode_c_design.model == "claude-sonnet-5"
     assert cfg.mode_c_implement.agent_type == "codex"
-    assert cfg.mode_c_implement.model == "gpt-5.6-terra"
-    assert cfg.mode_c_implement.effort == "high"
+    assert cfg.mode_c_implement.model == "gpt-6.1-sol"
+    assert cfg.mode_c_implement.effort == "medium"
     assert cfg.mode_c_review.agent_type == "antigravity"
     assert cfg.mode_c_review.model == "Gemini 3.8 Flash (High)"
     assert cfg.mode_c_review.effort is None
@@ -244,10 +244,10 @@ def test_3_mode_c_design_model_override():
 # 4. MODE C IMPLEMENT model override
 def test_4_mode_c_implement_model_override():
     cfg = load_protocol_config(
-        environ={"HARNESS_MODE_C_IMPLEMENT_MODEL": "gpt-5.6-sol"}
+        environ={"HARNESS_MODE_C_IMPLEMENT_MODEL": "gpt-6.1-sol"}
     )
     assert cfg.mode_c_implement.agent_type == "codex"
-    assert cfg.mode_c_implement.model == "gpt-5.6-sol"
+    assert cfg.mode_c_implement.model == "gpt-6.1-sol"
 
 
 # 5. MODE C REVIEW agent and model override
@@ -672,7 +672,7 @@ async def test_team_harness_agent_runner_prints_a_completion_line(
         prompt="hi",
         cwd=str(tmp_path),
         timeout_sec=10,
-        model="gpt-5.6-terra",
+        model="gpt-6.1-sol",
         effort="high",
         label="worker_1-independent_work",
     )
@@ -680,7 +680,7 @@ async def test_team_harness_agent_runner_prints_a_completion_line(
     assert result.success is True
     out = capsys.readouterr().out
     assert "worker_1-independent_work 완료" in out
-    assert "codex terra-high" in out
+    assert "codex sol-high" in out
 
 
 @pytest.mark.asyncio
@@ -828,7 +828,7 @@ async def test_20_10_mode_a_select_worker_1(mode_a_repo: Path, tmp_path: Path):
     assert resumed.merge_status == "INTEGRATED"
 
 
-# TH-D17: Protocol's built-in defaults use the cheap tier for codex (never
+# TH-D27: Protocol's built-in defaults use Sol medium for codex (never
 # silently fall through to the CLI's own expensive default), and effort
 # actually reaches the spawned worker, not just the resolved config.
 @pytest.mark.asyncio
@@ -852,8 +852,8 @@ async def test_mode_c_implement_uses_cheap_tier_model_and_effort_by_default(
     implement_call = next(
         c for c in runner.calls if "MODE C — IMPLEMENT" in c["prompt"]
     )
-    assert implement_call["model"] == "gpt-5.6-terra"
-    assert implement_call["effort"] == "high"
+    assert implement_call["model"] == "gpt-6.1-sol"
+    assert implement_call["effort"] == "medium"
 
 
 @pytest.mark.asyncio
@@ -876,8 +876,8 @@ async def test_mode_a_worker_1_uses_cheap_tier_by_default(
         for c in runner.calls
         if "MODE A — INDEPENDENT_WORK" in c["prompt"] and c["agent_type"] == "codex"
     )
-    assert worker_1_call["model"] == "gpt-5.6-terra"
-    assert worker_1_call["effort"] == "high"
+    assert worker_1_call["model"] == "gpt-6.1-sol"
+    assert worker_1_call["effort"] == "medium"
 
 
 # TH-D15: resume_mode_a must set active_worktree/active_branch so a later
@@ -1335,11 +1335,11 @@ def test_20_13_effective_model_explicit_requested():
 # 14. requested None + Template default_model 존재: effective == template default
 def test_20_14_effective_model_requested_none_template_has_default():
     template = resolve_template("codex", Config())
-    assert template.default_model == "gpt-5.6-terra"
+    assert template.default_model == "gpt-6.1-sol"
     requested = None
     effective = requested if requested is not None else template.default_model
     assert requested is None
-    assert effective == "gpt-5.6-terra"
+    assert effective == "gpt-6.1-sol"
     assert effective == template.default_model
 
 
@@ -1373,7 +1373,7 @@ async def test_20_16_handoff_and_events_record_requested_and_effective(tmp_path:
             effort: str | None = None,
             label: str | None = None,
         ) -> AgentResult:
-            eff = model or ("gpt-5.6-sol" if agent_type == "codex" else None)
+            eff = model or ("gpt-6.1-sol" if agent_type == "codex" else None)
             if "MODE C — IMPLEMENT" in prompt:
                 (Path(cwd) / "file.py").write_text("x = 1\n", encoding="utf-8")
             return AgentResult(
@@ -1413,8 +1413,8 @@ async def test_20_16_handoff_and_events_record_requested_and_effective(tmp_path:
 
     impl_h = next(h for h in state.handoffs if h["stage"] == Stage.IMPLEMENT.value)
     assert impl_h["requested_model"] is None
-    assert impl_h["effective_model"] == "gpt-5.6-sol"
-    assert impl_h["model"] == "gpt-5.6-sol"
+    assert impl_h["effective_model"] == "gpt-6.1-sol"
+    assert impl_h["model"] == "gpt-6.1-sol"
 
     review_h = next(h for h in state.handoffs if h["stage"] == Stage.REVIEW.value)
     assert review_h["requested_model"] is None
@@ -1435,7 +1435,7 @@ async def test_20_16_handoff_and_events_record_requested_and_effective(tmp_path:
 
     impl_finished = next(e for e in events if e.get("type") == "IMPLEMENT_FINISHED")
     assert impl_finished["requested_model"] is None
-    assert impl_finished["effective_model"] == "gpt-5.6-sol"
+    assert impl_finished["effective_model"] == "gpt-6.1-sol"
 
 
 # 17. Custom agent mode_c_design reaches runner without resolution error

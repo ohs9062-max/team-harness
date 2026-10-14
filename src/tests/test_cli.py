@@ -128,7 +128,7 @@ def test_init_global_creates_global_config(monkeypatch, tmp_path):
 
     assert result.exit_code == 0
     assert global_path.exists()
-    assert 'model = "gpt-5.6-sol"' in global_path.read_text()
+    assert 'model = "gpt-6.1-sol"' in global_path.read_text()
     assert (global_path.parent / "coordinator_system_message.md").read_text(
         encoding="utf-8"
     ) == (COORDINATOR_PROMPT)
@@ -1431,14 +1431,14 @@ def test_protocol_set_role_parses_into_role_tables():
 
     tables = _parse_set_role(
         (
-            "mode_c_implement.model=gpt-5.6-sol",
+            "mode_c_implement.model=gpt-6.1-sol",
             "mode_c_implement.effort=medium",
             "mode_a_final.agent=claude",
         )
     )
 
     assert tables == {
-        "mode_c_implement": {"model": "gpt-5.6-sol", "effort": "medium"},
+        "mode_c_implement": {"model": "gpt-6.1-sol", "effort": "medium"},
         "mode_a_final": {"agent": "claude"},
     }
 
@@ -1447,7 +1447,7 @@ def test_protocol_set_role_parses_into_role_tables():
     "value",
     [
         "mode_c_implement.model",
-        "mode_c_implement=gpt-5.6-sol",
+        "mode_c_implement=gpt-6.1-sol",
         "mode_c_implement.model=",
         "mode_c_implemnt.model=x",
         "mode_c_implement.modle=x",
@@ -1496,7 +1496,7 @@ def test_protocol_run_forwards_role_and_timeout_overrides(monkeypatch, tmp_path)
             "--check-timeout",
             "7",
             "--set-role",
-            "mode_c_implement.model=gpt-5.6-sol",
+            "mode_c_implement.model=gpt-6.1-sol",
         ],
     )
 
@@ -1505,7 +1505,7 @@ def test_protocol_run_forwards_role_and_timeout_overrides(monkeypatch, tmp_path)
     assert captured["check_timeout_sec"] == 7
     proto_cfg = captured["protocol_config"]
     assert isinstance(proto_cfg, ProtocolConfig)
-    assert proto_cfg.mode_c_implement.model == "gpt-5.6-sol"
+    assert proto_cfg.mode_c_implement.model == "gpt-6.1-sol"
 
 
 def test_protocol_run_rejects_a_zero_timeout():
@@ -1707,7 +1707,7 @@ def test_protocol_status_prints_the_spend_rollup(tmp_path):
             {
                 "stage": "IMPLEMENT",
                 "agent_type": "codex",
-                "effective_model": "gpt-5.6-terra",
+                "effective_model": "gpt-6.1-sol",
                 "success": True,
                 "spawned": True,
                 "duration_sec": 48.0,

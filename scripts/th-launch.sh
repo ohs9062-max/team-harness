@@ -2,6 +2,7 @@
 # th-launch: 최신 worker_suffix.md를 반드시 덧붙여 워커(codex|agy|claude)를 분리 실행하고 등록한다.
 # 사용: th-launch.sh <작업폴더> [codex|agy|claude] <모델> <effort> <작업트리> [추가 인자]
 #       (워커 생략 시 기본값: codex)
+#       Codex 모델 생략: <작업폴더> [codex] [작업트리] [추가 인자] → gpt-6.1-sol medium
 # 정책 변경은 다음 launch부터 적용하며 실행 중 워커는 교체하지 않는다.
 set -euo pipefail
 
@@ -41,8 +42,14 @@ if (( $# >= 1 )) && [[ "$1" == "codex" || "$1" == "agy" || "$1" == "claude" ]]; 
 fi
 
 if [[ "$worker_type" == "codex" ]]; then
-  (( $# >= 3 )) || { echo '사용: th-launch.sh <작업폴더> [codex] <모델> <effort> <작업트리> [codex 추가 인자]'; exit 2; }
-  model=$1; effort=$2; worktree=$3; shift 3
+  if (( $# >= 1 )) && [[ -d "$1" ]]; then
+    model="gpt-6.1-sol"; effort="medium"; worktree=$1; shift
+  elif (( $# == 0 )); then
+    model="gpt-6.1-sol"; effort="medium"; worktree="$task_dir"
+  else
+    (( $# >= 3 )) || { echo '사용: th-launch.sh <작업폴더> [codex] [<모델> <effort>] <작업트리> [codex 추가 인자]'; exit 2; }
+    model=$1; effort=$2; worktree=$3; shift 3
+  fi
 elif [[ "$worker_type" == "agy" ]]; then
   if (( $# >= 3 )); then
     model=$1; effort=$2; worktree=$3; shift 3

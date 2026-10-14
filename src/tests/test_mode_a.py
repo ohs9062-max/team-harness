@@ -33,13 +33,13 @@ _FAILING_CHECK = [[sys.executable, "-c", "raise SystemExit(1)"]]
 
 _CHEAP_CONFIG = ProtocolConfig(
     mode_a_worker_1=ProtocolAgentSpec(
-        agent_type="codex", model="gpt-5.6-terra", effort="high"
+        agent_type="codex", model="gpt-6.1-sol", effort="high"
     ),
     mode_a_worker_2=ProtocolAgentSpec(
         agent_type="antigravity", model="Gemini 3.8 Flash (High)"
     ),
     mode_a_final=ProtocolAgentSpec(
-        agent_type="codex", model="gpt-5.6-terra", effort="high"
+        agent_type="codex", model="gpt-6.1-sol", effort="high"
     ),
 )
 
@@ -296,7 +296,7 @@ async def test_mode_a_passes_each_workers_configured_model_and_effort(tmp_path: 
     _, _, state = await _run_to_waiting_user(tmp_path, runner)
 
     by_agent = {c["agent_type"]: c for c in runner.calls}
-    assert by_agent["codex"]["model"] == "gpt-5.6-terra"
+    assert by_agent["codex"]["model"] == "gpt-6.1-sol"
     assert by_agent["codex"]["effort"] == "high"
     assert by_agent["antigravity"]["model"] == "Gemini 3.8 Flash (High)"
     # antigravity has no reasoning-effort flag, so none is sent.
@@ -305,7 +305,7 @@ async def test_mode_a_passes_each_workers_configured_model_and_effort(tmp_path: 
         h for h in state.handoffs if h["stage"] == Stage.INDEPENDENT_WORK.value
     ]
     assert {h["effective_model"] for h in work_handoffs} == {
-        "gpt-5.6-terra",
+        "gpt-6.1-sol",
         "Gemini 3.8 Flash (High)",
     }
 
@@ -460,7 +460,7 @@ async def test_select_worker_integrates_on_its_own_branch_and_leaves_base_clean(
 
     merge_call = runner.calls[-1]
     assert merge_call["agent_type"] == "codex"
-    assert merge_call["model"] == "gpt-5.6-terra"
+    assert merge_call["model"] == "gpt-6.1-sol"
     assert merge_call["effort"] == "high"
     assert merge_call["cwd"] != str(repo.resolve())
 
@@ -692,7 +692,7 @@ async def test_a_refused_integration_records_no_effective_model(tmp_path: Path):
     assert handoff["stage"] == Stage.CODEX_MERGE.value
     assert handoff["spawned"] is False
     assert handoff["effective_model"] is None
-    assert handoff["requested_model"] == "gpt-5.6-terra"
+    assert handoff["requested_model"] == "gpt-6.1-sol"
     assert handoff["failure_classification"]["category"] == "rate_limit"
 
 

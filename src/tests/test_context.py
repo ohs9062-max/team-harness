@@ -273,3 +273,17 @@ def test_known_limits_updates_gpt_5_1_codex_models_to_400k():
     assert KNOWN_LIMITS["openai/gpt-5.1-codex-mini"] == 400_000
     assert KNOWN_LIMITS["gpt-5.1-codex-max"] == 400_000
     assert KNOWN_LIMITS["openai/gpt-5.1-codex-max"] == 400_000
+
+
+@pytest.mark.asyncio
+async def test_gpt_6_1_sol_cache_context_limits():
+    # Local Codex cache on 2026-10-14: 500000 tokens, effective percent 95.
+    for model_id in ("gpt-6.1-sol", "openai/gpt-6.1-sol"):
+        assert KNOWN_LIMITS[model_id] == 500_000
+        assert model_id in KNOWN_CODEX_MODELS
+        assert (
+            await resolve_model_limit(model_id, object(), Config(provider="codex"))
+            == 475_000
+        )
+        assert await resolve_model_limit(model_id, object(), Config()) == 500_000
+        assert get_auto_compact_threshold(model_id, 500_000) == 467_000

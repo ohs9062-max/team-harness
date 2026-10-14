@@ -205,6 +205,12 @@ class CoordinatorClient:
                     model=self.model,
                     messages=cast(Any, request_messages),
                     tools=cast(Any, tools),
+                    **cast(
+                        Any,
+                        {"reasoning_effort": "medium"}
+                        if self.model in {"gpt-6.1-sol", "openai/gpt-6.1-sol"}
+                        else {},
+                    ),
                 )
                 return self._normalize_completion(completion)
 
@@ -219,6 +225,12 @@ class CoordinatorClient:
                 tools=cast(Any, tools),
                 stream=True,
                 stream_options={"include_usage": True},
+                **cast(
+                    Any,
+                    {"reasoning_effort": "medium"}
+                    if self.model in {"gpt-6.1-sol", "openai/gpt-6.1-sol"}
+                    else {},
+                ),
             )
             context = (
                 stream_resp
