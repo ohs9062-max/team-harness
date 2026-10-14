@@ -126,7 +126,7 @@ team-harness 코디네이터 모드가 준비됐습니다.
 
 저장소 코드 변경만 `th protocol`을 사용한다. 기본은 역할을 순서대로 넘기는 MODE C이며,
 독립 대안 비교에는 MODE A, 앞 단계 산출물을 다음 단계가 이어받는 단순 릴레이에는 MODE B를 쓴다.
-MODE C/A를 쓸 때 역할 모델은 작업 경중에 맞춰 `--set-role <역할>.model=... --set-role <역할>.effort=...`로 지정한다(예: `--set-role mode_c_implement.model=gpt-5.6-terra --set-role mode_c_implement.effort=medium`, `--set-role mode_c_design.model=gpt-5.6-sol`, `--set-role mode_a_worker_1.model=...`).
+MODE C/A를 쓸 때 역할 모델은 작업 경중에 맞춰 `--set-role <역할>.model=... --set-role <역할>.effort=...`로 지정한다(예: `--set-role mode_c_implement.model=gpt-5.6-terra --set-role mode_c_implement.effort=medium`, `--set-role mode_c_design.model=gpt-6.1-sol`, `--set-role mode_a_worker_1.model=...`).
 `graft`(TH-D22)는 코드 심볼 및 호출 관계를 파악하기 위한 구조적 코드 그래프 도구이며, 승인된 작업 결과의 브랜치 병합은 `git merge`로 수행한다.
 
 `th protocol` 명령의 정확한 인자와 현재 상태 확인은 저장소의 Harness Protocol 정본 문서와
