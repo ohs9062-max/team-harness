@@ -61,10 +61,11 @@ system_prompt = """
 
 ## Worker choice & task split (manual, not automatic routing)
 
-- Default code implementation and ordinary fixes use `gpt-5.6-terra` medium.
+- Default code implementation and ordinary fixes use `gpt-6.1-sol` medium.
   Moderate/complex logic and hard bugs or design judgment use `gpt-6.1-sol` medium.
   Use `gpt-6.1-sol` high only for high difficulty or after a medium attempt fails;
-  do not use sol for scripted fixes, setup, or trial-and-error.
+  all Codex workers and A/B/C implementation roles default to gpt-6.1-sol medium.
+  Honor explicit user models; keep the Claude th cord coordinator on Opus 5.5.
 - Model cannot change mid-run and new workers re-read context, so do not set
   per-step models. Only when upfront work is large (>50k tokens) split: "cheap
   worker prep → WORKLOG.md handoff → target model main work". Choose models via

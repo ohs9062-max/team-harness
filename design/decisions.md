@@ -341,3 +341,29 @@ endpoint로 전송됩니다. MODE A의 사용자 선택, MODE C의 CHECK/REVIEW,
 - 검수 실패 시에도 완료 알림이 차단되지 않아 코디네이터가 즉시 개입할 수 있습니다(TH-D3: 정상 반환 ≠ 작업 성공 원칙과 일관성 유지).
 - Jev 관찰은 `TH_JEV_WATCH=off`로 언제든 비활성화할 수 있으며, 실패 시에도 감시 프로세스는 안전하게 지속됩니다.
 
+
+## TH-D27. Codex 기본 모델을 gpt-6.1-sol medium으로 통일한다
+
+**결정.** 기존 gpt-5.6-terra·gpt-5.6-sol 라우팅과 기본값을 모두 gpt-6.1-sol
+medium으로 대체한다. 일반 코드, 중요 로직 설계·구현, A/B/C의 Codex 역할,
+`th run`/`th repl` 조율자 기본 모델이 해당한다. 고난도 또는 medium 실패 때만
+high를 선택한다. Claude `th cord` 코디네이터의 Opus 5.5와 단순·대량·비코드용
+agy Gemini 3.8 Flash (High), 기존 Claude/agy protocol 역할은 유지한다.
+
+**맥락.** 사용자는 토큰 소모가 동등하다고 판단하여 기존 TH-D17의 terra 기본값을
+대체하기로 최종 결정했다. 이는 벤치마크로 측정한 결론이 아닌 사용자 판단이다.
+2026-10-14 codex-cli 0.162.1의 medium/high 호출 성공은 사용자가 확인했다.
+로컬 models_cache.json의 기본 reasoning은 low이므로 템플릿의 reasoning_effort를
+medium으로 설정해 실제 CLI argv에 전달한다(`agents/template.py`, `agents/registry.py`).
+조율자 effort 설정 경로는 없으므로 두 coordinator client가 이 기본 모델 요청에만
+medium을 전달한다. 역할 해석은 `protocol/config.py`, 모델 생략 launch는
+`scripts/th-launch.sh`에서 같은 기본값을 사용한다.
+
+**결과.** 설정 키·함수명·명시적 모델/effort 오버라이드 우선순위는 유지하지만,
+모델을 생략한 소비자는 모델과 effort가 바뀐다. legacy 모델의 context lookup은
+명시적 요청 호환성을 위해 유지한다. 새 모델 context는 로컬 캐시의 context_window
+500,000과 effective_context_window_percent 95에 근거하며 Codex 유효 한도는
+475,000이다. max_context_window 872,000은 기본 창으로 사용하지 않는다. 출력 한도는
+캐시에 없어 기존 unknown-model 처리를 따른다. Codex 계정 쿼터 잠금 시 코디네이터가
+Claude/agy로 대체하는 규칙과 사용자 지정 모델 우선 규칙은 유지한다. TH-D18의
+protocol backend 자동 교체 금지는 바꾸지 않는다.

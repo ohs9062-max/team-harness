@@ -164,7 +164,7 @@ uv run --frozen pytest src/tests/ -q
 ```bash
 # 사용: th-launch.sh <작업폴더> [codex|agy] <모델> <effort> <작업트리> [추가 인자]
 scripts/th-launch.sh _outputs/fix_20261013/core agy default /path/to/worktree
-scripts/th-launch.sh ./job codex gpt-5.6-terra medium /path/to/repo
+scripts/th-launch.sh ./job codex gpt-6.1-sol medium /path/to/repo
 ```
 
 - `task.md` 뒤에 `~/.team-harness/worker_suffix.md`(워커 공통 규칙)를 항상 붙입니다.
@@ -344,9 +344,12 @@ th protocol run --mode c "복잡한 작업" --repo . \
 
 고정 설정은 `.team-harness/config.toml`의 `[protocol.roles.<역할>]`에 저장합니다.
 `th-launch` 워커는 실행 인자(모델, effort)로 고릅니다. 기본 선택 기준:
-terra medium(기본 코드 구현·일반 수정) → gpt-6.1-sol medium(중간 중요도·복잡한 로직,
-어려운 버그·설계 판단) → gpt-6.1-sol high(고난도 또는 medium 실패 시만),
-agy(단순·대량·비코드, 결과 검증 필요). A/B/C 역할 기본값은 terra를 유지합니다.
+gpt-6.1-sol medium(일반 코드·중요 로직 설계/구현·A/B/C Codex 역할),
+gpt-6.1-sol high(고난도 또는 medium 실패 시만),
+agy Gemini 3.8 Flash (High)(단순·대량·비코드, 결과 검증 필요).
+Claude `th cord` 코디네이터는 Opus 5.5를 유지하며, Codex 쿼터 잠금 시 Claude/agy로
+대체하고 사용자가 명시한 모델은 그대로 따릅니다. `th run`/`th repl`도 기본 모델은
+gpt-6.1-sol medium입니다. 모델 생략 실행: `scripts/th-launch.sh ./job codex /path/to/repo`.
 
 ### 10. graft 코드 그래프 (참고)
 

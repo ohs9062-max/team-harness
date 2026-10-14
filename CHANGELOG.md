@@ -7,6 +7,10 @@
 
 ## [Unreleased]
 
+### 변경됨 (Changed)
+
+- **Codex 기본 모델 통일 (TH-D27).** Codex 워커, A/B/C Codex 역할, `th run`/`th repl` 조율자 기본 모델은 `gpt-6.1-sol medium`입니다. 모델/effort를 생략한 소비자의 실행 모델과 추론 수준이 바뀝니다. 명시적 오버라이드와 설정 키, Claude/agy 역할, 쿼터 잠금 대체 정책은 유지합니다. `th-launch`는 Codex 모델 생략 시 같은 기본값을 전달합니다.
+
 ### 추가됨 (Added)
 
 - **선택형 Jev decision router (TH-D24).** `[decision_router] enabled = true` 또는 `TEAM_HARNESS_JEV=1`이면 `th run`/SDK와 `th repl`이 매 coordinator 턴 전에 TypeSafe System One의 choice 질문으로 `FULL`/`DELEGATE`/`EDIT`/`MONITOR` 도구 프로필을 고릅니다. 충분한 confidence가 있는 응답만 적용하고 API key 부재, 오류·타임아웃, 잘못된 응답, 낮은 confidence는 전체 도구로 복귀합니다. 최근 상태는 `max_state_chars`로 제한되며 각 판단의 choice/probability/usage/latency/fallback과 도구 schema 전후 크기 및 추정 절감 토큰을 `run.json.decisions`에 기록합니다. `DecisionRouter`는 worker failure/review escalation/agent selection 종류도 표현하지만, 이번 릴리스는 기존 Protocol 계약을 지키기 위해 tool selection만 자동 적용합니다. 기본값은 꺼짐입니다.

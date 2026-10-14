@@ -110,7 +110,7 @@ th logs <run-id>
 
 For detached worker jobs, write the main PID to `job.pid` and end with `DONE`
 or `FAILED` in the task directory. Register and launch a Codex or agy worker with
-`scripts/th-launch.sh <task-dir> [codex|agy] <model> <effort> <worktree>` (omitting worker type defaults to `codex`);
+`scripts/th-launch.sh <task-dir> [codex|agy] <model> <effort> <worktree>` (omitting worker type defaults to `codex`; `<task-dir> [codex] [worktree]` defaults to `gpt-6.1-sol medium`);
 it appends the current `~/.team-harness/worker_suffix.md`. Run `scripts/th-watch.sh` in the
 background to receive exactly one completion/failure/error/lost-process/stall
 event, or run `scripts/th-status.sh` once when status is requested. Set
@@ -158,7 +158,7 @@ asyncio.run(main())
 ```python
 harness = TeamHarness(
     provider="codex",           # 또는 "openai_compat" (기본값)
-    model="codex-mini-latest",
+    model="gpt-6.1-sol",
     api_base="https://openrouter.ai/api/v1",
     api_key="sk-or-...",
     codex_auth_path="~/.codex/auth.json",
@@ -171,8 +171,8 @@ harness = TeamHarness(
     rate_limit_default_cooldown_s=900,
     system_prompt="추가 지침",
     system_prompt_file="prompt.txt",
-    agent_models={"codex": "gpt-5.5"},
-    agent_reasoning_efforts={"codex": "high"},
+    agent_models={"codex": "gpt-6.1-sol"},
+    agent_reasoning_efforts={"codex": "medium"},
     output_dir="./_outputs",
     cwd="./project",
     console_mode="silent",      # "silent" | "auto" | "plain" | "rich"
@@ -235,7 +235,7 @@ th init --global --force
 ```toml
 [coordinator]
 provider = "openai_compat"
-model = "gpt-5.5"
+model = "gpt-6.1-sol"
 api_base = "https://openrouter.ai/api/v1"
 coordinator_system_message_file = "coordinator_system_message.md"
 worker_suffix_file = "worker_suffix.md"
@@ -262,14 +262,14 @@ shared_flags = [
 resume_prefix = ["resume"]
 resume_flags = ["{session_id}"]
 model_flag = "--model"
-default_model = "gpt-5.5"
+default_model = "gpt-6.1-sol"
 deduplicate_flags = [
     "--dangerously-bypass-approvals-and-sandbox",
     "--skip-git-repo-check",
     "--json",
 ]
 reasoning_effort_flag = ["-c", "model_reasoning_effort={effort}"]
-# reasoning_effort = "high"   # 레벨을 고정하려면 주석 해제
+reasoning_effort = "medium"   # 고난도 또는 medium 실패 시 high
 
 [agents.codex.session_capture]
 strategy = "stream_json_event"

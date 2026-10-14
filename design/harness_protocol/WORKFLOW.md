@@ -34,13 +34,15 @@ worker마다 tmux 창을 하나씩 열어 그 worker의 로그를 실시간으�
 그 사실을 안내한다. 이 창은 worker의 표준 출력을 읽기만 할 뿐 표준 입력에는 전혀
 연결되지 않는다 — worker는 여전히 TH-D2가 말하는 1회성 배치 서브프로세스다.
 
-**모델/effort 오버라이드 (TH-D17).** Protocol의 codex 역할(worker_1, mode_a_final,
-mode_b_default, mode_c_implement)은 기본값이 값싼 티어(`gpt-5.6-terra`, `effort=high`)입니다
-— 난이도를 판단하는 로직이 없으니, 애매하면 저렴한 쪽이 안전하다는 원칙입니다. 실제로
-복잡한 작업이면 환경변수로 올리세요:
+**모델/effort 오버라이드 (TH-D27).** Protocol의 codex 역할(worker_1, mode_a_final,
+mode_b_default, mode_c_implement)은 기본값이 `gpt-6.1-sol`, `effort=medium`입니다
+— 일반 코드와 중요 로직 설계·구현에 같은 모델을 씁니다. 고난도 또는 medium 실패 시
+high로 올리며, 사용자 명시 모델과 Codex 쿼터 잠금 시 Claude/agy 대체 규칙은 유지합니다.
+Claude `th cord` 코디네이터는 Opus 5.5, 단순·대량·비코드는 agy Gemini 3.8 Flash (High)입니다.
+역할별 환경변수로 지정할 수 있습니다:
 
 ```bash
-HARNESS_MODE_C_IMPLEMENT_MODEL=gpt-5.6-sol HARNESS_MODE_C_IMPLEMENT_EFFORT=medium \
+HARNESS_MODE_C_IMPLEMENT_MODEL=gpt-6.1-sol HARNESS_MODE_C_IMPLEMENT_EFFORT=medium \
   th protocol run --mode c "복잡한 작업" --repo .
 ```
 
@@ -56,7 +58,7 @@ HARNESS_MODE_C_IMPLEMENT_MODEL=gpt-5.6-sol HARNESS_MODE_C_IMPLEMENT_EFFORT=mediu
 
 ```bash
 th protocol run --mode c "복잡한 작업" --repo . \
-  --set-role mode_c_implement.model=gpt-5.6-sol \
+  --set-role mode_c_implement.model=gpt-6.1-sol \
   --set-role mode_c_implement.effort=medium
 ```
 
@@ -67,14 +69,13 @@ th protocol run --mode c "복잡한 작업" --repo . \
 ```toml
 [protocol.roles.mode_c_implement]
 agent = "codex"
-model = "gpt-5.6-terra"
-effort = "high"
+model = "gpt-6.1-sol"
+effort = "medium"
 ```
 
 우선순위는 높은 쪽부터 `--set-role` → `HARNESS_MODE_*` 환경변수 → 프로젝트
-`config.toml` → 전역 `config.toml` → 내장 기본값(TH-D17의 값싼 티어)입니다. 역할
-이름이나 필드 이름을 잘못 적으면 조용히 무시되지 않고 **오류로 거부**됩니다 — 오타
-때문에 비싼 기본값이 그대로 쓰이는 일이 TH-D17이 다룬 바로 그 실패였기 때문입니다.
+`config.toml` → 전역 `config.toml` → 내장 기본값(TH-D27의 Sol medium)입니다. 역할
+이름이나 필드 이름을 잘못 적으면 **오류로 거부**됩니다.
 
 **stage/CHECK 타임아웃.** `--agent-timeout <초>`(기본 600)로 worker 한 stage의 최대
 실행 시간을, `--check-timeout <초>`(기본 300)로 결정론적 CHECK 명령의 최대 실행 시간을
