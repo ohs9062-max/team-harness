@@ -807,7 +807,7 @@ def test_default_config_text_contains_verified_flag_tokens():
     assert 'match = { type = "thread.started" }' in text
     assert 'field_path = ["thread_id"]' in text
     # Codex default model — the whole point of this follow-up.
-    assert 'default_model = "gpt-6.1-sol"' in text
+    assert 'default_model = "gpt-5.6-terra"' in text
     assert (
         'deduplicate_flags = [\n    "--dangerously-bypass-approvals-and-sandbox"'
         in text

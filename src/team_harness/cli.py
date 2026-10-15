@@ -538,7 +538,7 @@ def _parse_set_role(values: tuple[str, ...]) -> dict[str, dict[str, str]]:
 
     Seven protocol roles times three fields would be twenty-one dedicated
     flags, so one repeatable flag carries them all, e.g.
-    ``--set-role mode_c_implement.model=gpt-6.1-sol
+    ``--set-role mode_c_implement.model=gpt-5.6-terra
     --set-role mode_c_implement.effort=medium``. Role and field names are
     validated by the protocol layer, so a typo fails loudly instead of leaving
     the default silently in place.
@@ -580,7 +580,7 @@ def _protocol_role_options() -> Any:
             multiple=True,
             metavar="ROLE.FIELD=VALUE",
             help="Override one protocol role knob for this run, e.g. "
-            "--set-role mode_c_implement.model=gpt-6.1-sol. FIELD is "
+            "--set-role mode_c_implement.model=gpt-5.6-terra. FIELD is "
             "agent, model or effort. Repeatable. Takes precedence over "
             "HARNESS_MODE_* env vars and config.toml.",
         )(fn)

@@ -164,7 +164,7 @@ uv run --frozen pytest src/tests/ -q
 ```bash
 # 사용: th-launch.sh <작업폴더> [codex|agy] <모델> <effort> <작업트리> [추가 인자]
 scripts/th-launch.sh _outputs/fix_20261013/core agy default /path/to/worktree
-scripts/th-launch.sh ./job codex gpt-6.1-sol medium /path/to/repo
+scripts/th-launch.sh ./job codex gpt-5.6-terra medium /path/to/repo
 ```
 
 - `task.md` 뒤에 `~/.team-harness/worker_suffix.md`(워커 공통 규칙)를 항상 붙입니다.
@@ -338,18 +338,18 @@ uv run python scripts/measure_preamble.py   # 시스템 프롬프트 + 도구 �
 
 ```bash
 th protocol run --mode c "복잡한 작업" --repo . \
-  --set-role mode_c_implement.model=gpt-6.1-sol \
+  --set-role mode_c_implement.model=gpt-5.6-terra \
   --set-role mode_c_implement.effort=medium
 ```
 
 고정 설정은 `.team-harness/config.toml`의 `[protocol.roles.<역할>]`에 저장합니다.
 `th-launch` 워커는 실행 인자(모델, effort)로 고릅니다. 기본 선택 기준:
-gpt-6.1-sol medium(일반 코드·중요 로직 설계/구현·A/B/C Codex 역할),
-gpt-6.1-sol high(고난도 또는 medium 실패 시만),
-agy Gemini 3.8 Flash (High)(단순·대량·비코드, 결과 검증 필요).
+`gpt-5.6-terra` medium(일반 코딩·구현), `gpt-5.6-terra` high(복잡한 구현·디버깅),
+`gpt-6.1-sol` medium(핵심 로직·실험 분석), `gpt-6.1-sol` high(어려운 오류·중요 설계),
+agy Gemini 3.8 Flash (High)(effort 인자 없음, 단순 반복·대량·비코드, 결과 검증 필요) 순이다.
 Claude `th cord` 코디네이터는 Opus 5.5를 유지하며, Codex 쿼터 잠금 시 Claude/agy로
 대체하고 사용자가 명시한 모델은 그대로 따릅니다. `th run`/`th repl`도 기본 모델은
-gpt-6.1-sol medium입니다. 모델 생략 실행: `scripts/th-launch.sh ./job codex /path/to/repo`.
+`gpt-5.6-terra` medium입니다. 아래 등급의 실패 또는 용도가 명확할 때만 한 단계 올립니다. 모델 생략 실행: `scripts/th-launch.sh ./job codex /path/to/repo`.
 
 ### 10. graft 코드 그래프 (참고)
 
@@ -415,7 +415,7 @@ TH_WATCH_DIR=/path/to/watch scripts/th-watchd.sh  # 기존 사건 감지에서 �
 
 기본 기록 위치는 inbox와 같은 소유 작업 공간(`.th_owner`)의 `.claude/workers.md`입니다. 소유 정보가 없으면 `.th_worktree`의 저장소 루트, `TH_WORKSPACE`, 작업 폴더 순으로 사용합니다. `TH_WORKERS_FILE`로 바꾸거나 작업별 `.th_workers_file`에 경로를 기록할 수 있습니다. `th-launch`는 지정된 `TH_WORKERS_FILE`을 작업 폴더에 저장하므로 이미 실행 중인 데몬에도 적용됩니다. 상대 경로는 소유 작업 공간 기준입니다. 200줄을 넘으면 오래된 요약 블록을 같은 폴더의 `workers_archive.md`로 옮깁니다.
 
-- `TH_DIGEST_WORKER=agy|claude|codex` (기본 agy), `TH_DIGEST_MODEL`로 요약 모델 선택. Claude 기본은 sonnet, Codex는 gpt-6.1-sol입니다.
+- `TH_DIGEST_WORKER=agy|claude|codex` (기본 agy), `TH_DIGEST_MODEL`로 요약 모델 선택. Claude 기본은 sonnet, Codex는 gpt-5.6-terra입니다.
 - `TH_DIGEST_TIMEOUT` / `TH_VERIFY_TIMEOUT`: 각 외부 호출 제한 초, 기본·최대 600. 해당 요약 워커의 `quota_lock.<worker>`가 있거나 LLM 실패·시간 초과·읽기 전용 격리 실패 시 스크립트 검수만 기록합니다.
 - `TH_DIGEST_COMMAND`: 시험용 신뢰된 가짜 실행 명령(인자는 shell 문법으로 분리, shell 자체는 실행하지 않음). 프롬프트는 stdin으로 전달합니다. 이 override는 CLI/OS 격리를 대체하므로 실제 LLM 실행에는 사용하지 않습니다.
 - 기대 산출물은 `task.md`의 `## 기대 산출물` 절에 백틱 경로 목록으로 씁니다. 상대 경로는 작업 폴더 기준이며 디렉터리·glob은 파일 수를 셉니다. 예: ``- `images/`: 3개 파일``. 누락·수 불일치는 FAIL입니다.

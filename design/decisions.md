@@ -344,6 +344,8 @@ endpoint로 전송됩니다. MODE A의 사용자 선택, MODE C의 CHECK/REVIEW,
 
 ## TH-D27. Codex 기본 모델을 gpt-6.1-sol medium으로 통일한다
 
+> TH-D29로 대체됨.
+
 **결정.** 기존 gpt-5.6-terra·gpt-5.6-sol 라우팅과 기본값을 모두 gpt-6.1-sol
 medium으로 대체한다. 일반 코드, 중요 로직 설계·구현, A/B/C의 Codex 역할,
 `th run`/`th repl` 조율자 기본 모델이 해당한다. 고난도 또는 medium 실패 때만
@@ -367,6 +369,14 @@ medium을 전달한다. 역할 해석은 `protocol/config.py`, 모델 생략 lau
 캐시에 없어 기존 unknown-model 처리를 따른다. Codex 계정 쿼터 잠금 시 코디네이터가
 Claude/agy로 대체하는 규칙과 사용자 지정 모델 우선 규칙은 유지한다. TH-D18의
 protocol backend 자동 교체 금지는 바꾸지 않는다.
+
+## TH-D29. Codex 워커는 등급제로 선택하고 기본값은 Terra medium으로 한다
+
+**결정.** Codex 워커의 기본 등급은 `gpt-5.6-terra`/medium(일반 코딩·구현)이다. 복잡한 구현·디버깅은 Terra/high, 핵심 로직·실험 분석은 `gpt-6.1-sol`/medium, 어려운 오류·중요 설계는 Sol/high를 쓴다. 하위 등급이 실패했거나 용도가 명확할 때만 기본→중간→고난도→최고난도 순으로 올린다. agy(Gemini 3.8 Flash (High), effort 인자 없음)는 단순 반복·대량·비코드 작업만 맡는다. 명시적 사용자 모델과 Codex 쿼터 잠금 시 대체 규칙은 유지한다.
+
+**맥락.** Sol 6.1은 Codex 5시간 쿼터를 크게 소모한다. TH-D27의 "항상 Sol" 기본값은 일반 구현까지 고비용 모델로 고정해, 난이도에 맞춘 비용 통제를 막았다.
+
+**결과.** `scripts/th-launch.sh`, Codex agent template, Protocol 역할 기본값은 Terra/medium으로 맞춘다. 명시적 `--set-role`·환경변수·TOML 오버라이드는 그대로 우선하며, Terra와 Sol의 context registry도 유지한다. coordinator LLM 기본값은 이 결정의 대상이 아니므로 바꾸지 않는다. 모델을 생략한 워커 소비자는 실행 모델이 바뀌지만 설정 스키마와 명시적 호출 계약은 호환된다. TH-D27을 대체한다.
 
 ## TH-D28. Worker digest의 판정은 스크립트가 보존하고 LLM은 사건별 요약만 쓴다
 

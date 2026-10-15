@@ -110,7 +110,7 @@ th logs <run-id>
 
 For detached worker jobs, write the main PID to `job.pid` and end with `DONE`
 or `FAILED` in the task directory. Register and launch a Codex or agy worker with
-`scripts/th-launch.sh <task-dir> [codex|agy] <model> <effort> <worktree>` (omitting worker type defaults to `codex`; `<task-dir> [codex] [worktree]` defaults to `gpt-6.1-sol medium`);
+`scripts/th-launch.sh <task-dir> [codex|agy] <model> <effort> <worktree>` (omitting worker type defaults to `codex`; `<task-dir> [codex] [worktree]` defaults to `gpt-5.6-terra medium`);
 it appends the current `~/.team-harness/worker_suffix.md`. Run `scripts/th-watch.sh` in the
 background to receive exactly one completion/failure/error/lost-process/stall
 event, or run `scripts/th-status.sh` once when status is requested. Set
@@ -171,7 +171,7 @@ harness = TeamHarness(
     rate_limit_default_cooldown_s=900,
     system_prompt="추가 지침",
     system_prompt_file="prompt.txt",
-    agent_models={"codex": "gpt-6.1-sol"},
+    agent_models={"codex": "gpt-5.6-terra"},
     agent_reasoning_efforts={"codex": "medium"},
     output_dir="./_outputs",
     cwd="./project",
@@ -262,7 +262,7 @@ shared_flags = [
 resume_prefix = ["resume"]
 resume_flags = ["{session_id}"]
 model_flag = "--model"
-default_model = "gpt-6.1-sol"
+default_model = "gpt-5.6-terra"
 deduplicate_flags = [
     "--dangerously-bypass-approvals-and-sandbox",
     "--skip-git-repo-check",

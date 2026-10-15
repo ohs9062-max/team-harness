@@ -139,7 +139,7 @@ shared_flags = [
 resume_prefix = ["resume"]
 resume_flags = ["{session_id}"]
 model_flag = "--model"
-default_model = "gpt-6.1-sol"
+default_model = "gpt-5.6-terra"
 deduplicate_flags = [
     "--dangerously-bypass-approvals-and-sandbox",
     "--skip-git-repo-check",
@@ -436,11 +436,11 @@ min_agent_lifetime_before_kill_s = 600.0
 # Precedence, highest first: `th protocol ... --set-role role.field=value`,
 # then HARNESS_MODE_<ROLE>_{AGENT,MODEL,EFFORT} env vars, then these tables
 # (project config.toml over global), then the built-in defaults, which
-# use gpt-6.1-sol medium for Codex (TH-D27).
+# use gpt-5.6-terra medium for Codex (TH-D29).
 #
 # [protocol.roles.mode_c_implement]
 # agent = "codex"
-# model = "gpt-6.1-sol"
+# model = "gpt-5.6-terra"
 # effort = "medium"
 #
 # [protocol.roles.mode_c_review]
@@ -557,11 +557,11 @@ min_agent_lifetime_before_kill_s = 600.0
 # Precedence, highest first: `th protocol ... --set-role role.field=value`,
 # then HARNESS_MODE_<ROLE>_{AGENT,MODEL,EFFORT} env vars, then these tables
 # (project config.toml over global), then the built-in defaults, which
-# use gpt-6.1-sol medium for Codex (TH-D27).
+# use gpt-5.6-terra medium for Codex (TH-D29).
 #
 # [protocol.roles.mode_c_implement]
 # agent = "codex"
-# model = "gpt-6.1-sol"
+# model = "gpt-5.6-terra"
 # effort = "medium"
 #
 # [protocol.roles.mode_c_review]
@@ -975,7 +975,7 @@ def load_protocol_role_tables(start: Path | None = None) -> dict[str, dict[str, 
     protocol defaults.
 
     Values are returned as plain strings keyed by role name, e.g.
-    ``{"mode_c_implement": {"agent": "codex", "model": "gpt-6.1-sol"}}``.
+    ``{"mode_c_implement": {"agent": "codex", "model": "gpt-5.6-terra"}}``.
     Unparseable entries are dropped here rather than raising, so an unrelated
     typo in a rarely used table cannot break every protocol run; role and field
     names are validated by the protocol layer that consumes this.

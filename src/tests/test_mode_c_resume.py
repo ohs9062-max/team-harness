@@ -127,7 +127,7 @@ async def test_resume_at_design_reruns_the_whole_pipeline_in_place(tmp_path: Pat
 
     assert state.status == StageStatus.DONE.value
     assert [call["agent_type"] for call in second.calls] == [
-        "claude",
+        "codex",
         "codex",
         "antigravity",
     ]

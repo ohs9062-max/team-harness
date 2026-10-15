@@ -149,10 +149,10 @@ def test_th_launch_retains_th_owner(test_env: dict):
 @pytest.mark.parametrize(
     "arguments", [[], ["codex"], ["codex", "worktree"], ["explicit"]]
 )
-def test_th_launch_passes_sol_model_and_effort_to_codex(
+def test_th_launch_passes_terra_model_and_effort_to_codex(
     test_env: dict, arguments: list[str]
 ):
-    """PATH stub verifies explicit and omitted Codex model/effort arguments."""
+    """PATH stub verifies explicit and omitted Codex Terra model/effort arguments."""
     task_dir = _create_task_dir(test_env["tmp_path"], "task_sol_arguments")
     launch_script = SCRIPTS_DIR / "th-launch.sh"
     captured_args = test_env["tmp_path"] / "codex-args.txt"
@@ -168,7 +168,7 @@ def test_th_launch_passes_sol_model_and_effort_to_codex(
             str(launch_script),
             str(task_dir),
             *(
-                ["codex", "gpt-6.1-sol", "medium", str(task_dir)]
+                ["codex", "gpt-5.6-terra", "medium", str(task_dir)]
                 if arguments == ["explicit"]
                 else [str(task_dir) if a == "worktree" else a for a in arguments]
             ),
@@ -183,7 +183,7 @@ def test_th_launch_passes_sol_model_and_effort_to_codex(
     assert captured_args.read_text(encoding="utf-8").splitlines()[:5] == [
         "exec",
         "-m",
-        "gpt-6.1-sol",
+        "gpt-5.6-terra",
         "-c",
         "model_reasoning_effort=medium",
     ]

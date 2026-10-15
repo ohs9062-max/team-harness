@@ -248,7 +248,7 @@ def test_system_prompt_worker_model_selection_in_fixed_prefix():
 
     prefix, _ = prompt.split("## Run context", 1)
     assert "Worker model selection:" in prefix
-    assert "gpt-6.1-sol" in prefix
+    assert "gpt-5.6-terra" in prefix
     assert 'effort="medium"' in prefix
     assert 'effort="high"' in prefix
     assert "gpt-6.1-sol" in prefix
@@ -264,13 +264,13 @@ def test_system_prompt_worker_model_selection_in_fixed_prefix():
         line for line in section_chunk.strip().splitlines() if line.strip()
     ]
     assert len(section_lines) <= 6
-    assert "gpt-5.6-" not in section_chunk
+    assert "gpt-5.6-terra" in section_chunk
     assert (
-        'all Codex code implementation, important logic and A/B/C implementation use `gpt-6.1-sol` with `effort="medium"`.'
+        'Codex `gpt-5.6-terra` with `effort="medium"` for ordinary implementation and `effort="high"` for complex implementation or debugging.'
         in section_chunk
     )
     assert '`gpt-6.1-sol` with `effort="medium"`' in section_chunk
     assert (
-        '`gpt-6.1-sol` with `effort="high"` only for high difficulty or a failed medium attempt.'
+        '`gpt-6.1-sol` with `effort="high"` for hard errors or important design.'
         in section_chunk
     )

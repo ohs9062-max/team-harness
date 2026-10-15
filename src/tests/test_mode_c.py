@@ -220,8 +220,8 @@ async def test_mode_c_happy_path(tmp_path: Path) -> None:
 
     # Verify calls
     assert len(runner.calls) == 3
-    claude_call, codex_call, agy_call = runner.calls
-    assert claude_call["agent_type"] == "claude"
+    design_call, codex_call, agy_call = runner.calls
+    assert design_call["agent_type"] == "codex"
     assert codex_call["agent_type"] == "codex"
     assert (
         agy_call["agent_type"] == "antigravity"
@@ -266,7 +266,7 @@ async def test_mode_c_fix_path(tmp_path: Path) -> None:
 
     # Expected calls: DESIGN -> IMPLEMENT -> REVIEW(1) -> FIX -> REVIEW(2)
     assert len(runner.calls) == 5
-    assert runner.calls[0]["agent_type"] == "claude"
+    assert runner.calls[0]["agent_type"] == "codex"
     assert runner.calls[1]["agent_type"] == "codex"
     assert runner.calls[2]["agent_type"] == "antigravity"
     assert runner.calls[3]["agent_type"] == "codex"

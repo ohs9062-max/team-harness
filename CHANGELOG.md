@@ -9,7 +9,7 @@
 
 ### 변경됨 (Changed)
 
-- **Codex 기본 모델 통일 (TH-D27).** Codex 워커, A/B/C Codex 역할, `th run`/`th repl` 조율자 기본 모델은 `gpt-6.1-sol medium`입니다. 모델/effort를 생략한 소비자의 실행 모델과 추론 수준이 바뀝니다. 명시적 오버라이드와 설정 키, Claude/agy 역할, 쿼터 잠금 대체 정책은 유지합니다. `th-launch`는 Codex 모델 생략 시 같은 기본값을 전달합니다.
+- **Codex 워커 등급제 (TH-D29).** 워커와 Protocol Codex 역할의 기본값은 `gpt-5.6-terra medium`입니다. 복잡한 구현·디버깅은 Terra high, 핵심 로직·실험 분석은 `gpt-6.1-sol medium`, 어려운 오류·중요 설계는 Sol high로 하위 등급 실패 또는 명확한 용도일 때만 올립니다. agy는 단순 반복·대량·비코드 작업에만 쓰며 effort 인자가 없습니다. 명시적 오버라이드·설정 키·쿼터 잠금 대체 규칙은 유지하고, coordinator 기본 모델은 바꾸지 않습니다.
 
 ### 추가됨 (Added)
 

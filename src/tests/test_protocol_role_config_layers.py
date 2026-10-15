@@ -90,8 +90,8 @@ def test_config_toml_beats_the_protocol_default():
 
     assert proto_cfg.mode_c_design.agent_type == "codex"
     assert proto_cfg.mode_c_design.model == "gpt-5.6-terra"
-    # Untouched Codex roles keep the Sol medium defaults (TH-D27).
-    assert proto_cfg.mode_c_implement.model == "gpt-6.1-sol"
+    # Untouched Codex roles keep the Terra medium defaults (TH-D29).
+    assert proto_cfg.mode_c_implement.model == "gpt-5.6-terra"
     assert proto_cfg.mode_c_implement.effort == "medium"
 
 

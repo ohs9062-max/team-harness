@@ -72,8 +72,8 @@ Tool usage guidelines:
   long-running commands.
 
 Worker model selection:
-- Honor user-specified models; otherwise all Codex code implementation, important logic and A/B/C implementation use `gpt-6.1-sol` with `effort="medium"`.
-- Use `gpt-6.1-sol` with `effort="high"` only for high difficulty or a failed medium attempt.
+- Honor user-specified models. Otherwise use Codex `gpt-5.6-terra` with `effort="medium"` for ordinary implementation and `effort="high"` for complex implementation or debugging.
+- Escalate only when the lower tier failed or the task clearly warrants it: `gpt-6.1-sol` with `effort="medium"` for core logic or experimental analysis, then `gpt-6.1-sol` with `effort="high"` for hard errors or important design.
 - Use `antigravity` (`agy`), Gemini 3.8 Flash (High), for simple/bulk/non-code tasks.
 - If the Codex account is quota-locked, use a Claude/agy worker and verify its result.
 - Pass model/effort explicitly to `spawn_agent`; keep small clear tasks to one worker.
