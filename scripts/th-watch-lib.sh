@@ -76,10 +76,25 @@ run_verification() {
 }
 
 quota_error_line() {
-  grep -iE '(ERROR[: ]|RESOURCE_EXHAUSTED|quota exceeded|rate limit exceeded|usage limit reached|at capacity|capacity exceeded)' "$1" 2>/dev/null |
-    grep -vE '^ERROR: test_' |
-    grep -iE '(quota|rate[ _-]?limit|usage[ _-]?limit|at capacity|capacity exceeded|RESOURCE_EXHAUSTED)' |
-    tail -n 1 | cut -c1-180
+  local log=$1 suffix=${TH_WORKER_SUFFIX:-$HOME/.team-harness/worker_suffix.md}
+  # Logs begin by echoing the worker prompt.  Match only forms emitted by CLIs,
+  # and discard prompt instructions (including exact suffix lines) before lock.
+  awk -v suffix="$suffix" '
+    BEGIN {
+      if ((getline line < suffix) > 0) {
+        do { prompt[line] = 1 } while ((getline line < suffix) > 0)
+        close(suffix)
+      }
+    }
+    {
+      lower = tolower($0)
+      if (prompt[$0] || $0 ~ /^[[:space:]]*([-*+]|>|[0-9]+[.)])[[:space:]]/ ||
+          lower ~ /→[[:space:]]*`?failed`?/ || lower ~ /error[[:space:]]*→[[:space:]]*failed/ ||
+          $0 ~ /^ERROR:[[:space:]]*test_/) next
+      if (lower ~ /(hit your usage limit|usage limit reached|rate limit exceeded|resource_exhausted|quota exceeded|at capacity|capacity exceeded)/) last = $0
+    }
+    END { if (last != "") print substr(last, 1, 180) }
+  ' "$log" 2>/dev/null
 }
 
 inspect_task_event() {
@@ -168,7 +183,8 @@ inspect_task_event() {
     [[ $lock_type == worker ]] && lock_type=unknown
     printf '%s | %s | %s\n' "$(date '+%F %R')" "$task" "$line" > "$watch_dir/quota_lock.$lock_type"
     "$callback_fn" "$task" "워커 오류(쿼터·용량)" "워커 오류(쿼터·용량) — $line (새 $lock_type 실행 잠금: $watch_dir/quota_lock.$lock_type)" "-" "$owner"
-    return 0
+    # A quota event is non-terminal.  Continue so a later DONE/FAILED marker is
+    # still observed on the next pass (and dead-process handling remains intact).
   fi
 
   # 4. 프로세스 상태 확인 (job.pid / worker.pid)

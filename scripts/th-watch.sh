@@ -116,8 +116,12 @@ handle_watch_event() {
   if [[ $event_type == "완료" ]]; then
     remove_task "$task"
     notify "$name" "완료 (검수 $v_res)"
-  elif [[ $event_type == "실패" || $event_type == "워커 오류(쿼터·용량)" || $event_type == "중단" ]]; then
+  elif [[ $event_type == "실패" || $event_type == "중단" ]]; then
     remove_task "$task"
+    notify "$name" "$summary"
+  elif [[ $event_type == "워커 오류(쿼터·용량)" ]]; then
+    # A quota lock prevents new launches, but this worker can still finish and
+    # must remain registered so a later DONE/FAILED is reported.
     notify "$name" "$summary"
   elif [[ $event_type == "멈춤" ]]; then
     notify "$name" "$summary"

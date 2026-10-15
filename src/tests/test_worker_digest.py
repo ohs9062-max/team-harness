@@ -88,7 +88,7 @@ def test_three_tasks_and_immutable_verdicts(
         ).is_file()
     assert shell("th-watchd.sh").returncode == 0
     assert workers.read_text() == before
-    status = shell("th-status.sh")
+    status = shell("th-status.sh", "-a")
     assert "VERIFIED" in status.stdout and "VERIFY_FAILED" in status.stdout
     assert len((workspace / ".claude/inbox.md").read_text().splitlines()) == 3
 
@@ -103,7 +103,7 @@ def test_status_only_and_failed_variant(
     assert wd.verify(task)[0]["overall"] == "FAIL"
     _, watch, _ = sandbox
     (watch / "tasks.txt").write_text(str(task) + "\n")
-    status = shell("th-status.sh").stdout
+    status = shell("th-status.sh", "-a").stdout
     assert "실패" in status and "VERIFY_FAILED" in status
     (task / "FAILED.quota").unlink()
     (task / "STATUS").write_text("DONE\nRUN later\n")

@@ -399,8 +399,8 @@ def test_th_launch_concurrent_registry_integrity(test_env: dict):
         assert str(t) in lines
 
 
-def test_th_watch_quota_error_removes_task(test_env: dict):
-    """ops-05: Quota error removes task from registry tasks.txt."""
+def test_th_watch_quota_error_keeps_task_for_later_completion(test_env: dict):
+    """ops-05: A quota notice is non-terminal; a later DONE is still reported."""
     task_dir = _create_task_dir(test_env["tmp_path"], "task_quota_rm")
     (task_dir / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
     (task_dir / "codex.log").write_text("ERROR: 429 quota exceeded\n", encoding="utf-8")
@@ -417,7 +417,15 @@ def test_th_watch_quota_error_removes_task(test_env: dict):
     assert res.returncode == 0
     assert "워커 오류(쿼터·용량)" in res.stdout
 
-    # Must be removed from registry
+    # Keep it registered: the CLI can recover after reporting quota exhaustion.
+    assert str(task_dir) in tasks_txt.read_text(encoding="utf-8")
+
+    (task_dir / "DONE").write_text("recovered\n", encoding="utf-8")
+    res = subprocess.run(
+        [str(watch_script), "2"], env=env, capture_output=True, text=True
+    )
+    assert res.returncode == 0
+    assert "완료" in res.stdout
     assert str(task_dir) not in tasks_txt.read_text(encoding="utf-8")
 
 
@@ -528,10 +536,66 @@ def test_th_status_both_pids_dead_shows_stopped(test_env: dict):
 
     status_script = SCRIPTS_DIR / "th-status.sh"
     res = subprocess.run(
-        [str(status_script)], env=test_env["env"], capture_output=True, text=True
+        [str(status_script), "-a"], env=test_env["env"], capture_output=True, text=True
     )
     assert res.returncode == 0
     assert "중단?" in res.stdout
+
+
+def test_th_status_default_hides_old_completed_tasks_but_all_shows_them(test_env: dict):
+    """The compact default stays within 12 lines; -a retains the full table."""
+    tasks = []
+    old_time = time.time() - 48 * 60 * 60
+    for index in range(12):
+        task_dir = _create_task_dir(test_env["tmp_path"], f"old_done_{index}")
+        (task_dir / "DONE").write_text("done\n", encoding="utf-8")
+        for path in task_dir.iterdir():
+            os.utime(path, (old_time, old_time))
+        tasks.append(task_dir)
+
+    tasks_txt = test_env["watch_dir"] / "tasks.txt"
+    tasks_txt.write_text("\n".join(map(str, tasks)) + "\n", encoding="utf-8")
+    status_script = SCRIPTS_DIR / "th-status.sh"
+
+    compact = subprocess.run(
+        [str(status_script)], env=test_env["env"], capture_output=True, text=True
+    )
+    assert compact.returncode == 0
+    assert len(compact.stdout.splitlines()) <= 12
+    assert "old_done_0" not in compact.stdout
+    assert "다시 출력" in compact.stdout.splitlines()[-1]
+
+    full = subprocess.run(
+        [str(status_script), "-a"], env=test_env["env"], capture_output=True, text=True
+    )
+    assert full.returncode == 0
+    assert len(full.stdout.splitlines()) > 12
+    assert "old_done_0" in full.stdout
+
+
+def test_quota_error_line_ignores_echoed_prompt_but_matches_cli_error(test_env: dict):
+    """Prompt/suffix quota wording must not create a lock; CLI errors still do."""
+    suffix_line = "Quota/permission/license error → `FAILED` immediately"
+    test_env["suffix_file"].write_text(suffix_line + "\n", encoding="utf-8")
+    log = test_env["tmp_path"] / "codex.log"
+    log.write_text(
+        suffix_line + "\n- stream error: rate limit exceeded\n> RESOURCE_EXHAUSTED\n",
+        encoding="utf-8",
+    )
+    library = SCRIPTS_DIR / "th-watch-lib.sh"
+    command = f'source "{library}"; quota_error_line "{log}"'
+    res = subprocess.run(
+        ["bash", "-c", command], env=test_env["env"], capture_output=True, text=True
+    )
+    assert res.returncode == 0
+    assert res.stdout == ""
+
+    log.write_text("stream error: rate limit exceeded\n", encoding="utf-8")
+    res = subprocess.run(
+        ["bash", "-c", command], env=test_env["env"], capture_output=True, text=True
+    )
+    assert res.returncode == 0
+    assert "rate limit exceeded" in res.stdout
 
 
 def test_th_launch_claude_worker(test_env: dict):
@@ -977,7 +1041,7 @@ def test_th_status_shows_verify_column(test_env: dict):
 
     status_script = SCRIPTS_DIR / "th-status.sh"
     res = subprocess.run(
-        [str(status_script)], env=test_env["env"], capture_output=True, text=True
+        [str(status_script), "-a"], env=test_env["env"], capture_output=True, text=True
     )
     assert res.returncode == 0
     assert "검수" in res.stdout

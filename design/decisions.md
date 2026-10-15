@@ -386,6 +386,27 @@ protocol backend 자동 교체 금지는 바꾸지 않는다.
 
 **결과.** 기본 agy 요약은 사건마다 한 번이며 flock으로 동시 한 개만 실행한다. 코디네이터는 workers.md를 보고 FAIL/WARN이나 이상이 있을 때만 원본을 연다. TH-D26의 inbox·알림·깨우기는 유지하되 데몬의 검수는 비동기로 완료되어 최초 알림에서 `대기`일 수 있다. ths는 새 검수 결과가 있는 작업을 VERIFIED/VERIFY_FAILED로 표시한다. TH-D2/TH-D3의 세션·정상 반환 계약과 SDK/Protocol API는 유지한다.
 
+## TH-D31. `ths` 기본 조회를 짧게 하고 프롬프트 에코의 쿼터 오탐을 막는다
+
+**결정.** `scripts/th-status.sh`의 기본 조회는 실행 중 작업과 최근 24시간 안의
+실패·검수 실패만 최대 10줄로 표시하고, 전체 표는 명시적 `-a`에서만 보인다. `-w`는
+별도 터미널 패널을 위한 반복 화면 갱신이다. 기본·전체 조회 끝에는 표를 에이전트가
+재출력하거나 요약하지 말라는 안내를 붙인다. `th-watch-lib.sh::quota_error_line`은
+실제 CLI 오류 형식만 잠금 원인으로 인식하고 worker prompt/suffix와 마크다운 지시문에
+에코된 한도 문구는 무시한다. 쿼터 사건은 비종단 사건이므로 이후의 DONE/FAILED 감시는
+계속한다.
+
+**맥락.** 사용자는 이미 Orca 터미널에서 `ths` 표를 볼 수 있는데, 대화창 `! ths`의
+긴 표가 모델 맥락으로 다시 들어가 매 턴 토큰을 늘렸다. 또한 worker가 받은 지시문 속
+`usage limit reached`, `rate limit exceeded`, `FAILED` 같은 표현이 `codex.log`에
+에코되어 실제 한도 오류 없이 `quota_lock.codex`를 만들었다.
+
+**결과.** 상태 확인의 정상 경로는 한 줄 요약 또는 매우 짧은 목록이며, 코디네이터는
+이상이 없으면 `확인했습니다.`만 응답한다. 기존 전체 표 형식과 인자 호환성은 `-a`로
+유지한다. 실제 `ERROR: ... usage limit reached`, `stream error: ... rate limit
+exceeded`, `RESOURCE_EXHAUSTED` 등은 여전히 전역 잠금과 알림을 만든다. 완료/실패
+소비자 계약(TH-D3)은 바뀌지 않는다.
+
 ## TH-D33. 이미지 모델 입력은 사용자 명시 요청이 있는 현재 턴으로 제한한다
 
 **결정.** 이미지 파일(`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.bmp`, `.tif`,

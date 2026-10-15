@@ -2,8 +2,34 @@
 # th-status: 요청받았을 때만 등록 작업을 한 번 요약 표로 출력한다.
 set -u
 
-script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-exec python3 - "$script_dir/../src/team_harness/worker_digest.py" "$@" << 'EOF'
+script_dir=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
+
+usage() {
+  cat <<'EOF'
+사용법: th-status.sh [-a|--all] [-w|--watch [초]] [-h|--help]
+  기본: 실행 중 및 최근 24시간 실패·검수실패만 짧게 표시
+  -a, --all       전체 상태 표 표시
+  -w, --watch [초] 기본 짧은 출력을 반복 갱신 (기본 10초)
+EOF
+}
+
+all_mode=0
+watch_seconds=""
+while (($#)); do
+  case $1 in
+    -a|--all) all_mode=1 ;;
+    -w|--watch)
+      watch_seconds=10
+      if [[ ${2:-} =~ ^[1-9][0-9]*$ ]]; then watch_seconds=$2; shift; fi
+      ;;
+    -h|--help) usage; exit 0 ;;
+    *) : ;; # Preserve the former behavior: unrecognized arguments were ignored.
+  esac
+  shift
+done
+
+render() {
+  python3 - "$script_dir/../src/team_harness/worker_digest.py" "$all_mode" "${1:-0}" << 'EOF'
 import sys, os, time, subprocess, re, unicodedata
 from datetime import datetime
 from pathlib import Path
@@ -12,6 +38,14 @@ import importlib.util
 spec = importlib.util.spec_from_file_location("worker_digest", sys.argv[1])
 observer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(observer)
+
+all_mode = len(sys.argv) > 2 and sys.argv[2] == "1"
+watch_mode = len(sys.argv) > 3 and sys.argv[3] == "1"
+NOTICE = "[ths] 사용자 확인용 화면 — 에이전트는 이 표를 다시 출력·요약하지 말 것(이상 있을 때만 한 줄)."
+
+def print_notice():
+    if not watch_mode:
+        print(NOTICE)
 
 def char_width(c):
     return 2 if unicodedata.east_asian_width(c) in ('W', 'F') else 1
@@ -332,10 +366,14 @@ watch_dir = os.environ.get("TH_WATCH_DIR", os.path.expanduser("~/.team-harness/w
 registry = os.path.join(watch_dir, "tasks.txt")
 
 now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-print(now_str)
 
 if not os.path.isfile(registry):
-    print("등록 작업 없음")
+    if all_mode:
+        print(now_str)
+        print("등록 작업 없음")
+    else:
+        print("실행 0 · 실패(24h) 0 · 완료(24h) 0 · 숨김 0")
+    print_notice()
     sys.exit(0)
 
 try:
@@ -346,7 +384,12 @@ except Exception:
 
 valid_tasks = [t for t in raw_tasks if os.path.isdir(t)]
 if not valid_tasks:
-    print("등록 작업 없음")
+    if all_mode:
+        print(now_str)
+        print("등록 작업 없음")
+    else:
+        print("실행 0 · 실패(24h) 0 · 완료(24h) 0 · 숨김 0")
+    print_notice()
     sys.exit(0)
 
 def get_verify_status(task_dir):
@@ -412,7 +455,22 @@ for task in valid_tasks:
     prog = get_progress(task)
     eta = estimate_eta(task, state, now_ts)
     
-    rows.append([task_name, title, state, v_status, age_str, eta, prog])
+    rows.append([task_name, title, state, v_status, age_str, eta, prog, latest_ts])
+
+if not all_mode:
+    recent_cutoff = now_ts - 24 * 60 * 60
+    running = [r for r in rows if r[2] not in ("완료", "실패")]
+    recent_failed = [r for r in rows if r[7] is not None and r[7] >= recent_cutoff and (r[2] == "실패" or r[3] in ("실패", "VERIFY_FAILED"))]
+    recent_done = [r for r in rows if r[7] is not None and r[7] >= recent_cutoff and r[2] == "완료"]
+    selected = []
+    for row in running + recent_failed:
+        if row not in selected:
+            selected.append(row)
+    print(f"실행 {len(running)} · 실패(24h) {len(recent_failed)} · 완료(24h) {len(recent_done)} · 숨김 {len(rows) - len(selected)}")
+    for task_name, title, state, verify, age, eta, progress, _ in selected[:10]:
+        print(f"{task_name} | {state} | {age} | {progress[:40]}")
+    print_notice()
+    sys.exit(0)
 
 raw_w = [max(str_width(headers[i]), max((str_width(r[i]) for r in rows), default=0)) for i in range(7)]
 
@@ -453,5 +511,17 @@ sep = "|-" + "-|-".join("-" * w for w in widths) + "-|"
 print(render_row(headers))
 print(sep)
 for r in rows:
-    print(render_row(r))
+    print(render_row(r[:7]))
+print_notice()
 EOF
+}
+
+if [[ -n $watch_seconds ]]; then
+  while true; do
+    clear
+    render 1
+    sleep "$watch_seconds"
+  done
+else
+  render
+fi
