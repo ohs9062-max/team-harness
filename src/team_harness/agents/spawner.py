@@ -107,7 +107,17 @@ async def spawn(
     template_env = build_template_env(
         template=template, effective_model=effective_model
     )
-    merged_env = {**os.environ, **provider_env, **template_env, **(extra_env or {})}
+    # TH-D33: workers never inherit an ambient image-read permission.  Only a
+    # coordinator that received an explicit user request may pass the opt-in
+    # through this per-spawn envelope; every other worker gets an explicit 0.
+    image_permission = "1" if (extra_env or {}).get("TH_ALLOW_IMAGES") == "1" else "0"
+    merged_env = {
+        **os.environ,
+        **provider_env,
+        **template_env,
+        **(extra_env or {}),
+        "TH_ALLOW_IMAGES": image_permission,
+    }
     if extra_env is None or INHERITED_CALLER_CONTEXT_ENV not in extra_env:
         # The environment belongs to the harness coordinator process. A stale
         # inherited envelope would describe that coordinator's assignment, not

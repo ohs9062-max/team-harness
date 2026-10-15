@@ -385,3 +385,32 @@ protocol backend 자동 교체 금지는 바꾸지 않는다.
 **맥락.** 코디네이터가 모든 워커 로그와 보고서를 직접 읽으면 비용이 늘고 주장한 수치를 사실로 오인할 수 있다. 예를 들어 보고서의 0.812가 results.json에 없으면 스크립트가 WARN을 기록하고 LLM이 이를 누락해도 동일한 WARN 줄이 workers.md에 남는다. 프로젝트별 데이터 규칙은 verify_hooks.py에서 검사하며 하네스에 하드코딩하지 않는다. 상세 메커니즘은 [worker digest 설계](designs/worker_digest.md)에 둔다.
 
 **결과.** 기본 agy 요약은 사건마다 한 번이며 flock으로 동시 한 개만 실행한다. 코디네이터는 workers.md를 보고 FAIL/WARN이나 이상이 있을 때만 원본을 연다. TH-D26의 inbox·알림·깨우기는 유지하되 데몬의 검수는 비동기로 완료되어 최초 알림에서 `대기`일 수 있다. ths는 새 검수 결과가 있는 작업을 VERIFIED/VERIFY_FAILED로 표시한다. TH-D2/TH-D3의 세션·정상 반환 계약과 SDK/Protocol API는 유지한다.
+
+## TH-D33. 이미지 모델 입력은 사용자 명시 요청이 있는 현재 턴으로 제한한다
+
+**결정.** 이미지 파일(`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.bmp`, `.tif`,
+`.tiff`)은 코디네이터와 모든 worker에서 기본 차단한다. Claude Code에는 전역
+`~/.claude/settings.json`의 `UserPromptSubmit`·`PreToolUse(Read/Bash)`·`Stop` 훅을
+설치한다. 사용자의 메시지를 휴리스틱으로 검사해 명시 요청이면 세션별 허락 파일을 만들고,
+경로가 있으면 그 경로만, 없으면 아직 읽지 않은 이미지 최대 다섯 장만 한 턴에 허용한다.
+`Stop`은 허락을 삭제한다. 읽은 경로는 별도 세션 상태에 남겨 압축·resume 뒤에는 새 명시
+요청 없이는 다시 통과하지 못하게 한다. `scripts/th-launch.sh`와 공통
+`agents/spawner.py`는 기본 `TH_ALLOW_IMAGES=0`을 명시해 Codex·agy·Claude worker가 부모
+환경의 허락을 우연히 상속하지 못하게 하며, 코디네이터가 현재 사용자 요청을 확인한 경우에만
+per-spawn `TH_ALLOW_IMAGES=1`을 전달할 수 있다. `th run`/`th repl` 및 protocol MODE
+A/B/C는 모두 이 공통 spawner를 지나므로 같은 기본값을 받는다.
+
+**맥락.** 이미지 한 장은 약 1천 토큰으로 대화 맥락에 남고, 이후 모든 호출에 다시 실릴 수
+있다. 2026-10-14에는 누적 이미지 때문에 토큰 예산이 소진됐다. Claude는 hooks가 실제
+`Read`/일부 바이트 읽기 Bash 호출을 막을 수 있지만, 확인한 Codex CLI와 agy CLI 도움말에는
+`view_image` 또는 동등한 이미지 도구만 끄는 검증된 옵션이 없었다. 따라서 그 두 CLI에는
+환경 기본값과 worker 규칙을 함께 적용한다. 메시지에서 "이미지/사진/스크린샷"과
+"읽어/봐/확인" 같은 표현을 찾는 것은 자연어 허락을 기계적으로 전달하기 위한 휴리스틱이며,
+모든 언어 표현을 완전하게 판별한다고 주장하지 않는다.
+
+**결과.** 이미지가 필요하지 않은 작업은 이미지 바이트를 모델에 넣지 않고 CSV·통계·텍스트
+메타데이터로 판단한다. 허락 없는 worker는 `FAILED`에 이유를 기록해 코디네이터에 넘긴다.
+글로벌 Claude 설정은 설치 스크립트가 기존 hooks를 보존하고 중복 없이 합치며,
+`settings.json.bak_20261015d`를 한 번 만든다. Codex·agy의 CLI 자체 강제 차단 한계는
+worker 규칙으로 보완하며, 향후 해당 CLI가 공식 tool-disable 옵션을 제공하면 그 옵션을
+추가할 수 있다.

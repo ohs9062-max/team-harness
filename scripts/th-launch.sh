@@ -126,15 +126,23 @@ $(<"$suffix")
 - 결과 폴더: $task_dir. 분리 실행한 본 작업의 PID를 $task_dir/job.pid에 기록할 것. 끝나면 DONE, 실패 시 FAILED+이유를 남길 것."
 cd "$task_dir"
 
+# TH-D33: an ambient shell permission must never leak into a worker.  The
+# coordinator may set this exact value only after the current user turn has
+# explicitly requested image reading; otherwise every worker starts blocked.
+image_env=("TH_ALLOW_IMAGES=0")
+if [[ ${TH_ALLOW_IMAGES:-0} == 1 ]]; then
+  image_env=("TH_ALLOW_IMAGES=1")
+fi
+
 if [[ "$worker_type" == "codex" ]]; then
-  setsid nohup codex exec -m "$model" -c "model_reasoning_effort=$effort" -c "mcp_servers={}" --dangerously-bypass-approvals-and-sandbox -C "$worktree" "$@" "$prompt" < /dev/null > codex.log 2>&1 &
+  env "${image_env[@]}" setsid nohup codex exec -m "$model" -c "model_reasoning_effort=$effort" -c "mcp_servers={}" --dangerously-bypass-approvals-and-sandbox -C "$worktree" "$@" "$prompt" < /dev/null > codex.log 2>&1 &
   printf '%s\n' "$!" > "$task_dir/worker.pid"
 elif [[ "$worker_type" == "agy" ]]; then
   add_dir_args=("--add-dir" "$task_dir")
   if [[ -n "$worktree" && "$worktree" != "$task_dir" && -d "$worktree" ]]; then
     add_dir_args+=("--add-dir" "$worktree")
   fi
-  setsid nohup agy --dangerously-skip-permissions --model "$model" "${add_dir_args[@]}" "$@" --print="$prompt" < /dev/null > agy.log 2>&1 &
+  env "${image_env[@]}" setsid nohup agy --dangerously-skip-permissions --model "$model" "${add_dir_args[@]}" "$@" --print="$prompt" < /dev/null > agy.log 2>&1 &
   init_pid=$!
 
   # agy는 실행 직후 별도 PID로 재부모화될 수 있다. 최초 nohup PID는
@@ -166,7 +174,7 @@ elif [[ "$worker_type" == "agy" ]]; then
     printf '%s\n' "$init_pid" > "$task_dir/worker.pid"
   fi
 elif [[ "$worker_type" == "claude" ]]; then
-  setsid nohup claude -p --dangerously-skip-permissions --model "$model" --strict-mcp-config "$@" "$prompt" < /dev/null > claude.log 2>&1 &
+  env "${image_env[@]}" setsid nohup claude -p --dangerously-skip-permissions --model "$model" --strict-mcp-config "$@" "$prompt" < /dev/null > claude.log 2>&1 &
   printf '%s\n' "$!" > "$task_dir/worker.pid"
 fi
 

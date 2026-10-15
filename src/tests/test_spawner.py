@@ -59,6 +59,48 @@ def _parse_env_dump(env_dump_path) -> dict[str, str]:
 
 
 @pytest.mark.asyncio
+async def test_spawn_blocks_ambient_image_permission_unless_explicitly_forwarded(
+    tmp_path, monkeypatch
+):
+    fake_worker = tmp_path / "fake-worker"
+    fake_worker.write_text("""#!/bin/sh
+printf '%s' "$TH_ALLOW_IMAGES" > "$IMAGE_PERMISSION_DUMP"
+""")
+    fake_worker.chmod(0o755)
+    dump = tmp_path / "permission.txt"
+    config = Config(
+        agent_templates={
+            "codex": AgentTemplate(command=(str(fake_worker),), model_flag=None)
+        }
+    )
+    monkeypatch.setenv("TH_ALLOW_IMAGES", "1")
+
+    blocked = await spawn(
+        agent_id="blocked",
+        agent_type="codex",
+        prompt="hello",
+        cwd=tmp_path,
+        config=config,
+        log_dir=tmp_path / "logs",
+        extra_env={"IMAGE_PERMISSION_DUMP": str(dump)},
+    )
+    await asyncio.wait_for(blocked.proc.wait(), 2)
+    assert dump.read_text(encoding="utf-8") == "0"
+
+    allowed = await spawn(
+        agent_id="allowed",
+        agent_type="codex",
+        prompt="hello",
+        cwd=tmp_path,
+        config=config,
+        log_dir=tmp_path / "logs",
+        extra_env={"IMAGE_PERMISSION_DUMP": str(dump), "TH_ALLOW_IMAGES": "1"},
+    )
+    await asyncio.wait_for(allowed.proc.wait(), 2)
+    assert dump.read_text(encoding="utf-8") == "1"
+
+
+@pytest.mark.asyncio
 async def test_spawn_default_model_injected_as_model_flag(tmp_path):
     """A template with `default_model` gets the flag appended automatically
     when the caller does not pass an explicit `model=`."""

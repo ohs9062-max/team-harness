@@ -189,6 +189,44 @@ def test_th_launch_passes_terra_model_and_effort_to_codex(
     ]
 
 
+@pytest.mark.parametrize("worker_type", ["codex", "claude"])
+def test_th_launch_sets_image_permission_to_blocked_by_default(
+    test_env: dict, worker_type: str
+):
+    task_dir = _create_task_dir(test_env["tmp_path"], f"task_image_{worker_type}")
+    permission_dump = test_env["tmp_path"] / f"{worker_type}-image-permission.txt"
+    stub = test_env["bin_dir"] / worker_type
+    stub.write_text(
+        f'#!/usr/bin/env bash\nprintf "%s" "$TH_ALLOW_IMAGES" > "{permission_dump}"\n',
+        encoding="utf-8",
+    )
+    stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+
+    result = subprocess.run(
+        [
+            str(SCRIPTS_DIR / "th-launch.sh"),
+            str(task_dir),
+            worker_type,
+            "test-model",
+            "medium",
+            str(task_dir),
+        ],
+        env=test_env["env"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    deadline = time.time() + 3
+    while not permission_dump.exists() and time.time() < deadline:
+        time.sleep(0.05)
+    assert permission_dump.read_text(encoding="utf-8") == "0"
+
+
+def test_th_launch_uses_the_image_permission_envelope_for_all_worker_types() -> None:
+    source = (SCRIPTS_DIR / "th-launch.sh").read_text(encoding="utf-8")
+    assert source.count('env "${image_env[@]}" setsid nohup') == 3
+
+
 def test_th_watch_owner_filtering(test_env: dict):
     """ops-07: Verify th-watch filters events by workspace owner (.th_owner)."""
     task_my = _create_task_dir(test_env["tmp_path"], "task_my")

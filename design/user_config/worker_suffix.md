@@ -17,3 +17,9 @@
   (`orca-harness-protocol`, `orchestration`). Read only the sections of project
   rule files (AGENTS.md etc.) that the task needs; everything you read is re-sent
   on every later step.
+- **Image guard (TH-D33):** Do not read image files (`.png`, `.jpg`, `.jpeg`,
+  `.gif`, `.webp`, `.bmp`, `.tif`, `.tiff`) or place their bytes in model input.
+  Make judgments from numbers (CSV, statistics, metadata) instead. If an image
+  is indispensable, write the reason in `FAILED` and hand it to the coordinator.
+  `TH_ALLOW_IMAGES=1` is reserved for a coordinator to set after the user has
+  explicitly requested image reading in the current turn; never set it yourself.
