@@ -52,6 +52,7 @@ async def spawn(
     stderr_path: Path | None = None,
     mode: str = "fresh",
     resume_session_id: str | None = None,
+    generated_uuid: str | None = None,
 ) -> SpawnResult:
     """Launch one worker in its own process group with durable output files.
 
@@ -60,9 +61,11 @@ async def spawn(
     """
 
     template = resolve_template(agent_type=agent_type, config=config)
-    generated_uuid: str | None = None
     if template_uses_generated_uuid(template=template):
-        generated_uuid = str(uuid.uuid4())
+        if generated_uuid is None:
+            generated_uuid = str(uuid.uuid4())
+    else:
+        generated_uuid = None
 
     # Effective model: explicit spawn argument wins over the template's
     # declared default. Used for BOTH `--model` flag injection and for

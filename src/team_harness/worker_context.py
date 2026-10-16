@@ -437,6 +437,23 @@ def decide(
     )
 
 
+def dispatch(
+    *, workspace: str | Path, request: ContextRequest, settings: WorkerContextSettings
+) -> tuple[ContextDecision, "WorkerContextRegistry"]:
+    """Make the single dispatch decision used by every execution path.
+
+    Callers intentionally receive the registry they must use for the matching
+    spawn/finalization.  This keeps a shell, direct run, and protocol lane on
+    the same locked file and prevents each path from inventing resume rules.
+    """
+
+    registry = WorkerContextRegistry(registry_path_for_workspace(workspace))
+    if not settings.enabled or settings.agent_disabled(request.agent_type):
+        return decide(request, None, settings), registry
+    snapshot: dict[str, Any] = {"candidates": registry.sessions()}
+    return decide(request, snapshot, settings), registry
+
+
 def _new_registry(workspace_id: str) -> dict[str, object]:
     return {
         "schema_version": REGISTRY_SCHEMA_VERSION,
@@ -524,45 +541,66 @@ class WorkerContextRegistry:
                 ),
                 None,
             )
-            generation = int(existing.get("generation", 0)) + 1 if existing else 1
+            is_pending = bool(record.get("pending_launch", False))
+            if existing is not None and existing.get("state") == "active":
+                if not existing.get("pending_launch") or is_pending:
+                    raise RegistryConflictError(
+                        f"task_key {record['task_key']!r} already has an active worker"
+                    )
+                generation = int(existing.get("generation", 1))
+            else:
+                generation = int(existing.get("generation", 0)) + 1 if existing else 1
+            prior = existing or {}
+            default_status = prior.get("measurement_status", "unknown")
+            if default_status not in MEASUREMENT_STATUSES:
+                default_status = "unknown"
             entry = {
                 "schema_version": REGISTRY_SCHEMA_VERSION,
                 "workspace_id": data.get("workspace_id", self.workspace_id),
                 "task_key": record["task_key"],
                 "session_id": record["session_id"],
                 "agent_type": record["agent_type"],
-                "model": record.get("model"),
+                "model": record.get("model", prior.get("model")),
                 "state": "active",
                 "pid": record.get("pid"),
                 "pgid": record.get("pgid"),
                 "process_starttime": record.get("process_starttime"),
-                "run_id": record.get("run_id"),
-                "lane": record.get("lane"),
-                "stage": record.get("stage"),
-                "worktree": record.get("worktree"),
-                "branch": record.get("branch"),
-                "input_tokens": record.get("input_tokens"),
-                "measurement_status": record.get("measurement_status", "unknown"),
-                "source": record.get("source"),
-                "source_offset": record.get("source_offset"),
-                "call_id": record.get("call_id"),
-                "measured_at": record.get("measured_at"),
-                "created_at": record.get("created_at", now),
+                "run_id": record.get("run_id", prior.get("run_id")),
+                "lane": record.get("lane", prior.get("lane")),
+                "stage": record.get("stage", prior.get("stage")),
+                "worktree": record.get("worktree", prior.get("worktree")),
+                "branch": record.get("branch", prior.get("branch")),
+                "input_tokens": record.get("input_tokens", prior.get("input_tokens")),
+                "measurement_status": record.get("measurement_status", default_status),
+                "source": record.get("source", prior.get("source")),
+                "source_offset": record.get(
+                    "source_offset", prior.get("source_offset")
+                ),
+                "call_id": record.get("call_id", prior.get("call_id")),
+                "measured_at": record.get("measured_at", prior.get("measured_at")),
+                "created_at": record.get("created_at", prior.get("created_at", now)),
                 "parked_at": None,
                 "last_used_at": now,
                 "retired_at": None,
-                "worklog_path": record.get("worklog_path"),
-                "experiment_path": record.get("experiment_path"),
-                "checkpoint": record.get("checkpoint"),
-                "reason": record.get("reason"),
-                "generation": generation,
-                "pending_launch": bool(record.get("pending_launch", False)),
-                "long_running_wait_requested": bool(
-                    record.get("long_running_wait_requested", False)
+                "worklog_path": record.get("worklog_path", prior.get("worklog_path")),
+                "experiment_path": record.get(
+                    "experiment_path", prior.get("experiment_path")
                 ),
-                "job_pid": record.get("job_pid"),
-                "job_process_starttime": record.get("job_process_starttime"),
-                "job_log_path": record.get("job_log_path"),
+                "checkpoint": record.get("checkpoint", prior.get("checkpoint")),
+                "reason": record.get("reason", prior.get("reason")),
+                "generation": generation,
+                "pending_launch": is_pending,
+                "long_running_wait_requested": bool(
+                    record.get(
+                        "long_running_wait_requested",
+                        prior.get("long_running_wait_requested", False),
+                    )
+                ),
+                "job_pid": record.get("job_pid", prior.get("job_pid")),
+                "job_process_starttime": record.get(
+                    "job_process_starttime", prior.get("job_process_starttime")
+                ),
+                "job_log_path": record.get("job_log_path", prior.get("job_log_path")),
             }
             if entry["measurement_status"] not in MEASUREMENT_STATUSES:
                 raise WorkerContextError("invalid measurement_status")
@@ -570,6 +608,41 @@ class WorkerContextRegistry:
                 sessions[sessions.index(existing)] = entry
             else:
                 sessions.append(entry)
+            return dict(entry)
+
+    def restore_after_failed_launch(
+        self, session_id: str, prior_entry: dict[str, Any] | None
+    ) -> None:
+        """Restore registry state when process creation fails after pre-registration."""
+
+        with self._locked() as data:
+            sessions = data["sessions"]
+            assert isinstance(sessions, list)
+            for index, item in enumerate(sessions):
+                if isinstance(item, dict) and item.get("session_id") == session_id:
+                    if prior_entry is not None:
+                        sessions[index] = dict(prior_entry)
+                    else:
+                        del sessions[index]
+                    break
+
+    def rekey_active_session(
+        self, session_id: str, new_session_id: str
+    ) -> dict[str, Any] | None:
+        """Update an active entry's session id once the provider stream emits it."""
+
+        if not new_session_id or session_id == new_session_id:
+            return None
+        with self._locked() as data:
+            sessions = data["sessions"]
+            assert isinstance(sessions, list)
+            try:
+                entry = self._find(sessions, session_id)
+            except WorkerContextError:
+                return None
+            if entry.get("state") != "active":
+                return None
+            entry["session_id"] = new_session_id
             return dict(entry)
 
     def _find(self, sessions: list[object], session_id: str) -> dict[str, Any]:
@@ -592,6 +665,50 @@ class WorkerContextRegistry:
                 process_starttime=None,
                 parked_at=utc_timestamp(),
                 last_used_at=utc_timestamp(),
+                reason=reason or entry.get("reason"),
+                pending_launch=False,
+            )
+            return dict(entry)
+
+    def update_measurement_and_park(
+        self,
+        session_id: str,
+        measurement: ContextMeasurement,
+        *,
+        resolved_session_id: str | None = None,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        """Persist the last verified current-context reading before parking."""
+
+        with self._locked() as data:
+            sessions = data["sessions"]
+            assert isinstance(sessions, list)
+            target_id = (
+                resolved_session_id
+                if isinstance(resolved_session_id, str) and resolved_session_id
+                else session_id
+            )
+            try:
+                entry = self._find(sessions, session_id)
+            except WorkerContextError:
+                entry = self._find(sessions, target_id)
+            if entry.get("state") != "active":
+                raise WorkerContextError("only active sessions may be parked")
+            now = utc_timestamp()
+            entry.update(
+                session_id=target_id,
+                input_tokens=measurement.input_tokens,
+                measurement_status=measurement.measurement_status,
+                source=measurement.source,
+                source_offset=measurement.source_offset,
+                call_id=measurement.call_id,
+                measured_at=measurement.measured_at,
+                state="parked",
+                pid=None,
+                pgid=None,
+                process_starttime=None,
+                parked_at=now,
+                last_used_at=now,
                 reason=reason or entry.get("reason"),
                 pending_launch=False,
             )

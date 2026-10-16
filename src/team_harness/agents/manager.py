@@ -8,6 +8,12 @@ import signal
 from team_harness.agents.process_identity import group_members
 from team_harness.agents.process_identity import ProcessProbeError
 from team_harness.agents.process_identity import signal_group
+from team_harness.agents.session_capture import _read_prefix_and_tail
+from team_harness.agents.session_capture import extract_session_id
+from team_harness.agents.template import AgentTemplate
+from team_harness.worker_context import measure_agent_context
+from team_harness.worker_context import WorkerContextError
+from team_harness.worker_context import WorkerContextRegistry
 
 
 class FinalizationTimeoutError(TimeoutError):
@@ -50,6 +56,12 @@ class AgentState:
     # shutdown kill the whole worker subtree, not just the leader (TH-D5).
     # None for test doubles / externally-constructed states → leader-only kill.
     pgid: int | None = None
+    template: AgentTemplate | None = None
+    pre_generated_uuid: str | None = None
+    context_registry_path: Path | None = None
+    context_session_id: str | None = None
+    context_parked: bool = False
+    codex_sessions_root: Path | None = None
 
 
 class AgentManager:
@@ -70,6 +82,50 @@ class AgentManager:
 
     def running_count(self) -> int:
         return sum(1 for state in self._agents.values() if state.status == "running")
+
+    def finalize_worker_context(self, state: AgentState) -> None:
+        """Resolve provider session id and park active worker-context state once."""
+
+        if state.session_id is None and state.template is not None:
+            try:
+                stdout_bytes = _read_prefix_and_tail(state.stdout_log, 65536)
+            except OSError:
+                stdout_bytes = b""
+            if stdout_bytes:
+                captured = extract_session_id(
+                    state.template, stdout_bytes, state.pre_generated_uuid
+                )
+                if captured is not None:
+                    state.session_id = captured
+        if (
+            state.context_registry_path is None
+            or state.context_session_id is None
+            or state.context_parked
+        ):
+            return
+        effective_session_id = state.session_id or state.context_session_id
+        measurement = measure_agent_context(
+            agent_type=state.agent_type,
+            session_id=effective_session_id,
+            sessions_root=state.codex_sessions_root,
+        )
+        reason = (
+            "killed"
+            if state.status == "killed"
+            else ("failed" if state.status == "failed" else None)
+        )
+        registry = WorkerContextRegistry(state.context_registry_path)
+        try:
+            registry.update_measurement_and_park(
+                state.context_session_id,
+                measurement,
+                resolved_session_id=state.session_id,
+                reason=reason,
+            )
+        except WorkerContextError:
+            return
+        state.context_session_id = effective_session_id
+        state.context_parked = True
 
     def track_finalization_task(self, task: asyncio.Task[None]) -> None:
         """Keep worker watcher/session-capture tasks alive through run finalization."""
@@ -140,6 +196,9 @@ class AgentManager:
                 )
             )
             break
+        for state in self._agents.values():
+            if state.exit_code is not None or state.status == "killed":
+                self.finalize_worker_context(state)
         return tuple(failures)
 
     def poll_exit_codes(self) -> None:
@@ -152,6 +211,7 @@ class AgentManager:
             state.finished_at = datetime.now(timezone.utc)
             if state.status == "running":
                 state.status = "done" if state.exit_code == 0 else "failed"
+            self.finalize_worker_context(state)
 
     async def wait_one(self, agent_id: str) -> int:
         state = self.get(agent_id)
@@ -160,6 +220,7 @@ class AgentManager:
         state.finished_at = datetime.now(timezone.utc)
         if state.status != "killed":
             state.status = "done" if exit_code == 0 else "failed"
+        self.finalize_worker_context(state)
         return exit_code
 
     async def wait_for(self, agent_ids: list[str] | None = None) -> dict[str, int]:
@@ -185,6 +246,7 @@ class AgentManager:
             pass
         state.status = "killed"
         state.finished_at = datetime.now(timezone.utc)
+        self.finalize_worker_context(state)
 
     def kill_all(self) -> None:
         """Terminate all live worker execution groups registered in the manager."""

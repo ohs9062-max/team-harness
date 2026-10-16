@@ -33,6 +33,10 @@ from team_harness.tracking.models import AgentRecord
 from team_harness.tracking.models import RateLimitedFamilyRecord
 from team_harness.tracking.persistence import write_json_atomic
 from team_harness.tracking.worker_sessions import resume_info_for_agent_type
+from team_harness.worker_context import ContextRequest
+from team_harness.worker_context import dispatch as dispatch_worker_context
+from team_harness.worker_context import RegistryConflictError
+from team_harness.worker_context import WorkerContextRegistry
 
 if TYPE_CHECKING:
     from team_harness.agents.manager import AgentManager
@@ -73,6 +77,8 @@ SPAWN_AGENT_KEYS = {
     "delegated_task_id",
     "expected_outputs",
     "state_responsibility",
+    "task_key",
+    "follow_up",
 }
 
 _READ_NEW_TRUNCATION_TEMPLATE = (
@@ -1173,6 +1179,16 @@ def spawn_agent_schema(
                         "minLength": 1,
                         "description": "Statement of state updates the delegate is accountable for.",
                     },
+                    "task_key": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Immutable worker-context key; enables shared rollover policy.",
+                    },
+                    "follow_up": {
+                        "type": "string",
+                        "enum": ["short", "normal"],
+                        "description": "Only same-key short follow-ups may resume a parked session.",
+                    },
                 },
                 "required": ["type", "prompt", "cwd"],
                 "additionalProperties": False,
@@ -1187,6 +1203,150 @@ def _resolve_spawn_cwd(raw_cwd: str, config: "Config") -> str:
         return str(path.resolve())
     base_cwd = Path(getattr(config, "cwd", ".")).expanduser().resolve()
     return str((base_cwd / path).resolve())
+
+
+def _prepare_worker_context_dispatch(
+    *,
+    kwargs: Mapping[str, object],
+    agent_type: str,
+    cwd: str,
+    model: str | None,
+    run_id: str,
+    run_dir: Path,
+    config: "Config",
+    spawn_mode: str,
+    resume_session_id: str | None,
+) -> tuple[
+    str,
+    str | None,
+    str | None,
+    WorkerContextRegistry | None,
+    str | None,
+    dict[str, object] | None,
+    str | None,
+]:
+    """Dispatch and pre-register opt-in worker-context state before spawning."""
+
+    raw_task_key = kwargs.get("task_key")
+    raw_follow_up = kwargs.get("follow_up")
+    if raw_task_key is None:
+        if raw_follow_up is not None and str(raw_follow_up) not in {"short", "normal"}:
+            return (
+                spawn_mode,
+                resume_session_id,
+                None,
+                None,
+                None,
+                None,
+                "ERROR: worker context: follow_up must be 'short' or 'normal'",
+            )
+        return spawn_mode, resume_session_id, None, None, None, None, None
+    task_key = str(raw_task_key).strip()
+    follow_up = str(raw_follow_up) if raw_follow_up is not None else "normal"
+    try:
+        context_decision, context_registry = dispatch_worker_context(
+            workspace=cwd,
+            request=ContextRequest(
+                task_key=task_key, agent_type=agent_type, follow_up=follow_up
+            ),
+            settings=config.worker_context,
+        )
+    except ValueError as exc:
+        return (
+            spawn_mode,
+            resume_session_id,
+            None,
+            None,
+            None,
+            None,
+            f"ERROR: worker context: {exc}",
+        )
+    if context_decision.reason == "worker_context_disabled":
+        return spawn_mode, resume_session_id, None, None, None, None, None
+    if context_decision.action == "resume":
+        spawn_mode = "resume"
+        resume_session_id = context_decision.session_id
+    elif (
+        kwargs.get("resume_from_agent_id") is None
+        and kwargs.get("resume_from_session_id") is None
+    ):
+        spawn_mode = "fresh"
+        resume_session_id = None
+    context_session_id = resume_session_id or str(uuid.uuid4())
+    prior_entry = next(
+        (
+            dict(item)
+            for item in context_registry.sessions()
+            if item.get("session_id") == context_session_id
+        ),
+        None,
+    )
+    try:
+        context_registry.register_active(
+            {
+                "task_key": task_key,
+                "session_id": context_session_id,
+                "agent_type": agent_type,
+                "model": model,
+                "run_id": run_id,
+                "worktree": cwd,
+                "worklog_path": str(run_dir / "WORKLOG.md"),
+                "pending_launch": True,
+            }
+        )
+    except RegistryConflictError as exc:
+        return (
+            spawn_mode,
+            resume_session_id,
+            None,
+            None,
+            None,
+            None,
+            f"ERROR: worker context: {exc}",
+        )
+    return (
+        spawn_mode,
+        resume_session_id,
+        task_key,
+        context_registry,
+        context_session_id,
+        prior_entry,
+        None,
+    )
+
+
+def _confirm_worker_context_spawn(
+    *,
+    context_registry: WorkerContextRegistry | None,
+    context_session_id: str | None,
+    task_key: str | None,
+    agent_type: str,
+    spawn_result: spawner.SpawnResult,
+    run_id: str,
+    cwd: str,
+    run_dir: Path,
+    config: "Config",
+) -> str | None:
+    """Confirm active registration with process identity and finalize retention."""
+
+    if context_registry is None or context_session_id is None or task_key is None:
+        return context_session_id
+    context_registry.register_active(
+        {
+            "task_key": task_key,
+            "session_id": context_session_id,
+            "agent_type": agent_type,
+            "model": spawn_result.effective_model,
+            "pid": spawn_result.pid,
+            "pgid": spawn_result.pgid,
+            "process_starttime": spawn_result.starttime,
+            "run_id": run_id,
+            "worktree": cwd,
+            "worklog_path": str(run_dir / "WORKLOG.md"),
+        }
+    )
+    context_registry.cleanup(config.worker_context)
+    return context_session_id
 
 
 async def spawn_agent(**kwargs: object) -> str:
@@ -1244,59 +1404,102 @@ async def spawn_agent(**kwargs: object) -> str:
     if resume_error is not None:
         return resume_error
 
+    run_dir = config.run_dir
+    if run_dir is None:
+        raise RuntimeError("config.run_dir must be set before spawning agents")
+
+    (
+        spawn_mode,
+        resume_session_id,
+        task_key,
+        context_registry,
+        context_session_id,
+        prior_context_entry,
+        context_error,
+    ) = _prepare_worker_context_dispatch(
+        kwargs=kwargs,
+        agent_type=agent_type,
+        cwd=cwd,
+        model=model,
+        run_id=run_log.run_id,
+        run_dir=run_dir,
+        config=config,
+        spawn_mode=spawn_mode,
+        resume_session_id=resume_session_id,
+    )
+    if context_error is not None:
+        return context_error
+
     current_depth = int(os.environ.get("TEAM_HARNESS_DEPTH", "0"))
     extra_env = {**(env or {}), "TEAM_HARNESS_DEPTH": str(current_depth + 1)}
     extra_env.pop(INHERITED_CALLER_CONTEXT_ENV, None)
     agent_id = "agent_" + uuid.uuid4().hex[:12]
-    run_dir = config.run_dir
-    if run_dir is None:
-        raise RuntimeError("config.run_dir must be set before spawning agents")
-    (
-        full_prompt,
-        assignment_path,
-        delegated_role,
-        delegated_task_id,
-        expected_outputs,
-        state_responsibility,
-    ) = _prepare_agent_assignment(
-        agent_id=agent_id,
-        prompt=prompt,
-        run_log=run_log,
-        config=config,
-        run_dir=run_dir,
-        session_output_dir=_session_output_dir,
-        caller_context=None,
-        kwargs=kwargs,
-    )
-    # Optional code graph (TH-D22): built once per cwd per run, hint first so
-    # the fixed text leads the prompt.
-    full_prompt, graph_env = await _context_graph.prepare_spawn(
-        agent_type=agent_type, prompt=full_prompt, cwd=cwd, mode=spawn_mode
-    )
-    extra_env = {**graph_env, **extra_env}
-    stdout_log, stderr_log = _worker_log_paths(
-        run_dir=run_dir,
-        agent_id=agent_id,
-        worker_label=worker_label,
-        session_output_dir=_session_output_dir,
-    )
-    spawn_result = await spawner.spawn(
-        agent_id=agent_id,
+    try:
+        (
+            full_prompt,
+            assignment_path,
+            delegated_role,
+            delegated_task_id,
+            expected_outputs,
+            state_responsibility,
+        ) = _prepare_agent_assignment(
+            agent_id=agent_id,
+            prompt=prompt,
+            run_log=run_log,
+            config=config,
+            run_dir=run_dir,
+            session_output_dir=_session_output_dir,
+            caller_context=None,
+            kwargs=kwargs,
+        )
+        # Optional code graph (TH-D22): built once per cwd per run, hint first so
+        # the fixed text leads the prompt.
+        full_prompt, graph_env = await _context_graph.prepare_spawn(
+            agent_type=agent_type, prompt=full_prompt, cwd=cwd, mode=spawn_mode
+        )
+        extra_env = {**graph_env, **extra_env}
+        stdout_log, stderr_log = _worker_log_paths(
+            run_dir=run_dir,
+            agent_id=agent_id,
+            worker_label=worker_label,
+            session_output_dir=_session_output_dir,
+        )
+        spawn_result = await spawner.spawn(
+            agent_id=agent_id,
+            agent_type=agent_type,
+            prompt=full_prompt,
+            cwd=Path(cwd),
+            config=config,
+            log_dir=run_dir,
+            extra_env=extra_env,
+            model=model,
+            effort=effort,
+            extra_flags=flags,
+            allowed_agents=agents if agent_type == "harness" else None,
+            stdout_path=stdout_log,
+            stderr_path=stderr_log,
+            mode=spawn_mode,
+            resume_session_id=resume_session_id,
+            generated_uuid=context_session_id,
+        )
+    except BaseException:
+        if context_registry is not None and context_session_id is not None:
+            context_registry.restore_after_failed_launch(
+                context_session_id, prior_context_entry
+            )
+        raise
+    context_session_id = _confirm_worker_context_spawn(
+        context_registry=context_registry,
+        context_session_id=context_session_id,
+        task_key=task_key,
         agent_type=agent_type,
-        prompt=full_prompt,
-        cwd=Path(cwd),
+        spawn_result=spawn_result,
+        run_id=run_log.run_id,
+        cwd=cwd,
+        run_dir=run_dir,
         config=config,
-        log_dir=run_dir,
-        extra_env=extra_env,
-        model=model,
-        effort=effort,
-        extra_flags=flags,
-        allowed_agents=agents if agent_type == "harness" else None,
-        stdout_path=stdout_log,
-        stderr_path=stderr_log,
-        mode=spawn_mode,
-        resume_session_id=resume_session_id,
     )
+    custom_home = extra_env.get("HOME")
     state = AgentState(
         id=agent_id,
         agent_type=agent_type,
@@ -1309,6 +1512,15 @@ async def spawn_agent(**kwargs: object) -> str:
         session_id=spawn_result.generated_uuid,
         effective_model=spawn_result.effective_model,
         pgid=spawn_result.pgid,
+        template=spawn_result.template,
+        pre_generated_uuid=spawn_result.generated_uuid,
+        context_registry_path=(
+            context_registry.path if context_registry is not None else None
+        ),
+        context_session_id=context_session_id,
+        codex_sessions_root=(
+            Path(custom_home) / ".codex" / "sessions" if custom_home else None
+        ),
     )
     manager.register(state=state)
     record = AgentRecord(
@@ -1373,6 +1585,7 @@ async def _watch_agent(agent_id: str, done_event: asyncio.Event) -> None:
                 exit_code=exit_code,
                 finished_at=state.finished_at or datetime.now(timezone.utc),
                 status=state.status,
+                session_id=state.session_id,
             )
             ui.agent_event(event="done" if exit_code == 0 else "failed", state=state)
     finally:
@@ -1402,6 +1615,15 @@ async def _capture_session_id_task(
         session_id = None
     if session_id is not None:
         state.session_id = session_id
+        if (
+            state.context_registry_path is not None
+            and state.context_session_id is not None
+            and not state.context_parked
+        ):
+            WorkerContextRegistry(state.context_registry_path).rekey_active_session(
+                state.context_session_id, session_id
+            )
+            state.context_session_id = session_id
         run_log.update_agent(agent_id, session_id=session_id)
 
 
@@ -1740,66 +1962,109 @@ def build_agent_tool_bindings(
         if resume_error is not None:
             return resume_error
 
+        run_dir = config.run_dir
+        if run_dir is None:
+            raise RuntimeError("config.run_dir must be set before spawning agents")
+
+        (
+            spawn_mode,
+            resume_session_id,
+            task_key,
+            context_registry,
+            context_session_id,
+            prior_context_entry,
+            context_error,
+        ) = _prepare_worker_context_dispatch(
+            kwargs=kwargs,
+            agent_type=agent_type,
+            cwd=cwd,
+            model=model_val,
+            run_id=run_log.run_id,
+            run_dir=run_dir,
+            config=config,
+            spawn_mode=spawn_mode,
+            resume_session_id=resume_session_id,
+        )
+        if context_error is not None:
+            return context_error
+
         current_depth = int(os.environ.get("TEAM_HARNESS_DEPTH", "0"))
         extra_env = {**(env or {}), "TEAM_HARNESS_DEPTH": str(current_depth + 1)}
         extra_env.pop(INHERITED_CALLER_CONTEXT_ENV, None)
         agent_id = "agent_" + uuid.uuid4().hex[:12]
-        run_dir = config.run_dir
-        if run_dir is None:
-            raise RuntimeError("config.run_dir must be set before spawning agents")
-        (
-            full_prompt,
-            assignment_path,
-            delegated_role,
-            delegated_task_id,
-            expected_outputs,
-            state_responsibility,
-        ) = _prepare_agent_assignment(
-            agent_id=agent_id,
-            prompt=prompt,
-            run_log=run_log,
-            config=config,
-            run_dir=run_dir,
-            session_output_dir=session_output_dir,
-            caller_context=caller_context,
-            kwargs=kwargs,
-        )
-        _inherit_nested_caller_context(
-            extra_env=extra_env,
+        try:
+            (
+                full_prompt,
+                assignment_path,
+                delegated_role,
+                delegated_task_id,
+                expected_outputs,
+                state_responsibility,
+            ) = _prepare_agent_assignment(
+                agent_id=agent_id,
+                prompt=prompt,
+                run_log=run_log,
+                config=config,
+                run_dir=run_dir,
+                session_output_dir=session_output_dir,
+                caller_context=caller_context,
+                kwargs=kwargs,
+            )
+            _inherit_nested_caller_context(
+                extra_env=extra_env,
+                agent_type=agent_type,
+                caller_context=caller_context,
+                parent_harness_run_id=run_log.run_id,
+                assignment_path=assignment_path,
+            )
+            # Optional code graph (TH-D22): built once per cwd per run, hint first
+            # so the fixed text leads the prompt.
+            full_prompt, graph_env = await context_graph.prepare_spawn(
+                agent_type=agent_type, prompt=full_prompt, cwd=cwd, mode=spawn_mode
+            )
+            extra_env = {**graph_env, **extra_env}
+            stdout_log, stderr_log = _worker_log_paths(
+                run_dir=run_dir,
+                agent_id=agent_id,
+                worker_label=worker_label,
+                session_output_dir=session_output_dir,
+            )
+            spawn_result = await spawner.spawn(
+                agent_id=agent_id,
+                agent_type=agent_type,
+                prompt=full_prompt,
+                cwd=Path(cwd),
+                config=config,
+                log_dir=run_dir,
+                extra_env=extra_env,
+                model=model_val,
+                effort=effort_val,
+                extra_flags=flags,
+                allowed_agents=agents_arg if agent_type == "harness" else None,
+                stdout_path=stdout_log,
+                stderr_path=stderr_log,
+                mode=spawn_mode,
+                resume_session_id=resume_session_id,
+                generated_uuid=context_session_id,
+            )
+        except BaseException:
+            if context_registry is not None and context_session_id is not None:
+                context_registry.restore_after_failed_launch(
+                    context_session_id, prior_context_entry
+                )
+            raise
+        context_session_id = _confirm_worker_context_spawn(
+            context_registry=context_registry,
+            context_session_id=context_session_id,
+            task_key=task_key,
             agent_type=agent_type,
-            caller_context=caller_context,
-            parent_harness_run_id=run_log.run_id,
-            assignment_path=assignment_path,
-        )
-        # Optional code graph (TH-D22): built once per cwd per run, hint first
-        # so the fixed text leads the prompt.
-        full_prompt, graph_env = await context_graph.prepare_spawn(
-            agent_type=agent_type, prompt=full_prompt, cwd=cwd, mode=spawn_mode
-        )
-        extra_env = {**graph_env, **extra_env}
-        stdout_log, stderr_log = _worker_log_paths(
+            spawn_result=spawn_result,
+            run_id=run_log.run_id,
+            cwd=cwd,
             run_dir=run_dir,
-            agent_id=agent_id,
-            worker_label=worker_label,
-            session_output_dir=session_output_dir,
-        )
-        spawn_result = await spawner.spawn(
-            agent_id=agent_id,
-            agent_type=agent_type,
-            prompt=full_prompt,
-            cwd=Path(cwd),
             config=config,
-            log_dir=run_dir,
-            extra_env=extra_env,
-            model=model_val,
-            effort=effort_val,
-            extra_flags=flags,
-            allowed_agents=agents_arg if agent_type == "harness" else None,
-            stdout_path=stdout_log,
-            stderr_path=stderr_log,
-            mode=spawn_mode,
-            resume_session_id=resume_session_id,
         )
+        custom_home = extra_env.get("HOME")
         state = AgentState(
             id=agent_id,
             agent_type=agent_type,
@@ -1812,6 +2077,15 @@ def build_agent_tool_bindings(
             session_id=spawn_result.generated_uuid,
             effective_model=spawn_result.effective_model,
             pgid=spawn_result.pgid,
+            template=spawn_result.template,
+            pre_generated_uuid=spawn_result.generated_uuid,
+            context_registry_path=(
+                context_registry.path if context_registry is not None else None
+            ),
+            context_session_id=context_session_id,
+            codex_sessions_root=(
+                Path(custom_home) / ".codex" / "sessions" if custom_home else None
+            ),
         )
         manager.register(state=state)
         record = AgentRecord(
@@ -1862,6 +2136,7 @@ def build_agent_tool_bindings(
                         exit_code=exit_code,
                         finished_at=s.finished_at or datetime.now(timezone.utc),
                         status=s.status,
+                        session_id=s.session_id,
                     )
                     ui.agent_event(
                         event="done" if exit_code == 0 else "failed", state=s
@@ -1885,6 +2160,15 @@ def build_agent_tool_bindings(
             if session_id is not None:
                 s = manager.get(agent_id)
                 s.session_id = session_id
+                if (
+                    s.context_registry_path is not None
+                    and s.context_session_id is not None
+                    and not s.context_parked
+                ):
+                    WorkerContextRegistry(s.context_registry_path).rekey_active_session(
+                        s.context_session_id, session_id
+                    )
+                    s.context_session_id = session_id
                 run_log.update_agent(agent_id, session_id=session_id)
 
         watch_task = asyncio.create_task(_watch())

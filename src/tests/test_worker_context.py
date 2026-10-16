@@ -292,3 +292,289 @@ def test_worker_context_cli_check_is_explicit_and_never_launches(tmp_path, monke
     assert result.exit_code == 0, result.output
     assert json.loads(result.output)["action"] == "fresh"
     assert not (tmp_path / "registry.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_run_repl_spawn_agent_parks_and_resumes_only_same_key_short_follow_up(
+    tmp_path, ui
+):
+    import asyncio
+
+    from team_harness.agents.manager import AgentManager
+    from team_harness.agents.template import AgentTemplate
+    from team_harness.agents.template import SessionCapture
+    from team_harness.config import Config
+    from team_harness.tools import agent_tools
+    from team_harness.tracking.run_log import RunLogWriter
+    from team_harness.worker_context import registry_path_for_workspace
+
+    capture_file = tmp_path / "args.txt"
+    fake_codex = tmp_path / "fake-codex"
+    fake_codex.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$@" > "$CAPTURE_FILE"\n'
+        'if [ -n "$EMIT_THREAD_ID" ]; then\n'
+        '  printf \'{"type":"thread.started","thread_id":"%s"}\\n\' "$EMIT_THREAD_ID"\n'
+        "fi\n",
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
+    rollout = tmp_path / ".codex" / "sessions" / "2026" / "10" / "rollout-sid-101.jsonl"
+    rollout.parent.mkdir(parents=True)
+    rollout.write_text(
+        json.dumps(
+            {
+                "type": "event_msg",
+                "session_id": "sid-101",
+                "payload": {
+                    "call_id": "c-1",
+                    "info": {"last_token_usage": {"input_tokens": 60000}},
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    config = Config(
+        provider="openai_compat",
+        model="test/model",
+        api_base="http://localhost:9999",
+        api_key="test-key",
+        cwd=str(tmp_path),
+        run_dir=run_dir,
+        worker_suffix="",
+        agent_templates={
+            "codex": AgentTemplate(
+                command=(str(fake_codex), "exec"),
+                shared_flags=("--json",),
+                resume_prefix=("resume",),
+                resume_flags=("{session_id}",),
+                model_flag=None,
+                session_capture=SessionCapture(
+                    strategy="stream_json_event",
+                    match={"type": "thread.started"},
+                    field_path=("thread_id",),
+                ),
+            )
+        },
+    )
+    manager = AgentManager()
+    run_log = RunLogWriter(
+        run_id="run_ctx_1",
+        run_dir=run_dir,
+        provider=config.provider,
+        model=config.model,
+        api_base=config.api_base,
+    )
+    bindings = agent_tools.build_agent_tool_bindings(
+        manager=manager, run_log=run_log, config=config, ui=ui, allowed_types=["codex"]
+    )
+    spawn_fn = next(
+        fn for schema, fn in bindings if schema["function"]["name"] == "spawn_agent"
+    )
+    registry_path = registry_path_for_workspace(tmp_path)
+
+    # Default (no task_key) leaves worker_context untouched.
+    untracked_id = await spawn_fn(
+        type="codex",
+        prompt="untracked",
+        cwd=str(tmp_path),
+        env={"CAPTURE_FILE": str(capture_file), "HOME": str(tmp_path)},
+    )
+    await asyncio.wait_for(manager.wait_one(untracked_id), timeout=2)
+    assert not registry_path.exists()
+
+    # Tracked fresh run captures provider session_id, measures rollout tokens, and parks.
+    first_id = await spawn_fn(
+        type="codex",
+        prompt="step 1",
+        cwd=str(tmp_path),
+        task_key="task/a",
+        env={
+            "CAPTURE_FILE": str(capture_file),
+            "EMIT_THREAD_ID": "sid-101",
+            "HOME": str(tmp_path),
+        },
+    )
+    await asyncio.wait_for(manager.wait_one(first_id), timeout=2)
+    await manager.await_finalization_tasks(timeout_s=2.0)
+
+    sessions = WorkerContextRegistry(registry_path).sessions()
+    assert len(sessions) == 1
+    assert sessions[0]["session_id"] == "sid-101"
+    assert sessions[0]["state"] == "parked"
+    assert sessions[0]["input_tokens"] == 60000
+    assert sessions[0]["measurement_status"] == "measured"
+
+    # Same-key short follow-up resumes sid-101.
+    second_id = await spawn_fn(
+        type="codex",
+        prompt="fix typo",
+        cwd=str(tmp_path),
+        task_key="task/a",
+        follow_up="short",
+        env={
+            "CAPTURE_FILE": str(capture_file),
+            "EMIT_THREAD_ID": "sid-101",
+            "HOME": str(tmp_path),
+        },
+    )
+    await asyncio.wait_for(manager.wait_one(second_id), timeout=2)
+    await manager.await_finalization_tasks(timeout_s=2.0)
+    assert capture_file.read_text(encoding="utf-8").splitlines()[:4] == [
+        "exec",
+        "resume",
+        "--json",
+        "sid-101",
+    ]
+    assert WorkerContextRegistry(registry_path).sessions()[0]["generation"] == 2
+
+    # Normal follow-up or a different key starts fresh instead of resuming.
+    third_id = await spawn_fn(
+        type="codex",
+        prompt="new stage",
+        cwd=str(tmp_path),
+        task_key="task/a",
+        follow_up="normal",
+        env={
+            "CAPTURE_FILE": str(capture_file),
+            "EMIT_THREAD_ID": "sid-102",
+            "HOME": str(tmp_path),
+        },
+    )
+    await asyncio.wait_for(manager.wait_one(third_id), timeout=2)
+    await manager.await_finalization_tasks(timeout_s=2.0)
+    assert capture_file.read_text(encoding="utf-8").splitlines()[:2] == [
+        "exec",
+        "--json",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_repl_spawn_agent_rejects_active_conflict_and_preserves_parked_on_failed_launch(
+    tmp_path, ui
+):
+    import asyncio
+
+    from team_harness.agents.manager import AgentManager
+    from team_harness.agents.template import AgentTemplate
+    from team_harness.agents.template import SessionCapture
+    from team_harness.config import Config
+    from team_harness.tools import agent_tools
+    from team_harness.tracking.run_log import RunLogWriter
+    from team_harness.worker_context import registry_path_for_workspace
+
+    gate_file = tmp_path / "release"
+    fake_codex = tmp_path / "fake-codex"
+    fake_codex.write_text(
+        "#!/bin/sh\n"
+        'printf \'{"type":"thread.started","thread_id":"sid-201"}\\n\'\n'
+        'while [ ! -f "$GATE_FILE" ]; do sleep 0.02; done\n',
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
+    rollout = tmp_path / ".codex" / "sessions" / "2026" / "10" / "rollout-sid-201.jsonl"
+    rollout.parent.mkdir(parents=True)
+    rollout.write_text(
+        json.dumps(
+            {
+                "type": "event_msg",
+                "session_id": "sid-201",
+                "payload": {"info": {"last_token_usage": {"input_tokens": 45000}}},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    config = Config(
+        provider="openai_compat",
+        model="test/model",
+        api_base="http://localhost:9999",
+        api_key="test-key",
+        cwd=str(tmp_path),
+        run_dir=run_dir,
+        worker_suffix="",
+        agent_templates={
+            "codex": AgentTemplate(
+                command=(str(fake_codex), "exec"),
+                shared_flags=("--json",),
+                resume_prefix=("resume",),
+                resume_flags=("{session_id}",),
+                model_flag=None,
+                session_capture=SessionCapture(
+                    strategy="stream_json_event",
+                    match={"type": "thread.started"},
+                    field_path=("thread_id",),
+                ),
+            )
+        },
+    )
+    manager = AgentManager()
+    run_log = RunLogWriter(
+        run_id="run_ctx_2",
+        run_dir=run_dir,
+        provider=config.provider,
+        model=config.model,
+        api_base=config.api_base,
+    )
+    agent_tools.setup(manager=manager, run_log=run_log, config=config, ui=ui)
+
+    first_id = await agent_tools.spawn_agent(
+        type="codex",
+        prompt="hold active",
+        cwd=str(tmp_path),
+        task_key="task/a",
+        env={"GATE_FILE": str(gate_file), "HOME": str(tmp_path)},
+    )
+    duplicate = await agent_tools.spawn_agent(
+        type="codex",
+        prompt="duplicate active",
+        cwd=str(tmp_path),
+        task_key="task/a",
+        env={"GATE_FILE": str(gate_file), "HOME": str(tmp_path)},
+    )
+    assert duplicate.startswith("ERROR: worker context:")
+    assert "already has an active worker" in duplicate
+
+    gate_file.write_text("go\n", encoding="utf-8")
+    await asyncio.wait_for(manager.wait_one(first_id), timeout=2)
+    await manager.await_finalization_tasks(timeout_s=2.0)
+
+    registry_path = registry_path_for_workspace(tmp_path)
+    parked = WorkerContextRegistry(registry_path).sessions()
+    assert len(parked) == 1
+    assert parked[0]["session_id"] == "sid-201"
+    assert parked[0]["state"] == "parked"
+    assert parked[0]["input_tokens"] == 45000
+    assert parked[0]["generation"] == 1
+
+    # Failed successor launch preserves existing parked session intact.
+    config.agent_templates["codex"] = AgentTemplate(
+        command=(str(tmp_path / "missing-binary"), "exec"),
+        shared_flags=("--json",),
+        resume_prefix=("resume",),
+        resume_flags=("{session_id}",),
+        model_flag=None,
+    )
+    with pytest.raises(FileNotFoundError):
+        await agent_tools.spawn_agent(
+            type="codex",
+            prompt="failed resume",
+            cwd=str(tmp_path),
+            task_key="task/a",
+            follow_up="short",
+            env={"HOME": str(tmp_path)},
+        )
+    after_failed_resume = WorkerContextRegistry(registry_path).sessions()
+    assert len(after_failed_resume) == 1
+    assert after_failed_resume[0]["session_id"] == "sid-201"
+    assert after_failed_resume[0]["state"] == "parked"
+    assert after_failed_resume[0]["input_tokens"] == 45000
+    assert after_failed_resume[0]["generation"] == 1
+    assert after_failed_resume[0]["pending_launch"] is False
