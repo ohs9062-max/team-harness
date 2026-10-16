@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # th-launch: 최신 worker_suffix.md를 반드시 덧붙여 워커(codex|agy|claude)를 분리 실행하고 등록한다.
-# 사용: th-launch.sh <작업폴더> [codex|agy|claude] <모델> <effort> <작업트리> [추가 인자]
+# 사용: th-launch.sh <작업폴더> [codex|agy] <모델> <effort> <작업트리> [추가 인자]
+#       Claude 워커는 사용자가 명시했을 때만 TH_USER_REQUESTED_CLAUDE=1을 붙여 실행:
+#       TH_USER_REQUESTED_CLAUDE=1 th-launch.sh <작업폴더> claude claude-sonnet-5 <effort> <작업트리>
 #       (워커 생략 시 기본값: codex)
 #       Codex 모델 생략: <작업폴더> [codex] [작업트리] [추가 인자] → gpt-5.6-terra medium
 # 정책 변경은 다음 launch부터 적용하며 실행 중 워커는 교체하지 않는다.
@@ -39,6 +41,11 @@ worker_type="codex"
 if (( $# >= 1 )) && [[ "$1" == "codex" || "$1" == "agy" || "$1" == "claude" ]]; then
   worker_type="$1"
   shift
+fi
+
+if [[ "$worker_type" == "claude" && ${TH_USER_REQUESTED_CLAUDE:-0} != 1 ]]; then
+  echo 'Claude 워커는 사용자 명령 시에만: TH_USER_REQUESTED_CLAUDE=1'
+  exit 4
 fi
 
 if [[ "$worker_type" == "codex" ]]; then

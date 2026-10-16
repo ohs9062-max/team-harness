@@ -37,6 +37,7 @@ AI가 MODE를 임의로 변경하거나 생략하지 않는다.
 - 결정론적 CHECK를 LLM REVIEW보다 먼저 수행한다.
 - 명시적인 REVIEW 판정이 없거나 서로 모순되면 `BLOCKED`다.
 - CLI 장애 fallback과 병렬 quorum은 계획에 명시된 범위에서만 허용한다.
+- Claude는 기본 코디네이터 전용이다. 자동 Runner는 Claude 워커를 기본 역할·fallback·조사 병렬 참가자로 선택하지 않으며, 사용자가 명시한 경우에만 `claude-sonnet-5`(명시 모델 우선)로 실행한다. Codex 쿼터 잠금 대체는 agy만 사용하고 코드 결과는 검증한다.
 - 런타임 정본은 `~/.team-harness/runs/protocol-<TASK-ID>/protocol_state.json`(인계 기록은 그 안의 `handoffs`), 감사 기록은 같은 디렉터리의 `protocol_events.jsonl`이다.
 - Runner는 task worktree 안의 local checkpoint commit만 자동 생성할 수 있다.
 - MODE A의 통합은 `WAITING_USER` 이후 사용자 선택을 받은 최종 통합 Agent(기본 Codex, `mode_a_final`로 변경 가능)가 `task/<TASK-ID>/integration` 브랜치에서만 수행한다. base 작업 트리 수정·base 브랜치 merge·push는 하지 않으며, base 반영은 사람이 `git merge`로 결정한다(`design/decisions.md` TH-D16).

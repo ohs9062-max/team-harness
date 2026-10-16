@@ -72,7 +72,8 @@ class ProtocolAgentSpec:
 class ProtocolConfig:
     """Configuration mapping protocol roles to agent specifications across MODE A/B/C."""
 
-    # TH-D29: Codex roles default to gpt-5.6-terra medium. Explicit runtime,
+    # TH-D29/D30: Codex roles default to gpt-5.6-terra medium, except the
+    # MODE C design judgment role, which needs Terra high. Explicit runtime,
     # environment and TOML overrides retain their existing precedence.
     mode_a_worker_1: ProtocolAgentSpec = field(
         default_factory=lambda: ProtocolAgentSpec(
@@ -96,7 +97,7 @@ class ProtocolConfig:
     )
     mode_c_design: ProtocolAgentSpec = field(
         default_factory=lambda: ProtocolAgentSpec(
-            agent_type="codex", model="gpt-5.6-terra", effort="medium"
+            agent_type="codex", model="gpt-5.6-terra", effort="high"
         )
     )
     mode_c_implement: ProtocolAgentSpec = field(
@@ -364,7 +365,7 @@ def load_protocol_config(
         "gpt-5.6-terra",
         runtime_effort=mode_c_design_effort,
         effort_var="HARNESS_MODE_C_DESIGN_EFFORT",
-        default_effort="medium",
+        default_effort="high",
         runtime_role=runtime_roles.get("mode_c_design"),
         toml_role=role_tables.get("mode_c_design"),
     )

@@ -193,7 +193,8 @@ field_path = ["session_id"]
 
 
 
-# Claude Code worker. `--verbose` is mandatory when `-p` and
+# Claude Code worker (user-request only; coordinators must not select it by
+# default or as a fallback). `--verbose` is mandatory when `-p` and
 # `--output-format stream-json` are combined (Claude CLI requirement).
 # Claude reads its model from several env vars, not just --model. We
 # set the three "main model" vars together (ANTHROPIC_MODEL plus the
@@ -201,7 +202,8 @@ field_path = ["session_id"]
 # across all of Claude Code's internal code paths. We deliberately do
 # NOT set ANTHROPIC_DEFAULT_HAIKU_MODEL / ANTHROPIC_SMALL_FAST_MODEL /
 # CLAUDE_CODE_SUBAGENT_MODEL so cheap auxiliary helpers stay cheap.
-# `default_model` is left unset by default — configure per-project.
+# `default_model` is left unset by default — configure it only for an explicit
+# user-requested Claude worker.
 [agents.claude]
 command = ["claude"]
 shared_flags = [
@@ -225,7 +227,7 @@ deduplicate_flags = [
     "--strict-mcp-config",
 ]
 reasoning_effort_flag = ["--effort", "{effort}"]
-# default_model = "claude-sonnet-4-6"   # uncomment to pin a default
+# default_model = "claude-sonnet-5"     # explicit user-requested worker only
 # reasoning_effort = "high"              # values: low|medium|high|max
 
 [agents.claude.session_capture]
@@ -406,7 +408,8 @@ shutdown_timeout_s = 10.0
 # Minimum lifetime before kill_agent will refuse early termination.
 min_agent_lifetime_before_kill_s = 600.0
 
-# Restrict which agent types the coordinator can spawn. Leave commented to allow all.
+# Restrict which agent types the coordinator can spawn. Claude requires an explicit
+# user request even when included; leave it out for coordinator-only Claude use.
 # allowed_agents = ["codex", "gemini", "claude", "grok", "antigravity", "openhands", "opencode", "pi", "harness"]
 
 # Optional Jev decision layer. It selects a smaller coordinator tool profile
@@ -528,7 +531,8 @@ shutdown_timeout_s = 10.0
 # Minimum lifetime before kill_agent will refuse early termination.
 min_agent_lifetime_before_kill_s = 600.0
 
-# Restrict which agent types the coordinator can spawn. Leave commented to allow all.
+# Restrict which agent types the coordinator can spawn. Claude requires an explicit
+# user request even when included; leave it out for coordinator-only Claude use.
 # allowed_agents = ["codex", "gemini", "claude", "grok", "antigravity", "openhands", "opencode", "pi", "harness"]
 
 # Optional Jev decision layer. Export TYPESAFE_API_KEY (or JEV_API_KEY).

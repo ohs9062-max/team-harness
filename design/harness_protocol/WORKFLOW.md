@@ -35,11 +35,13 @@ worker마다 tmux 창을 하나씩 열어 그 worker의 로그를 실시간으�
 연결되지 않는다 — worker는 여전히 TH-D2가 말하는 1회성 배치 서브프로세스다.
 
 **모델/effort 오버라이드 (TH-D29).** Protocol의 Codex 역할 기본값은
-`gpt-5.6-terra`, `effort=medium`입니다. 일반 코딩·구현은 Terra medium, 복잡한
+`gpt-5.6-terra`, `effort=medium`입니다. MODE C 설계 판단 역할은 Terra high입니다. 일반 코딩·구현은 Terra medium, 복잡한
 구현·디버깅은 Terra high, 핵심 로직·실험 분석은 Sol medium, 어려운 오류·중요 설계는
 Sol high로 하위 등급 실패 또는 명확한 용도일 때만 올립니다. 사용자 명시 모델과
-Codex 쿼터 잠금 시 Claude/agy 대체 규칙은 유지합니다.
-Claude `th cord` 코디네이터는 Opus 5.5, 단순·대량·비코드는 agy Gemini 3.8 Flash (High)입니다.
+Codex 쿼터 잠금 시 agy 대체 규칙은 유지하며 코드 작업 결과는 검증합니다.
+Claude `th cord` 코디네이터는 Opus 5.5입니다. Claude 워커는 사용자 명령 때만
+`claude-sonnet-5`(명시 모델 우선)로 실행하며 자동 역할·대체·조사 참가자가 아닙니다.
+단순·대량·비코드는 agy Gemini 3.8 Flash (High)입니다.
 역할별 환경변수로 지정할 수 있습니다:
 
 ```bash
@@ -298,7 +300,7 @@ Runner는 새 worktree를 만들지 않고 state의 기존 worktree에서 `git s
 DEFINE (Entry AI)
 → Git Preflight
 → pipeline worktree 생성 (`task/<TASK-ID>/pipeline`)
-→ Claude: ANALYZE / DESIGN → shared/DESIGN.md
+→ Codex Terra high: ANALYZE / DESIGN → shared/DESIGN.md
 → Codex: IMPLEMENT / TEST → shared/IMPLEMENTATION.md
 → System: deterministic CHECK
 → Gemini: REVIEW → shared/REVIEW.md

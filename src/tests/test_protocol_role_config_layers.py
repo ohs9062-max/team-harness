@@ -90,7 +90,8 @@ def test_config_toml_beats_the_protocol_default():
 
     assert proto_cfg.mode_c_design.agent_type == "codex"
     assert proto_cfg.mode_c_design.model == "gpt-5.6-terra"
-    # Untouched Codex roles keep the Terra medium defaults (TH-D29).
+    # The implementation role keeps the Terra medium default (TH-D29); the
+    # separate design judgment role is Terra high (TH-D30).
     assert proto_cfg.mode_c_implement.model == "gpt-5.6-terra"
     assert proto_cfg.mode_c_implement.effort == "medium"
 

@@ -9,8 +9,9 @@
 # from ~/.codex/auth.json instead of OPENAI_API_KEY/OPENROUTER_API_KEY.
 provider = "codex"
 
-# Workers the coordinator may spawn: claude, codex, antigravity (agy) only.
-allowed_agents = ["codex", "claude", "antigravity"]
+# Workers the coordinator may spawn: codex and antigravity (agy).
+# Claude workers are user-request only — add "claude" again only when needed.
+allowed_agents = ["codex", "antigravity"]
 
 # Appended to the end of every spawned worker's prompt (any agent_type),
 # after the coordinator's own task text. See worker_suffix.md next to this
@@ -67,7 +68,11 @@ system_prompt = """
   use `gpt-6.1-sol` high. Escalate only after a lower tier fails or when its purpose
   is clear. agy (Gemini 3.8 Flash (High), no effort argument) is for simple,
   bulk, and non-code work only.
-  Honor explicit user models; keep the Claude th cord coordinator on Opus 5.5.
+  Keep the Claude th cord coordinator on Opus 5.5. Claude is coordinator-only
+  by default: never select it automatically as a worker, fallback, or research
+  participant. Only an explicit user request may launch a Claude worker, using
+  claude-sonnet-5 unless the user names another model. If Codex is quota-locked,
+  fall back only to agy and verify code-work results.
 - Model cannot change mid-run and new workers re-read context, so do not set
   per-step models. Only when upfront work is large (>50k tokens) split: "cheap
   worker prep → WORKLOG.md handoff → target model main work". Choose models via

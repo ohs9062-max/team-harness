@@ -196,7 +196,7 @@ class FakeAgentRunner:
         )
 
 
-# 1. env empty -> Protocol's built-in Terra medium defaults apply (TH-D29)
+# 1. env empty -> Protocol's built-in Terra defaults apply (TH-D29/D30)
 def test_1_env_empty_defaults_maintained():
     cfg = load_protocol_config(environ={})
     assert cfg.mode_a_worker_1.agent_type == "codex"
@@ -215,7 +215,7 @@ def test_1_env_empty_defaults_maintained():
 
     assert cfg.mode_c_design.agent_type == "codex"
     assert cfg.mode_c_design.model == "gpt-5.6-terra"
-    assert cfg.mode_c_design.effort == "medium"
+    assert cfg.mode_c_design.effort == "high"
     assert cfg.mode_c_implement.agent_type == "codex"
     assert cfg.mode_c_implement.model == "gpt-5.6-terra"
     assert cfg.mode_c_implement.effort == "medium"

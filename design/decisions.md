@@ -386,6 +386,14 @@ protocol backend 자동 교체 금지는 바꾸지 않는다.
 
 **결과.** 기본 agy 요약은 사건마다 한 번이며 flock으로 동시 한 개만 실행한다. 코디네이터는 workers.md를 보고 FAIL/WARN이나 이상이 있을 때만 원본을 연다. TH-D26의 inbox·알림·깨우기는 유지하되 데몬의 검수는 비동기로 완료되어 최초 알림에서 `대기`일 수 있다. ths는 새 검수 결과가 있는 작업을 VERIFIED/VERIFY_FAILED로 표시한다. TH-D2/TH-D3의 세션·정상 반환 계약과 SDK/Protocol API는 유지한다.
 
+## TH-D30. Claude는 기본 코디네이터 전용으로 두고 Claude 워커는 사용자 명령 때만 실행한다
+
+**결정.** Claude는 기본적으로 코디네이터만 수행한다. Protocol 역할 기본값, 코디네이터의 자동 워커 선택, Codex 쿼터 잠금 fallback, 조사 병렬 구성 어디에서도 Claude 워커를 스스로 고르지 않는다. MODE C 설계 기본 역할은 Codex `gpt-5.6-terra`/high로 둔다. 사용자가 Claude 워커를 명시적으로 요청한 경우에만 `claude-sonnet-5`를 기본 모델로 실행하고, 사용자가 다른 모델을 지정하면 그 모델을 보존한다. `scripts/th-launch.sh`는 이 명시 요청을 코디네이터가 전달한 `TH_USER_REQUESTED_CLAUDE=1`로 확인하며, 없으면 exit 4로 실행 전 거부한다. Codex 쿼터 잠금 시 대체는 agy만 허용하고 코드 작업 결과는 반드시 검증한다. 코디네이터는 지시서 작성·결과 검증·보고만 하고 문서 작성·수정, 병합, 커밋, push를 포함한 실제 작업은 Codex 워커에 일임한다.
+
+**맥락.** Claude를 편리한 일반 워커 또는 fallback으로 남겨 두면 사용자가 Claude 작업을 요청하지 않은 경우에도 비용·역할 경계가 흐려지고, 조사 병렬 구성에서 의도치 않게 기본 참가자가 될 수 있다. 기존 TH-D29의 Codex 등급표는 일반 구현의 Terra/medium을 유지하지만 설계·검수 판단에는 Terra/high가 적합하다. 명시적 `--set-role`, 환경 변수, TOML의 Claude 설정은 기존 소비자 설정 계약이므로 제거하지 않고, 실제 launcher에서 사용자 명시 신호를 요구해 자동 경로와 구분한다.
+
+**결과.** 명시적 Claude role/model override의 우선순위와 Claude CLI 템플릿은 호환되지만, 그 역할을 실행하려면 사용자 요청 표지가 필요하다. Claude를 자동 허용하던 전역 `allowed_agents` 기본값은 Codex·agy만으로 제한한다. coordinator prompt, 설정 템플릿, 운영 문서와 설치 스킬은 같은 정책을 안내한다. 이 변경은 worker 선택·실행 계약의 변경이므로 소비자는 자동 Claude fallback이 더 이상 발생하지 않는 것을 전제로 해야 한다.
+
 ## TH-D31. `ths` 기본 조회를 짧게 하고 프롬프트 에코의 쿼터 오탐을 막는다
 
 **결정.** `scripts/th-status.sh`의 기본 조회는 실행 중 작업과 최근 24시간 안의

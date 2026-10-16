@@ -211,7 +211,10 @@ def test_th_launch_sets_image_permission_to_blocked_by_default(
             "medium",
             str(task_dir),
         ],
-        env=test_env["env"],
+        env={
+            **test_env["env"],
+            **({"TH_USER_REQUESTED_CLAUDE": "1"} if worker_type == "claude" else {}),
+        },
         capture_output=True,
         text=True,
     )
@@ -220,6 +223,55 @@ def test_th_launch_sets_image_permission_to_blocked_by_default(
     while not permission_dump.exists() and time.time() < deadline:
         time.sleep(0.05)
     assert permission_dump.read_text(encoding="utf-8") == "0"
+
+
+def test_th_launch_rejects_claude_without_user_request(test_env: dict):
+    """Claude workers require a user-request marker before any CLI runs."""
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_claude_rejected")
+
+    result = subprocess.run(
+        [str(SCRIPTS_DIR / "th-launch.sh"), str(task_dir), "claude"],
+        env=test_env["env"],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 4
+    assert (
+        result.stdout.strip()
+        == "Claude 워커는 사용자 명령 시에만: TH_USER_REQUESTED_CLAUDE=1"
+    )
+    assert not (task_dir / "worker.pid").exists()
+
+
+def test_th_launch_allows_user_requested_claude_with_sonnet_default(test_env: dict):
+    """The marker permits the default Sonnet launch through the PATH stub only."""
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_claude_allowed")
+    captured_args = test_env["tmp_path"] / "claude-args.txt"
+    claude_stub = test_env["bin_dir"] / "claude"
+    claude_stub.write_text(
+        f'#!/usr/bin/env bash\nprintf "%s\\n" "$@" > "{captured_args}"\n',
+        encoding="utf-8",
+    )
+    claude_stub.chmod(claude_stub.stat().st_mode | stat.S_IEXEC)
+
+    result = subprocess.run(
+        [str(SCRIPTS_DIR / "th-launch.sh"), str(task_dir), "claude"],
+        env={**test_env["env"], "TH_USER_REQUESTED_CLAUDE": "1"},
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    deadline = time.time() + 3
+    while not captured_args.exists() and time.time() < deadline:
+        time.sleep(0.05)
+    assert captured_args.read_text(encoding="utf-8").splitlines()[:4] == [
+        "-p",
+        "--dangerously-skip-permissions",
+        "--model",
+        "claude-sonnet-5",
+    ]
 
 
 def test_th_launch_uses_the_image_permission_envelope_for_all_worker_types() -> None:
@@ -611,7 +663,12 @@ def test_th_launch_claude_worker(test_env: dict):
         "high",
         str(task_dir),
     ]
-    res = subprocess.run(cmd, env=test_env["env"], capture_output=True, text=True)
+    res = subprocess.run(
+        cmd,
+        env={**test_env["env"], "TH_USER_REQUESTED_CLAUDE": "1"},
+        capture_output=True,
+        text=True,
+    )
     assert res.returncode == 0, f"launch failed: {res.stderr}\n{res.stdout}"
     assert "launched [claude]" in res.stdout
 

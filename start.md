@@ -124,7 +124,8 @@ B codex                             # 진행 중 작업을 codex에 인계 → M
 종료
 ```
 
-- 코디네이터는 계획·짧은 지시·결과 검증·보고만 하고, 코드 작성과 실행은 워커에 맡깁니다.
+- 코디네이터는 계획·짧은 지시·결과 검증·보고만 하고, 코드·문서 작성과 수정, 브랜치 병합,
+  커밋·push를 포함한 실제 작업은 Codex 워커에 맡깁니다(작은 수정도 포함).
 - 워커의 채팅 출력은 근거가 아닙니다. 완료와 수치는 파일(`DONE`/`FAILED`, 결과표)로만 인정합니다.
 - 운영 규칙 원문: `~/.claude/skills/orca-harness-protocol/SKILL.md`.
 
@@ -354,8 +355,9 @@ th protocol run --mode c "복잡한 작업" --repo . \
 `gpt-5.6-terra` medium(일반 코딩·구현), `gpt-5.6-terra` high(복잡한 구현·디버깅),
 `gpt-6.1-sol` medium(핵심 로직·실험 분석), `gpt-6.1-sol` high(어려운 오류·중요 설계),
 agy Gemini 3.8 Flash (High)(effort 인자 없음, 단순 반복·대량·비코드, 결과 검증 필요) 순이다.
-Claude `th cord` 코디네이터는 Opus 5.5를 유지하며, Codex 쿼터 잠금 시 Claude/agy로
-대체하고 사용자가 명시한 모델은 그대로 따릅니다. `th run`/`th repl`도 기본 모델은
+Claude `th cord` 코디네이터는 Opus 5.5를 유지합니다. Claude 워커는 사용자가 명시적으로
+요청할 때만 `claude-sonnet-5`(다른 모델을 지정하면 그대로)로 띄우며, 자동 기본값·대체·조사
+참가자가 아닙니다. Codex 쿼터 잠금 시에는 agy로만 대체하고 코드 작업 결과는 반드시 검증합니다. `th run`/`th repl`도 기본 모델은
 `gpt-5.6-terra` medium입니다. 아래 등급의 실패 또는 용도가 명확할 때만 한 단계 올립니다. 모델 생략 실행: `scripts/th-launch.sh ./job codex /path/to/repo`.
 
 ### 10. graft 코드 그래프 (참고)
