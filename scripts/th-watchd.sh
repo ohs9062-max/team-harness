@@ -67,11 +67,11 @@ handle_daemon_event() {
 
   local digest_event
   case "$event_type" in
-    완료) digest_event=done ;;
+    완료|'잡 완료') digest_event=done ;;
     실패) digest_event=failed ;;
     '워커 오류(쿼터·용량)') digest_event=quota ;;
     중단) digest_event=dead ;;
-    멈춤) digest_event=stall ;;
+    멈춤|'긴 실행 대기') digest_event=stall ;;
     *) digest_event=unknown ;;
   esac
   queue_digest "$task" "$digest_event"

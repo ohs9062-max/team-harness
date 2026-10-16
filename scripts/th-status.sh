@@ -407,6 +407,150 @@ def get_verify_status(task_dir):
         return "대기"
     return "-"
 
+sys.path.insert(0, str(Path(sys.argv[1]).resolve().parent.parent))
+try:
+    from team_harness.config import load_worker_context_settings
+    from team_harness.worker_context import (
+        ContextRequest,
+        WorkerContextRegistry,
+        decide,
+        parse_task_front_matter,
+        registry_path_for_workspace,
+    )
+except Exception:
+    load_worker_context_settings = None
+
+_CLI_QUOTA_PREFIX_RE = re.compile(
+    r"^(?:\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}[:\d.+-]*\s+)?"
+    r"(?:error[: ]|api error[: ]|api response[: ]|agy_error[: ]|stream error[: ]|fatal[: ]|resource_exhausted[: ]|\{\"(?:type\":\"error|error\":))",
+    re.IGNORECASE,
+)
+_CLI_QUOTA_BODY_RE = re.compile(
+    r"(?:hit your usage limit|usage limit reached|individual quota reached|rate limit (?:exceeded|reached)|"
+    r"resource_exhausted|quota exceeded|at capacity|capacity exceeded|\b429\b)",
+    re.IGNORECASE,
+)
+_CODE_FALSE_POS_RE = re.compile(
+    r"(?:if\s*\(|re\.search|awk\s|grep\s|~\s*/|last\s*=\s*\$0)",
+    re.IGNORECASE,
+)
+
+def is_cli_quota_error_line(raw_line):
+    s = raw_line.rstrip("\r\n")
+    if not s:
+        return False
+    if re.match(r"^\s*(?:[-*+#]|>|\d+[.)])\s", s):
+        return False
+    if re.match(r"^(?:[+-][^+-]|@@ )", s):
+        return False
+    if re.match(r"^ERROR:\s*test_", s, re.IGNORECASE):
+        return False
+    if re.search(r"→\s*`?failed`?|error\s*→\s*failed", s, re.IGNORECASE):
+        return False
+    if _CODE_FALSE_POS_RE.search(s):
+        return False
+    return bool(_CLI_QUOTA_PREFIX_RE.search(s) and _CLI_QUOTA_BODY_RE.search(s))
+
+def get_context_summary_line(task_dir, prog):
+    if load_worker_context_settings is None:
+        return None
+    tpath = Path(task_dir)
+    ctx_file = tpath / ".th_context.json"
+    meta = None
+    if ctx_file.is_file():
+        try:
+            import json
+            meta = json.loads(ctx_file.read_text(encoding="utf-8"))
+        except Exception:
+            meta = None
+    workspace = None
+    reg_path = None
+    task_key = None
+    follow_up = "normal"
+    session_id = None
+    if isinstance(meta, dict):
+        ws_raw = meta.get("workspace")
+        if isinstance(ws_raw, str) and ws_raw:
+            workspace = Path(ws_raw)
+        rp_raw = meta.get("registry_path")
+        if isinstance(rp_raw, str) and rp_raw:
+            reg_path = Path(rp_raw)
+        tk_raw = meta.get("task_key")
+        if isinstance(tk_raw, str) and tk_raw:
+            task_key = tk_raw
+        fu_raw = meta.get("follow_up")
+        if isinstance(fu_raw, str) and fu_raw in ("short", "normal"):
+            follow_up = fu_raw
+        sid_raw = meta.get("session_id")
+        if isinstance(sid_raw, str) and sid_raw:
+            session_id = sid_raw
+    if workspace is None:
+        owner_file = tpath / ".th_owner"
+        if owner_file.is_file():
+            try:
+                ow = owner_file.read_text(encoding="utf-8").strip()
+                if ow and os.path.isdir(ow):
+                    workspace = Path(ow)
+            except Exception:
+                pass
+    if workspace is None:
+        env_ws = os.environ.get("TH_WORKSPACE", "")
+        if env_ws and os.path.isdir(env_ws):
+            workspace = Path(env_ws)
+    if (tpath / "task.md").is_file():
+        try:
+            task_key, follow_up = parse_task_front_matter(tpath / "task.md")
+        except Exception:
+            pass
+    if reg_path is None and workspace is not None:
+        reg_path = registry_path_for_workspace(workspace)
+    if not task_key or reg_path is None or not reg_path.is_file():
+        return None
+    try:
+        registry = WorkerContextRegistry(reg_path)
+        sessions = registry.sessions()
+    except Exception:
+        return None
+    entry = None
+    if session_id:
+        entry = next((item for item in sessions if item.get("session_id") == session_id), None)
+    if entry is None:
+        key_matches = [item for item in sessions if item.get("task_key") == task_key]
+        if key_matches:
+            entry = key_matches[-1]
+    if entry is None:
+        return None
+    stage = entry.get("stage") or entry.get("lane") or (prog[:24] if prog and prog != "-" else "-")
+    tokens = entry.get("input_tokens")
+    m_status = entry.get("measurement_status") or "unknown"
+    if isinstance(tokens, int) and not isinstance(tokens, bool):
+        tok_str = f"{tokens // 1000}k"
+    else:
+        tok_str = "unknown"
+    entry_state = str(entry.get("state") or "unknown")
+    try:
+        settings = load_worker_context_settings(workspace)
+        phase = "boundary" if entry_state == "active" else "dispatch"
+        long_wait = bool(
+            entry.get("long_running_wait_requested")
+            or (tpath / "context_exit_requested.json").is_file()
+        )
+        req = ContextRequest(
+            task_key=task_key,
+            agent_type=str(entry.get("agent_type") or "codex"),
+            follow_up=follow_up,
+            phase=phase,
+            session_id=str(entry.get("session_id")) if entry.get("session_id") else None,
+            long_running_wait_requested=long_wait,
+        )
+        snap = dict(entry)
+        snap["candidates"] = sessions
+        next_action = decide(req, snap, settings).action
+    except Exception:
+        next_action = "unknown"
+    wl_path = entry.get("worklog_path") or (meta.get("worklog_path") if isinstance(meta, dict) else None) or str(tpath / "WORKLOG.md")
+    return f"{task_key} | {stage} | 맥락 {tok_str}({m_status}) | {entry_state} | {next_action} | {wl_path}"
+
 headers = ["작업", "내용", "상태", "검수", "마지막 변화", "완료 예상", "진행"]
 rows = []
 now_ts = time.time()
@@ -427,10 +571,9 @@ for task in valid_tasks:
             try:
                 with open(cand_path, "r", encoding="utf-8", errors="replace") as cf:
                     for line in cf:
-                        if re.search(r"ERROR[: ]|RESOURCE_EXHAUSTED|quota exceeded|rate limit exceeded|usage limit reached|at capacity|capacity exceeded", line, re.IGNORECASE) and not re.search(r"^ERROR:\s*test_", line, re.IGNORECASE):
-                            if re.search(r"(quota|rate[ _-]?limit|usage[ _-]?limit|at capacity|capacity exceeded|RESOURCE_EXHAUSTED)", line, re.IGNORECASE):
-                                is_quota_err = True
-                                break
+                        if is_cli_quota_error_line(line):
+                            is_quota_err = True
+                            break
             except Exception:
                 pass
             if is_quota_err:
@@ -454,8 +597,9 @@ for task in valid_tasks:
     v_status = get_verify_status(task)
     prog = get_progress(task)
     eta = estimate_eta(task, state, now_ts)
+    ctx_line = get_context_summary_line(task, prog)
     
-    rows.append([task_name, title, state, v_status, age_str, eta, prog, latest_ts])
+    rows.append([task_name, title, state, v_status, age_str, eta, prog, latest_ts, ctx_line])
 
 if not all_mode:
     recent_cutoff = now_ts - 24 * 60 * 60
@@ -467,8 +611,13 @@ if not all_mode:
         if row not in selected:
             selected.append(row)
     print(f"실행 {len(running)} · 실패(24h) {len(recent_failed)} · 완료(24h) {len(recent_done)} · 숨김 {len(rows) - len(selected)}")
-    for task_name, title, state, verify, age, eta, progress, _ in selected[:10]:
+    ctx_Source = selected if selected else rows
+    ctx_lines = [r[8] for r in ctx_Source if r[8]]
+    max_task_lines = max(1, 10 - len(ctx_lines[:3]))
+    for task_name, title, state, verify, age, eta, progress, _, _ in selected[:max_task_lines]:
         print(f"{task_name} | {state} | {age} | {progress[:40]}")
+    for cline in ctx_lines[:3]:
+        print(cline)
     print_notice()
     sys.exit(0)
 
@@ -512,6 +661,9 @@ print(render_row(headers))
 print(sep)
 for r in rows:
     print(render_row(r[:7]))
+for r in rows:
+    if r[8]:
+        print(r[8])
 print_notice()
 EOF
 }

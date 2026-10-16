@@ -94,7 +94,7 @@ remove_task() {
 notify() {
   local task=$1 message=$2
   local kind='실패'
-  [[ $message == 완료* ]] && kind='완료'
+  [[ $message == 완료* || $message == "잡 완료"* ]] && kind='완료'
   mkdir -p "$(dirname "$journal_log")"
   rotate_journal_if_needed
   touch "$journal_log"
@@ -116,6 +116,9 @@ handle_watch_event() {
   if [[ $event_type == "완료" ]]; then
     remove_task "$task"
     notify "$name" "완료 (검수 $v_res)"
+  elif [[ $event_type == "잡 완료" ]]; then
+    remove_task "$task"
+    notify "$name" "$summary"
   elif [[ $event_type == "실패" || $event_type == "중단" ]]; then
     remove_task "$task"
     notify "$name" "$summary"
@@ -123,7 +126,7 @@ handle_watch_event() {
     # A quota lock prevents new launches, but this worker can still finish and
     # must remain registered so a later DONE/FAILED is reported.
     notify "$name" "$summary"
-  elif [[ $event_type == "멈춤" ]]; then
+  elif [[ $event_type == "긴 실행 대기" || $event_type == "멈춤" ]]; then
     notify "$name" "$summary"
   fi
 }

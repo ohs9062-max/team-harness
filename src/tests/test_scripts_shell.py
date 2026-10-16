@@ -274,9 +274,18 @@ def test_th_launch_allows_user_requested_claude_with_sonnet_default(test_env: di
     ]
 
 
-def test_th_launch_uses_the_image_permission_envelope_for_all_worker_types() -> None:
+def test_th_launch_uses_one_image_envelope_and_project_python_for_each_worker_type() -> (
+    None
+):
     source = (SCRIPTS_DIR / "th-launch.sh").read_text(encoding="utf-8")
     assert source.count('env "${image_env[@]}" setsid nohup') == 3
+    assert 'context_python=(uv run --directory "$script_dir/.." python)' in source
+    assert (
+        source.count(
+            'PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" "${context_python[@]}"'
+        )
+        == 2
+    )
 
 
 def test_th_watch_owner_filtering(test_env: dict):
@@ -1399,3 +1408,425 @@ def test_th_watchd_jev_watch_off(test_env: dict):
     assert not jev_log.exists(), (
         "jev_decisions.log must not be written when TH_JEV_WATCH=off"
     )
+
+
+def test_quota_error_line_ignores_code_and_diff_lines(test_env: dict):
+    """Regression (10-16): source/diff lines containing quota regexes must not lock."""
+    log = test_env["tmp_path"] / "codex.log"
+    log.write_text(
+        "\n".join(
+            [
+                "      if (lower ~ /(hit your usage limit|usage limit reached|rate limit exceeded|resource_exhausted|quota exceeded|at capacity|capacity exceeded)/) last = $0",
+                "+      if (lower ~ /(hit your usage limit|usage limit reached|rate limit exceeded)/) last = $0",
+                "-      if (lower ~ /(hit your usage limit|usage limit reached)/) last = $0",
+                'if re.search(r"ERROR[: ]|RESOURCE_EXHAUSTED|quota exceeded|rate limit exceeded", line):',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    library = SCRIPTS_DIR / "th-watch-lib.sh"
+    command = f'source "{library}"; quota_error_line "{log}"'
+    res = subprocess.run(
+        ["bash", "-c", command], env=test_env["env"], capture_output=True, text=True
+    )
+    assert res.returncode == 0
+    assert res.stdout == ""
+
+    # th-status must also ignore code/diff lines in codex.log
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_code_diff_no_quota")
+    (task_dir / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
+    (task_dir / "codex.log").write_text(
+        log.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    (test_env["watch_dir"] / "tasks.txt").write_text(f"{task_dir}\n", encoding="utf-8")
+    status_res = subprocess.run(
+        [str(SCRIPTS_DIR / "th-status.sh"), "-a"],
+        env=test_env["env"],
+        capture_output=True,
+        text=True,
+    )
+    assert status_res.returncode == 0
+    assert "워커 오류" not in status_res.stdout
+
+    # Real Codex and agy CLI error forms must still match independently.
+    for quota_line in (
+        "ERROR: You've hit your usage limit. Please try again later.",
+        "error: Individual quota reached. Please retry later.",
+        'AGY_ERROR: {"short_error":"RESOURCE_EXHAUSTED: quota exceeded"}',
+        "stream error: unexpected status 429 Too Many Requests",
+    ):
+        log.write_text(quota_line + "\n", encoding="utf-8")
+        res_match = subprocess.run(
+            ["bash", "-c", command], env=test_env["env"], capture_output=True, text=True
+        )
+        assert res_match.returncode == 0
+        assert quota_line in res_match.stdout
+
+
+def test_th_launch_and_watch_context_rollover_resume_and_status(test_env: dict):
+    """Stage 3a: th-launch dispatches, rejects active conflict, parks on exit, resumes short, and renders status."""
+    import json
+
+    from team_harness.worker_context import registry_path_for_workspace
+
+    env = dict(test_env["env"])
+    env["HOME"] = str(test_env["tmp_path"])
+    env["TEAM_HARNESS_WORKER_CONTEXT_ENABLED"] = "1"
+    env["TH_POLL_SEC"] = "1"
+
+    # Stub codex that records argv and emits thread.started JSON
+    args_file = test_env["tmp_path"] / "codex_args.txt"
+    codex_stub = test_env["bin_dir"] / "codex"
+    codex_stub.write_text(
+        "#!/usr/bin/env bash\n"
+        f'printf "%s\\n" "$@" > "{args_file}"\n'
+        'printf \'{"type":"thread.started","thread_id":"sid-stage3a-1"}\\n\'\n'
+        'sleep "${STUB_SLEEP:-0.2}"\n',
+        encoding="utf-8",
+    )
+    codex_stub.chmod(0o755)
+
+    rollout = (
+        test_env["tmp_path"]
+        / ".codex"
+        / "sessions"
+        / "2026"
+        / "10"
+        / "rollout-sid-stage3a-1.jsonl"
+    )
+    rollout.parent.mkdir(parents=True, exist_ok=True)
+    rollout.write_text(
+        json.dumps(
+            {
+                "type": "event_msg",
+                "session_id": "sid-stage3a-1",
+                "payload": {
+                    "call_id": "call-1",
+                    "info": {"last_token_usage": {"input_tokens": 58000}},
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_ctx_3a")
+    (task_dir / "task.md").write_text(
+        "---\ntask_key: exp/stage3a\nfollow_up: normal\n---\n# Stage 3a Task\nRun step 1.\n",
+        encoding="utf-8",
+    )
+    (task_dir / "STATUS").write_text("2026-10-16T10:00:00Z STEP1\n", encoding="utf-8")
+    (task_dir / "WORKLOG.md").write_text(
+        "key: exp/stage3a\ngoal: step 1\nnext step: step 2\n", encoding="utf-8"
+    )
+
+    launch_script = SCRIPTS_DIR / "th-launch.sh"
+    res1 = subprocess.run(
+        [str(launch_script), str(task_dir), "codex", str(test_env["workspace"])],
+        env={**env, "STUB_SLEEP": "5"},
+        capture_output=True,
+        text=True,
+    )
+    assert res1.returncode == 0, res1.stderr
+
+    # While active worker is alive, launching same task_key must be rejected
+    res_conflict = subprocess.run(
+        [str(launch_script), str(task_dir), "codex", str(test_env["workspace"])],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert res_conflict.returncode != 0
+    assert "already has an active worker" in res_conflict.stderr
+
+    # Check th-status shows active context line
+    status_active = subprocess.run(
+        [str(SCRIPTS_DIR / "th-status.sh")], env=env, capture_output=True, text=True
+    )
+    assert status_active.returncode == 0
+    assert "exp/stage3a |" in status_active.stdout
+    assert "| active |" in status_active.stdout
+
+    # Kill the sleep worker and mark DONE so th-watch reaps and parks it
+    w_pid = int((task_dir / "worker.pid").read_text(encoding="utf-8").strip())
+    try:
+        os.killpg(os.getpgid(w_pid), signal.SIGTERM)
+    except OSError:
+        pass
+    time.sleep(0.2)
+    (task_dir / "DONE").write_text("Step 1 done\n", encoding="utf-8")
+
+    watch_res = subprocess.run(
+        [str(SCRIPTS_DIR / "th-watch.sh"), "2"], env=env, capture_output=True, text=True
+    )
+    assert watch_res.returncode == 0
+    assert "완료" in watch_res.stdout
+
+    reg_path = registry_path_for_workspace(test_env["workspace"])
+    reg_data = json.loads(reg_path.read_text(encoding="utf-8"))
+    sessions = reg_data["sessions"]
+    assert len(sessions) == 1
+    assert sessions[0]["state"] == "parked"
+    assert sessions[0]["session_id"] == "sid-stage3a-1"
+    assert sessions[0]["input_tokens"] == 58000
+    assert sessions[0]["measurement_status"] == "measured"
+
+    # Re-add task to tasks.txt and check th-status renders 58k(measured) | parked | resume
+    (test_env["watch_dir"] / "tasks.txt").write_text(f"{task_dir}\n", encoding="utf-8")
+    (task_dir / "task.md").write_text(
+        "---\ntask_key: exp/stage3a\nfollow_up: short\n---\n# Stage 3a Task\nQuick fix.\n",
+        encoding="utf-8",
+    )
+    status_parked = subprocess.run(
+        [str(SCRIPTS_DIR / "th-status.sh"), "-a"],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert status_parked.returncode == 0
+    assert "맥락 58k(measured) | parked | resume" in status_parked.stdout
+
+    # Launching with follow_up: short resumes sid-stage3a-1
+    res_resume = subprocess.run(
+        [str(launch_script), str(task_dir), "codex", str(test_env["workspace"])],
+        env={**env, "STUB_SLEEP": "0.1"},
+        capture_output=True,
+        text=True,
+    )
+    assert res_resume.returncode == 0, res_resume.stderr
+    time.sleep(0.3)
+    recorded_args = args_file.read_text(encoding="utf-8").splitlines()
+    assert "resume" in recorded_args
+    assert "sid-stage3a-1" in recorded_args
+
+
+def test_th_watch_long_running_wait_detection_and_job_preservation(test_env: dict):
+    """Stage 3a: detect consecutive sleep polls while job.pid is alive, ignore prompt/false-positives, terminate only worker after grace, and notify on job completion."""
+    env = dict(test_env["env"])
+    env["HOME"] = str(test_env["tmp_path"])
+    env["TEAM_HARNESS_WORKER_CONTEXT_ENABLED"] = "1"
+    env["TH_POLL_SEC"] = "1"
+
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_long_job")
+    (task_dir / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
+    (task_dir / "task.md").write_text(
+        "---\ntask_key: exp/long-job\nfollow_up: normal\n---\n# Long Job\nDo not sleep in a loop.\n",
+        encoding="utf-8",
+    )
+    (task_dir / "STATUS").write_text(
+        "2026-10-16T10:00:00Z TRAINING\n", encoding="utf-8"
+    )
+    (test_env["watch_dir"] / "tasks.txt").write_text(f"{task_dir}\n", encoding="utf-8")
+
+    # Spawn detached long job and separate worker in distinct process groups
+    job_proc = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    worker_proc = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    try:
+        # 1. False positive check: when job.pid == worker.pid, it is NOT a detached job
+        (task_dir / "worker.pid").write_text(f"{worker_proc.pid}\n", encoding="utf-8")
+        (task_dir / "job.pid").write_text(f"{worker_proc.pid}\n", encoding="utf-8")
+        (task_dir / "codex.log").write_text(
+            "Do not poll in a loop (sleep -> check -> sleep)\n"
+            '{"type":"item.completed","item":{"id":"1","type":"command_execution","command":"sleep 5"}}\n'
+            '{"type":"item.completed","item":{"id":"2","type":"command_execution","command":"sleep 5"}}\n',
+            encoding="utf-8",
+        )
+        subprocess.run(
+            [str(SCRIPTS_DIR / "th-watch.sh"), "1"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert not (task_dir / "context_exit_requested.json").exists()
+
+        # 2. Distinct job.pid, but only prompt echo / prose mentioning sleep -> no false positive
+        (task_dir / "job.pid").write_text(f"{job_proc.pid}\n", encoding="utf-8")
+        (task_dir / "codex.log").write_text(
+            "Prompt echo: sleep 10 && ps -ef\n"
+            "- sleep 30\n"
+            '{"type":"item.completed","item":{"id":"1","type":"command_execution","command":"sleep 5"}}\n',
+            encoding="utf-8",
+        )
+        subprocess.run(
+            [str(SCRIPTS_DIR / "th-watch.sh"), "1"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert not (task_dir / "context_exit_requested.json").exists()
+
+        # 3. Second consecutive sleep+status poll without artifact change triggers warning + exit request
+        with (task_dir / "codex.log").open("a", encoding="utf-8") as lf:
+            lf.write(
+                '{"type":"item.completed","item":{"id":"2","type":"command_execution","command":"sleep 5 && ps -p '
+                + str(job_proc.pid)
+                + '"}}\n'
+            )
+        watch_warn = subprocess.run(
+            [str(SCRIPTS_DIR / "th-watch.sh"), "2"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert watch_warn.returncode == 0
+        assert "긴 실행 대기" in watch_warn.stdout
+        assert (task_dir / "context_exit_requested.json").is_file()
+
+        # 4. After grace timeout (TH_EXIT_GRACE_SEC=0), harness writes minimal worklog, kills worker group, preserves job.pid
+        watch_kill = subprocess.run(
+            [str(SCRIPTS_DIR / "th-watch.sh"), "2"],
+            env={**env, "TH_EXIT_GRACE_SEC": "0", "TH_KILL_GRACE_SEC": "1"},
+            capture_output=True,
+            text=True,
+        )
+        assert watch_kill.returncode == 0
+        assert (task_dir / "WORKLOG.md").is_file()
+        assert worker_proc.poll() is not None, "worker process must be terminated"
+        assert job_proc.poll() is None, "detached job.pid must remain alive"
+
+        # 5. When job.pid finishes, th-watch reports job completion without fabricating DONE
+        job_proc.terminate()
+        job_proc.wait(timeout=5)
+        watch_job_done = subprocess.run(
+            [str(SCRIPTS_DIR / "th-watch.sh"), "2"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert watch_job_done.returncode == 0
+        assert "잡 완료" in watch_job_done.stdout
+        assert not (task_dir / "DONE").exists()
+        assert (task_dir / ".th_job_completed").is_file()
+
+        # 6. Result analysis launch forces fresh even when follow_up is short
+        args_file = test_env["tmp_path"] / "post_job_args.txt"
+        codex_stub = test_env["bin_dir"] / "codex"
+        codex_stub.write_text(
+            f'#!/usr/bin/env bash\nprintf "%s\\n" "$@" > "{args_file}"\n',
+            encoding="utf-8",
+        )
+        codex_stub.chmod(0o755)
+        (task_dir / "task.md").write_text(
+            "---\ntask_key: exp/long-job\nfollow_up: short\n---\n# Analyze Long Job\n",
+            encoding="utf-8",
+        )
+        res_post = subprocess.run(
+            [
+                str(SCRIPTS_DIR / "th-launch.sh"),
+                str(task_dir),
+                "codex",
+                str(test_env["workspace"]),
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert res_post.returncode == 0, res_post.stderr
+        time.sleep(0.2)
+        post_args = args_file.read_text(encoding="utf-8").splitlines()
+        assert "resume" not in post_args
+    finally:
+        for proc in (job_proc, worker_proc):
+            if proc.poll() is None:
+                proc.terminate()
+                proc.wait(timeout=5)
+
+
+def test_th_launch_handoff_preserves_job_pid_and_embeds_experiment_and_minimal_worklog(
+    test_env: dict,
+):
+    """Stage 3a: handoff preserves job.pid/WORKLOG/EXPERIMENT, generates minimal worklog on invalid doc, and defers kill when pgid is shared."""
+    env = dict(test_env["env"])
+    env["HOME"] = str(test_env["tmp_path"])
+    env["TEAM_HARNESS_WORKER_CONTEXT_ENABLED"] = "1"
+    env["TH_POLL_SEC"] = "1"
+
+    args_file = test_env["tmp_path"] / "handoff_args.txt"
+    codex_stub = test_env["bin_dir"] / "codex"
+    codex_stub.write_text(
+        f'#!/usr/bin/env bash\nprintf "%s\\n" "$@" > "{args_file}"\n', encoding="utf-8"
+    )
+    codex_stub.chmod(0o755)
+
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_handoff_exp")
+    exp_dir = test_env["tmp_path"] / "experiments" / "resnet-baseline"
+    exp_dir.mkdir(parents=True, exist_ok=True)
+    exp_file = exp_dir / "EXPERIMENT.md"
+    exp_file.write_text(
+        "# Experiment resnet-baseline\nbaseline: acc=0.81\n", encoding="utf-8"
+    )
+
+    (task_dir / "task.md").write_text(
+        "---\ntask_key: experiment/resnet-baseline\nfollow_up: normal\n---\n# ResNet Handoff\nContinue work.\n",
+        encoding="utf-8",
+    )
+    # Write oversized (>60 lines) WORKLOG.md to trigger minimal worklog snapshot while preserving original
+    oversized_wl = "\n".join(
+        [f"line {i}: experiments/resnet-baseline/EXPERIMENT.md" for i in range(65)]
+    )
+    (task_dir / "WORKLOG.md").write_text(oversized_wl + "\n", encoding="utf-8")
+    (task_dir / "codex.log").write_text(
+        "SECRET_PREVIOUS_SESSION_LOG_DO_NOT_INLINE\n", encoding="utf-8"
+    )
+
+    job_proc = subprocess.Popen(["sleep", "30"])
+    same_group_worker = subprocess.Popen(["sleep", "30"])
+    try:
+        (task_dir / "job.pid").write_text(f"{job_proc.pid}\n", encoding="utf-8")
+        (task_dir / "worker.pid").write_text("999997\n", encoding="utf-8")
+
+        res = subprocess.run(
+            [
+                str(SCRIPTS_DIR / "th-launch.sh"),
+                str(task_dir),
+                "codex",
+                str(test_env["workspace"]),
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert res.returncode == 0, res.stderr
+        # job.pid and original WORKLOG.md must be preserved; minimal worklog created
+        assert (task_dir / "job.pid").read_text(encoding="utf-8").strip() == str(
+            job_proc.pid
+        )
+        assert (
+            (task_dir / "WORKLOG.md").read_text(encoding="utf-8").startswith("line 0:")
+        )
+        assert (task_dir / "WORKLOG.minimal.md").is_file()
+
+        time.sleep(0.2)
+        prompt_text = args_file.read_text(encoding="utf-8")
+        assert "Handoff WORKLOG" in prompt_text
+        assert "Handoff EXPERIMENT" in prompt_text
+        assert "baseline: acc=0.81" in prompt_text
+        assert "SECRET_PREVIOUS_SESSION_LOG_DO_NOT_INLINE" not in prompt_text
+
+        # When worker and job share the same PGID, forced kill must be deferred
+        (task_dir / "worker.pid").write_text(
+            f"{same_group_worker.pid}\n", encoding="utf-8"
+        )
+        (task_dir / "context_exit_requested.json").write_text(
+            '{"action":"rollover","reason":"long_running_wait","requested_at_epoch":1}\n',
+            encoding="utf-8",
+        )
+        (test_env["watch_dir"] / "tasks.txt").write_text(
+            f"{task_dir}\n", encoding="utf-8"
+        )
+        watch_defer = subprocess.run(
+            [str(SCRIPTS_DIR / "th-watch.sh"), "2"],
+            env={**env, "TH_EXIT_GRACE_SEC": "0"},
+            capture_output=True,
+            text=True,
+        )
+        assert watch_defer.returncode == 0
+        assert "보류" in watch_defer.stdout
+        assert same_group_worker.poll() is None
+        assert job_proc.poll() is None
+    finally:
+        for proc in (same_group_worker, job_proc):
+            if proc.poll() is None:
+                proc.terminate()
+                proc.wait(timeout=5)
