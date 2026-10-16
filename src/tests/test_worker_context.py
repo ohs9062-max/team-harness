@@ -578,3 +578,174 @@ async def test_run_repl_spawn_agent_rejects_active_conflict_and_preserves_parked
     assert after_failed_resume[0]["input_tokens"] == 45000
     assert after_failed_resume[0]["generation"] == 1
     assert after_failed_resume[0]["pending_launch"] is False
+
+
+def test_context_budget_boundary_conditions_and_front_matter(tmp_path):
+    from team_harness.worker_context import ContextRequest
+    from team_harness.worker_context import decide
+    from team_harness.worker_context import parse_task_front_matter
+    from team_harness.worker_context import parse_task_metadata
+    from team_harness.worker_context import WorkerContextError
+    from team_harness.worker_context import WorkerContextSettings
+
+    settings = WorkerContextSettings(soft_cap_tokens=60000, resume_max_tokens=90000)
+
+    # 1. Default budget (60000)
+    req_default = ContextRequest(task_key="k1", agent_type="codex", phase="boundary")
+    dec_59k = decide(
+        req_default, {"input_tokens": 59999, "measurement_status": "measured"}, settings
+    )
+    assert dec_59k.action == "continue"
+    assert dec_59k.reason == "within_context_cap"
+
+    dec_60k = decide(
+        req_default, {"input_tokens": 60000, "measurement_status": "measured"}, settings
+    )
+    assert dec_60k.action == "continue"
+    assert dec_60k.reason == "within_context_cap"
+
+    dec_60001 = decide(
+        req_default, {"input_tokens": 60001, "measurement_status": "measured"}, settings
+    )
+    assert dec_60001.action == "rollover"
+    assert dec_60001.reason == "context_cap_exceeded"
+
+    # 2. Custom context_budget (120000)
+    req_custom = ContextRequest(
+        task_key="k1", agent_type="codex", phase="boundary", context_budget=120000
+    )
+    dec_119k = decide(
+        req_custom, {"input_tokens": 119999, "measurement_status": "measured"}, settings
+    )
+    assert dec_119k.action == "continue"
+
+    dec_120k = decide(
+        req_custom, {"input_tokens": 120000, "measurement_status": "measured"}, settings
+    )
+    assert dec_120k.action == "continue"
+
+    dec_120001 = decide(
+        req_custom, {"input_tokens": 120001, "measurement_status": "measured"}, settings
+    )
+    assert dec_120001.action == "rollover"
+
+    # 3. Validation: context_budget must be positive
+    with pytest.raises(WorkerContextError, match="context_budget must be positive"):
+        ContextRequest(task_key="k1", agent_type="codex", context_budget=0)
+    with pytest.raises(WorkerContextError, match="context_budget must be positive"):
+        ContextRequest(task_key="k1", agent_type="codex", context_budget=-10)
+
+    # 4. Front matter parsing
+    task_file = tmp_path / "task.md"
+    task_file.write_text(
+        "---\n"
+        "task_key: exp/large-run\n"
+        "follow_up: short\n"
+        "context_budget: 120000\n"
+        "---\n"
+        "Task description\n",
+        encoding="utf-8",
+    )
+    tkey, fup = parse_task_front_matter(task_file)
+    assert tkey == "exp/large-run"
+    assert fup == "short"
+
+    meta = parse_task_metadata(task_file)
+    assert meta == {
+        "task_key": "exp/large-run",
+        "follow_up": "short",
+        "context_budget": 120000,
+    }
+
+
+def test_three_execution_paths_same_fixture_decision(tmp_path):
+    import json
+
+    from team_harness.worker_context import ContextMeasurement
+    from team_harness.worker_context import ContextRequest
+    from team_harness.worker_context import decide
+    from team_harness.worker_context import dispatch
+    from team_harness.worker_context import WorkerContextRegistry
+    from team_harness.worker_context import WorkerContextSettings
+
+    settings = WorkerContextSettings(soft_cap_tokens=60000, resume_max_tokens=90000)
+    reg_path = tmp_path / ".team-harness" / "worker_context" / "registry.json"
+    registry = WorkerContextRegistry(reg_path, workspace_id=str(tmp_path))
+    registry.register_active(
+        {
+            "task_key": "bench/t1",
+            "session_id": "sid-shared-1",
+            "agent_type": "codex",
+            "model": "gpt-5.6-terra",
+            "worktree": str(tmp_path),
+        }
+    )
+    registry.update_measurement_and_park(
+        "sid-shared-1",
+        ContextMeasurement(input_tokens=45000, measurement_status="measured"),
+    )
+
+    task_file = tmp_path / "task.md"
+    task_file.write_text(
+        "---\ntask_key: bench/t1\nfollow_up: short\ncontext_budget: 60000\n---\n",
+        encoding="utf-8",
+    )
+
+    # Path 1: CLI / shell path (th worker-ctx check)
+    runner = CliRunner()
+    cli_result = runner.invoke(
+        main,
+        [
+            "worker-ctx",
+            "check",
+            "--workspace",
+            str(tmp_path),
+            "--task-file",
+            str(task_file),
+            "--phase",
+            "dispatch",
+        ],
+    )
+    assert cli_result.exit_code == 0, cli_result.output
+    cli_decision = json.loads(cli_result.output.strip())
+    assert cli_decision["action"] == "resume"
+    assert cli_decision["session_id"] == "sid-shared-1"
+
+    # Path 2: run/repl path (dispatch)
+    r_req = ContextRequest(
+        task_key="bench/t1",
+        agent_type="codex",
+        follow_up="short",
+        phase="dispatch",
+        context_budget=60000,
+    )
+    r_dec, _ = dispatch(workspace=tmp_path, request=r_req, settings=settings)
+    assert r_dec.action == "resume"
+    assert r_dec.session_id == "sid-shared-1"
+
+    # Path 3: protocol path (decide with registry snapshot)
+    p_req = ContextRequest(
+        task_key="bench/t1",
+        agent_type="codex",
+        follow_up="short",
+        phase="dispatch",
+        context_budget=60000,
+    )
+    p_dec = decide(
+        p_req, snapshot={"candidates": registry.sessions()}, settings=settings
+    )
+    assert p_dec.action == "resume"
+    assert p_dec.session_id == "sid-shared-1"
+
+    # Boundary comparison: 65k tokens with normal follow-up -> rollover across all
+    req_b_normal = ContextRequest(
+        task_key="bench/t1",
+        agent_type="codex",
+        follow_up="normal",
+        phase="boundary",
+        context_budget=60000,
+    )
+    snapshot_65k = {"input_tokens": 65000, "measurement_status": "measured"}
+    dec_shared = decide(req_b_normal, snapshot_65k, settings)
+    assert dec_shared.action == "rollover"
+    assert dec_shared.reason == "context_cap_exceeded"

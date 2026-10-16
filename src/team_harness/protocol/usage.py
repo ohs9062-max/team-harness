@@ -23,6 +23,7 @@ tokens into money.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from dataclasses import field
 import json
@@ -314,3 +315,67 @@ def summarize_usage(handoffs: list[dict[str, Any]]) -> ProtocolUsageTotals:
         totals.total_tokens = _add(totals.total_tokens, usage.effective_total_tokens())
         totals.cost_usd = _add_float(totals.cost_usd, usage.cost_usd)
     return totals
+
+
+def combine_usages(
+    usages: Sequence[WorkerUsage | dict[str, Any] | None],
+) -> dict[str, Any] | None:
+    """Combine actual token spend across multiple rolled-over worker processes in a stage.
+
+    Does not double-count active input context or add current context into costs.
+    """
+    valid_items = [
+        u for u in usages if u is not None and (isinstance(u, dict) or not u.is_empty())
+    ]
+    if not valid_items:
+        return None
+    if len(valid_items) == 1:
+        single = valid_items[0]
+        if isinstance(single, WorkerUsage):
+            return single.to_dict()
+        return dict(single)
+    total_input: int | None = None
+    total_output: int | None = None
+    total_cached: int | None = None
+    total_effective: int | None = None
+    total_cost: float | None = None
+    source_events: list[str] = []
+
+    for item in usages:
+        if item is None:
+            continue
+        if isinstance(item, WorkerUsage):
+            u_in = item.input_tokens
+            u_out = item.output_tokens
+            u_cache = item.cached_input_tokens
+            u_tot = item.effective_total_tokens()
+            u_cost = item.cost_usd
+            if item.source_event_type:
+                source_events.append(item.source_event_type)
+        else:
+            u_in = _as_int(item.get("input_tokens"))
+            u_out = _as_int(item.get("output_tokens"))
+            u_cache = _as_int(item.get("cached_input_tokens"))
+            u_tot = _as_int(item.get("total_tokens"))
+            if u_tot is None and u_in is not None and u_out is not None:
+                u_tot = u_in + u_out
+            u_cost = _as_float(item.get("cost_usd"))
+            src = item.get("source_event_type")
+            if isinstance(src, str):
+                source_events.append(src)
+
+        total_input = _add(total_input, u_in)
+        total_output = _add(total_output, u_out)
+        total_cached = _add(total_cached, u_cache)
+        total_effective = _add(total_effective, u_tot)
+        total_cost = _add_float(total_cost, u_cost)
+
+    res = WorkerUsage(
+        input_tokens=total_input,
+        output_tokens=total_output,
+        cached_input_tokens=total_cached,
+        total_tokens=total_effective,
+        cost_usd=total_cost,
+        source_event_type=",".join(source_events) if source_events else None,
+    )
+    return res.to_dict() if not res.is_empty() else None

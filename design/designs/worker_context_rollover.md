@@ -6,10 +6,15 @@
 ## 1. 정책과 경계
 
 - 현재 맥락(active input context)은 마지막 모델 호출의 입력 토큰 수다. 누적 사용량이 아니다.
-- 일반 작업은 60k까지 계속하고, 60k 초과를 관측하면 진행 중인 자연스러운 단위를 마친다.
-  단위는 작업서의 단계(파일 수정, 테스트 실행, 결과 정리 등)이며 단계마다 문서 갱신과 판정을 한다.
-  정확히 60000이면 계속한다. 호출 중 임계값을 넘었다고 프로세스를 즉시 죽이지 않는다.
-- 다음 작업도 60k 미만이면 같은 논리 세션을 활용하되, 모든 후속 resume에는 아래 세 조건이 필수다.
+- 일반 작업의 맥락 상한은 고정 60k가 아니라 작업서마다 `context_budget`으로 정한다.
+  코디네이터가 최소 작업 단위 크기로 정한다(기본 60000, 큰 단위는 120000 등).
+  작업서에 없으면 설정의 `[worker_context] soft_cap_tokens`(60000)를 따른다.
+  상한 초과를 관측하면 프로세스를 즉시 죽이지 않고 진행 중인 자연스러운 단위를 마친다.
+  단위는 작업서의 단계(파일 수정, 테스트 실행, 결과 정리 등)이며 단계 경계(WORKLOG 갱신 직후)에서
+  인계·교체 판정을 한다. 정확히 상한(60000/context_budget)이면 계속한다.
+  직전 워커가 진척(git diff/체크포인트/문서 진척) 없이 상한에 걸렸으면 같은 상한으로 재시작하지 않고
+  작업을 더 쪼개라는 사건을 코디네이터에 낸다.
+- 다음 작업도 60k(또는 context_budget) 미만이면 같은 논리 세션을 활용하되, 모든 후속 resume에는 아래 세 조건이 필수다.
   (a) 같은 `task_key`, (b) 작업서의 `follow_up: short`, (c) 최신 맥락 ≤ 90000.
   하나라도 아니면 새 세션과 작업현황 문서로 시작한다. 60k 미만도 예외가 아니다.
 - 세 조건을 만족하는 짧은 후속 작업은 60k 초과 세션도 재개할 수 있다.
@@ -29,10 +34,13 @@
 ---
 task_key: experiment/resnet-baseline
 follow_up: short
+context_budget: 120000
 ---
 ```
 `task_key`는 코디네이터가 유지하는 불변 문자열이다. 다른 일을 같은 키로 합치지 않는다.
 `follow_up`은 `short` 또는 `normal`이며 생략하면 `normal`이다. 잘못된 값은 실행 전 거부한다.
+`context_budget`은 코디네이터가 작업 단위에 맞춰 지정하는 맥락 상한(기본 60000, 큰 단위 120000 등)이며
+생략 시 설정의 `soft_cap_tokens`를 따른다.
 `short`는 짧은 수정·테스트 재실행·직전 디버깅 마무리만 표시한다. 키 누락은 신규 실행 전
 코디네이터가 채우도록 오류로 반환하며, 기존 비활성화 경로는 그대로 허용한다.
 Protocol은 루트 키 아래 lane/stage 식별자를 붙여 코디네이터가 키를 확정한다.
@@ -89,7 +97,7 @@ retired는 재개할 수 없다. 공유 로그·다른 세션·살아 있는 세
 ## 4. 판정 함수와 집행 순서
 
 `decide(request, snapshot, settings, now) -> decision`은 부작용 없는 단일 판정 함수다.
-입력: 키·follow_up·종류·lane/stage·평가 시점(`dispatch`/`boundary`), 후보 세션과 측정값,
+입력: 키·follow_up·context_budget·종류·lane/stage·평가 시점(`dispatch`/`boundary`), 후보 세션과 측정값,
 문서 체크포인트, 종료 여부, 긴 실행 대기 요청, 설정. 입력 객체는 호출자가 임의 추론하지 않는다.
 출력: `action`(`continue`/`rollover`/`resume`/`fresh`/`blocked`), `reason`,
 `session_id`, `input_tokens`, `measurement_status`, `worklog_path`, `generation`.
@@ -100,7 +108,9 @@ CLI `th worker-ctx check --task-file … --registry … --session-id … --phase
 1. dispatch는 키 잠금, parked 정리 후보 계산, 최신 측정 확인 후 세 조건을 판정한다.
    종류·작업 범위가 다르거나 측정값을 확인할 수 없으면 resume하지 않고 fresh를 반환한다.
 2. boundary는 워커가 단계를 마친 뒤 WORKLOG를 원자 갱신하고 직접 check를 호출한다.
-   일반 작업 >60k, 허용된 short 후속 >90k, 또는 긴 실행 대기 요청이면 rollover다.
+   일반 작업 > context_budget(생략 시 soft_cap_tokens 60k), 허용된 short 후속 > 90k, 또는 긴 실행 대기 요청이면 rollover다.
+   상한 초과 시 임의로 즉시 끊지 않고 진행 단계 경계(WORKLOG 갱신 직후)에서 인계·교체한다.
+   직전 워커가 진척 없이 상한에 걸렸으면 같은 상한으로 재시작하지 않고 작업을 더 쪼개라는 사건을 코디네이터에 낸다.
    unknown은 경고와 마지막 유효 측정 시각을 남긴다. 유효 측정이 없으면 자동 토큰 롤오버를 보류한다.
 3. rollover면 문서 경로와 이유를 기록하고 종료한다. 하네스는 출력 판정과 실제 종료만 집행한다.
    기존 프로세스가 살아 있는 동안 후임을 띄우지 않는다. 경계 확인 누락은 경고하며 자동 성공으로 보지 않는다.

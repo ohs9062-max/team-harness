@@ -16,6 +16,7 @@ import signal
 import subprocess
 import time
 from typing import Any
+from typing import cast
 from typing import Protocol as TypingProtocol
 import uuid
 
@@ -29,6 +30,7 @@ from team_harness.agents.rate_limits import detect_rate_limit_from_path
 from team_harness.agents.rate_limits import RateLimitCircuitBreaker
 from team_harness.agents.rate_limits import RateLimitTrip
 from team_harness.agents.registry import resolve_template
+from team_harness.agents.session_capture import extract_session_id
 from team_harness.agents.tmux_view import tmux_available
 from team_harness.agents.tmux_view import TmuxViewer
 from team_harness.config import Config
@@ -49,12 +51,20 @@ from team_harness.protocol.prompt import build_fix_prompt
 from team_harness.protocol.prompt import build_implement_prompt
 from team_harness.protocol.prompt import build_review_prompt
 from team_harness.protocol.state import ProtocolStateManager
+from team_harness.protocol.usage import combine_usages
 from team_harness.protocol.usage import extract_usage
+from team_harness.protocol.usage import WorkerUsage
 from team_harness.protocol.worker_output import extract_final_text
 from team_harness.protocol.worktree import changed_files
 from team_harness.protocol.worktree import checkpoint_worktree
 from team_harness.protocol.worktree import create_worktree
 from team_harness.protocol.worktree import diff_worktree
+from team_harness.worker_context import ContextMeasurement
+from team_harness.worker_context import ContextRequest
+from team_harness.worker_context import decide
+from team_harness.worker_context import measure_agent_context
+from team_harness.worker_context import registry_path_for_workspace
+from team_harness.worker_context import WorkerContextRegistry
 
 
 class AgentRunner(TypingProtocol):
@@ -77,6 +87,55 @@ class AgentRunner(TypingProtocol):
     ) -> AgentResult: ...
 
 
+async def invoke_agent_runner(
+    runner: AgentRunner,
+    *,
+    agent_type: str,
+    prompt: str,
+    cwd: str,
+    timeout_sec: int,
+    model: str | None = None,
+    effort: str | None = None,
+    label: str | None = None,
+    task_key: str | None = None,
+    follow_up: str = "normal",
+    stage: str | None = None,
+    lane: str | None = None,
+    context_budget: int | None = None,
+    state_mgr: Any | None = None,
+    state: Any | None = None,
+) -> AgentResult:
+    """Invoke runner.run_agent with backward-compatible keyword argument filtering."""
+    if isinstance(runner, TeamHarnessAgentRunner) or getattr(
+        runner, "_accepts_worker_context", False
+    ):
+        return await cast(Any, runner).run_agent(
+            agent_type=agent_type,
+            prompt=prompt,
+            cwd=cwd,
+            timeout_sec=timeout_sec,
+            model=model,
+            effort=effort,
+            label=label,
+            task_key=task_key,
+            follow_up=follow_up,
+            stage=stage,
+            lane=lane,
+            context_budget=context_budget,
+            state_mgr=state_mgr,
+            state=state,
+        )
+    return await runner.run_agent(
+        agent_type=agent_type,
+        prompt=prompt,
+        cwd=cwd,
+        timeout_sec=timeout_sec,
+        model=model,
+        effort=effort,
+        label=label,
+    )
+
+
 def _safe_cleanup(runner: Any) -> None:
     """Safely terminate all worker processes registered in runner."""
     cleanup_fn = getattr(runner, "cleanup", None)
@@ -92,6 +151,8 @@ def _safe_cleanup(runner: Any) -> None:
 
 class TeamHarnessAgentRunner:
     """AgentRunner implementation that delegates to team_harness execution engine."""
+
+    _accepts_worker_context: bool = True
 
     def __init__(
         self,
@@ -152,6 +213,14 @@ class TeamHarnessAgentRunner:
         model: str | None = None,
         effort: str | None = None,
         label: str | None = None,
+        task_key: str | None = None,
+        follow_up: str = "normal",
+        stage: str | None = None,
+        lane: str | None = None,
+        context_budget: int | None = None,
+        state_mgr: Any | None = None,
+        state: Any | None = None,
+        **extra_kwargs: Any,
     ) -> AgentResult:
         resolve_template(agent_type=agent_type, config=self.config)
 
@@ -161,132 +230,424 @@ class TeamHarnessAgentRunner:
                 agent_type=agent_type, requested_model=model, label=label, trip=trip
             )
 
-        started = time.monotonic()
-        agent_id = f"{agent_type}_{uuid.uuid4().hex[:8]}"
-        stdout_path = self.log_dir / f"{agent_id}_stdout.log"
-        stderr_path = self.log_dir / f"{agent_id}_stderr.log"
-
-        prompt, graph_env = await self.context_graph.prepare_spawn(
-            agent_type=agent_type, prompt=prompt, cwd=cwd
-        )
-        spawn_result = await spawner.spawn(
-            agent_id=agent_id,
-            agent_type=agent_type,
-            prompt=prompt,
-            cwd=Path(cwd),
-            config=self.config,
-            log_dir=self.log_dir,
-            extra_env=graph_env or None,
-            model=model,
-            effort=effort,
-            stdout_path=stdout_path,
-            stderr_path=stderr_path,
+        context_settings = self.config.worker_context
+        use_context = (
+            context_settings.enabled
+            and not context_settings.agent_disabled(agent_type)
+            and task_key is not None
         )
 
-        agent_state = AgentState(
-            id=agent_id,
-            agent_type=agent_type,
-            prompt=prompt,
-            cwd=cwd,
-            proc=spawn_result.proc,
-            spawn_time=datetime.now(UTC),
-            stdout_log=stdout_path,
-            stderr_log=stderr_path,
-            pgid=spawn_result.pgid,
-            effective_model=spawn_result.effective_model,
-        )
-        self.manager.register(agent_state)
-        if self.tmux_viewer is not None:
-            await self.tmux_viewer.open_log_window(
-                window_name=label or agent_id, log_path=stdout_path
-            )
+        accumulated_duration = 0.0
+        accumulated_usages: list[WorkerUsage | dict[str, Any] | None] = []
+        current_prompt = prompt
+        current_follow_up = follow_up
+        rollover_generation = 0
+        max_rollovers = 5
 
-        timed_out = False
-        try:
-            await asyncio.wait_for(spawn_result.proc.wait(), timeout=timeout_sec)
-        except TimeoutError:
-            timed_out = True
-            if spawn_result.pgid:
-                signal_group(spawn_result.pgid, signal.SIGKILL)
-            elif spawn_result.proc.returncode is None:
-                spawn_result.proc.kill()
-            await spawn_result.proc.wait()
-        except BaseException:
-            if spawn_result.pgid:
-                signal_group(spawn_result.pgid, signal.SIGKILL)
-            elif spawn_result.proc.returncode is None:
-                spawn_result.proc.kill()
+        context_registry = (
+            WorkerContextRegistry(registry_path_for_workspace(cwd))
+            if use_context
+            else None
+        )
+
+        spawn_result: spawner.SpawnResult | None = None
+        stdout_path: Path | None = None
+        stderr_path: Path | None = None
+        stdout_text: str = ""
+        stderr_text: str = ""
+        returncode: int = 0
+        timed_out: bool = False
+        success: bool = False
+        error_msg: str | None = None
+        classification: dict[str, Any] | None = None
+
+        while True:
+            spawn_mode = "fresh"
+            resume_session_id: str | None = None
+            context_session_id: str | None = None
+
+            if use_context and context_registry is not None and task_key is not None:
+                dispatch_request = ContextRequest(
+                    task_key=task_key,
+                    agent_type=agent_type,
+                    follow_up=current_follow_up,
+                    phase="dispatch",
+                    lane=lane,
+                    stage=stage,
+                    context_budget=context_budget,
+                )
+                dispatch_decision = decide(
+                    dispatch_request,
+                    snapshot={"candidates": context_registry.sessions()},
+                    settings=context_settings,
+                )
+                if dispatch_decision.action == "resume" and rollover_generation == 0:
+                    spawn_mode = "resume"
+                    resume_session_id = dispatch_decision.session_id
+                context_session_id = resume_session_id or str(uuid.uuid4())
+                try:
+                    context_registry.register_active(
+                        {
+                            "task_key": task_key,
+                            "session_id": context_session_id,
+                            "agent_type": agent_type,
+                            "model": model,
+                            "worktree": cwd,
+                            "worklog_path": str(Path(cwd) / "WORKLOG.md"),
+                            "pending_launch": True,
+                        }
+                    )
+                except Exception:
+                    pass
+
+                if state_mgr is not None:
+                    state_mgr.append_event(
+                        "WORKER_CONTEXT_DISPATCH",
+                        task_key=task_key,
+                        stage=stage,
+                        lane=lane,
+                        action=dispatch_decision.action,
+                        reason=dispatch_decision.reason,
+                        session_id=context_session_id,
+                        generation=rollover_generation,
+                    )
+
+            baseline_head: str | None = None
+            baseline_status: str | None = None
             try:
-                await spawn_result.proc.wait()
+                proc = subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=cwd,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if proc.returncode == 0:
+                    baseline_head = proc.stdout.strip()
+                proc_stat = subprocess.run(
+                    ["git", "status", "--porcelain"],
+                    cwd=cwd,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if proc_stat.returncode == 0:
+                    baseline_status = proc_stat.stdout
             except Exception:
                 pass
-            raise
 
-        duration = time.monotonic() - started
-        returncode = spawn_result.proc.returncode or 0
+            started = time.monotonic()
+            agent_id = f"{agent_type}_{uuid.uuid4().hex[:8]}"
+            stdout_path = self.log_dir / f"{agent_id}_stdout.log"
+            stderr_path = self.log_dir / f"{agent_id}_stderr.log"
 
-        stdout_text = (
-            stdout_path.read_text(encoding="utf-8", errors="replace")
-            if stdout_path.exists()
-            else ""
-        )
-        stderr_text = (
-            stderr_path.read_text(encoding="utf-8", errors="replace")
-            if stderr_path.exists()
-            else ""
-        )
-
-        success = (returncode == 0) and not timed_out
-        error_msg: str | None = None
-        if timed_out:
-            error_msg = f"Agent timed out after {timeout_sec}s"
-        elif returncode != 0:
-            suffix = f": {stderr_text[:500]}" if stderr_text else ""
-            error_msg = f"Agent process exited with code {returncode}{suffix}"
-
-        classification: dict[str, Any] | None = None
-        if not success:
-            classification = self._classify_failure(
+            prompt_to_spawn, graph_env = await self.context_graph.prepare_spawn(
+                agent_type=agent_type, prompt=current_prompt, cwd=cwd
+            )
+            spawn_result = await spawner.spawn(
+                agent_id=agent_id,
                 agent_type=agent_type,
-                effective_model=spawn_result.effective_model,
+                prompt=prompt_to_spawn,
+                cwd=Path(cwd),
+                config=self.config,
+                log_dir=self.log_dir,
+                extra_env=graph_env or None,
+                model=model,
+                effort=effort,
                 stdout_path=stdout_path,
-                stdout_text=stdout_text,
-                stderr_text=stderr_text,
-                returncode=returncode,
-            )
-        if classification is not None:
-            error_msg = (
-                f"{error_msg} [{classification['category']}: "
-                f"{classification['detail']}]"
+                stderr_path=stderr_path,
+                mode=spawn_mode,
+                resume_session_id=resume_session_id,
+                generated_uuid=context_session_id,
             )
 
-        if self.verbose:
-            print(
-                _completion_line(
-                    label=label or agent_id,
+            if (
+                use_context
+                and context_registry is not None
+                and task_key is not None
+                and context_session_id is not None
+            ):
+                try:
+                    context_registry.register_active(
+                        {
+                            "task_key": task_key,
+                            "session_id": context_session_id,
+                            "agent_type": agent_type,
+                            "model": spawn_result.effective_model,
+                            "pid": spawn_result.pid,
+                            "pgid": spawn_result.pgid,
+                            "process_starttime": spawn_result.starttime,
+                            "worktree": cwd,
+                            "worklog_path": str(Path(cwd) / "WORKLOG.md"),
+                        }
+                    )
+                    context_registry.cleanup(context_settings)
+                except Exception:
+                    pass
+
+            agent_state = AgentState(
+                id=agent_id,
+                agent_type=agent_type,
+                prompt=prompt_to_spawn,
+                cwd=cwd,
+                proc=spawn_result.proc,
+                spawn_time=datetime.now(UTC),
+                stdout_log=stdout_path,
+                stderr_log=stderr_path,
+                pgid=spawn_result.pgid,
+                effective_model=spawn_result.effective_model,
+                context_registry_path=context_registry.path
+                if context_registry
+                else None,
+                context_session_id=context_session_id,
+            )
+            self.manager.register(agent_state)
+            if self.tmux_viewer is not None:
+                await self.tmux_viewer.open_log_window(
+                    window_name=label or agent_id, log_path=stdout_path
+                )
+
+            timed_out = False
+            try:
+                await asyncio.wait_for(spawn_result.proc.wait(), timeout=timeout_sec)
+            except TimeoutError:
+                timed_out = True
+                if spawn_result.pgid:
+                    signal_group(spawn_result.pgid, signal.SIGKILL)
+                elif spawn_result.proc.returncode is None:
+                    spawn_result.proc.kill()
+                await spawn_result.proc.wait()
+            except BaseException:
+                if spawn_result.pgid:
+                    signal_group(spawn_result.pgid, signal.SIGKILL)
+                elif spawn_result.proc.returncode is None:
+                    spawn_result.proc.kill()
+                try:
+                    await spawn_result.proc.wait()
+                except Exception:
+                    pass
+                raise
+
+            duration = time.monotonic() - started
+            accumulated_duration += duration
+            returncode = spawn_result.proc.returncode or 0
+
+            stdout_text = (
+                stdout_path.read_text(encoding="utf-8", errors="replace")
+                if stdout_path.exists()
+                else ""
+            )
+            stderr_text = (
+                stderr_path.read_text(encoding="utf-8", errors="replace")
+                if stderr_path.exists()
+                else ""
+            )
+
+            p_usage = extract_usage(stdout_text)
+            accumulated_usages.append(p_usage)
+
+            success = (returncode == 0) and not timed_out
+            error_msg = None
+            if timed_out:
+                error_msg = f"Agent timed out after {timeout_sec}s"
+            elif returncode != 0:
+                suffix = f": {stderr_text[:500]}" if stderr_text else ""
+                error_msg = f"Agent process exited with code {returncode}{suffix}"
+
+            classification = None
+            if not success:
+                classification = self._classify_failure(
                     agent_type=agent_type,
                     effective_model=spawn_result.effective_model,
-                    effort=effort,
-                    success=success,
+                    stdout_path=stdout_path,
+                    stdout_text=stdout_text,
+                    stderr_text=stderr_text,
+                    returncode=returncode,
                 )
-            )
+            if classification is not None:
+                error_msg = (
+                    f"{error_msg} [{classification['category']}: "
+                    f"{classification['detail']}]"
+                )
 
+            if self.verbose:
+                print(
+                    _completion_line(
+                        label=label or agent_id,
+                        agent_type=agent_type,
+                        effective_model=spawn_result.effective_model,
+                        effort=effort,
+                        success=success,
+                    )
+                )
+
+            is_rollover = False
+            if (
+                use_context
+                and context_registry is not None
+                and task_key is not None
+                and context_session_id is not None
+            ):
+                tmpl = resolve_template(agent_type=agent_type, config=self.config)
+                captured_id = extract_session_id(
+                    tmpl, stdout_text.encode("utf-8"), context_session_id
+                )
+                effective_sid = captured_id or context_session_id
+                measurement = measure_agent_context(
+                    agent_type=agent_type, session_id=effective_sid
+                )
+                if (
+                    measurement.measurement_status != "measured"
+                    and p_usage is not None
+                    and p_usage.input_tokens is not None
+                ):
+                    measurement = ContextMeasurement(
+                        input_tokens=p_usage.input_tokens,
+                        measurement_status="measured",
+                        source="usage",
+                    )
+                boundary_request = ContextRequest(
+                    task_key=task_key,
+                    agent_type=agent_type,
+                    follow_up=current_follow_up,
+                    phase="boundary",
+                    lane=lane,
+                    stage=stage,
+                    context_budget=context_budget,
+                )
+                boundary_decision = decide(
+                    boundary_request,
+                    snapshot={
+                        "input_tokens": measurement.input_tokens,
+                        "measurement_status": measurement.measurement_status,
+                        "worklog_path": str(Path(cwd) / "WORKLOG.md"),
+                    },
+                    settings=context_settings,
+                )
+                park_reason = (
+                    "rollover"
+                    if boundary_decision.action == "rollover"
+                    else ("failed" if not success else None)
+                )
+                try:
+                    context_registry.update_measurement_and_park(
+                        context_session_id,
+                        measurement,
+                        resolved_session_id=effective_sid,
+                        reason=park_reason,
+                    )
+                except Exception:
+                    pass
+
+                if state_mgr is not None:
+                    state_mgr.append_event(
+                        "WORKER_CONTEXT_BOUNDARY",
+                        task_key=task_key,
+                        stage=stage,
+                        lane=lane,
+                        action=boundary_decision.action,
+                        reason=boundary_decision.reason,
+                        input_tokens=measurement.input_tokens,
+                        measurement_status=measurement.measurement_status,
+                        session_id=effective_sid,
+                        generation=rollover_generation,
+                    )
+
+                if state is not None:
+                    state.worker_context[stage or lane or task_key] = {
+                        "task_key": task_key,
+                        "session_id": effective_sid,
+                        "action": boundary_decision.action,
+                        "reason": boundary_decision.reason,
+                        "input_tokens": measurement.input_tokens,
+                        "measurement_status": measurement.measurement_status,
+                        "generation": rollover_generation,
+                    }
+
+                if (
+                    success
+                    and boundary_decision.action == "rollover"
+                    and rollover_generation < max_rollovers
+                ):
+                    current_head: str | None = None
+                    current_status: str | None = None
+                    try:
+                        p = subprocess.run(
+                            ["git", "rev-parse", "HEAD"],
+                            cwd=cwd,
+                            capture_output=True,
+                            text=True,
+                            check=False,
+                        )
+                        if p.returncode == 0:
+                            current_head = p.stdout.strip()
+                        p_diff = subprocess.run(
+                            ["git", "status", "--porcelain"],
+                            cwd=cwd,
+                            capture_output=True,
+                            text=True,
+                            check=False,
+                        )
+                        if p_diff.returncode == 0:
+                            current_status = p_diff.stdout
+                    except Exception:
+                        pass
+
+                    has_progress = (
+                        baseline_head is not None and current_head != baseline_head
+                    ) or (current_status != baseline_status)
+                    if not has_progress and rollover_generation > 0:
+                        if state_mgr is not None:
+                            state_mgr.append_event(
+                                "WORKER_CONTEXT_PROGRESS_STALLED",
+                                task_key=task_key,
+                                stage=stage,
+                                lane=lane,
+                                reason="worker context cap reached without progress; split the task further",
+                            )
+                        success = False
+                        error_msg = "worker context cap reached without progress; split the task further"
+                    else:
+                        is_rollover = True
+                        rollover_generation += 1
+                        current_follow_up = "normal"
+                        if state_mgr is not None:
+                            state_mgr.append_event(
+                                "WORKER_CONTEXT_ROLLOVER",
+                                task_key=task_key,
+                                stage=stage,
+                                lane=lane,
+                                rollover_generation=rollover_generation,
+                            )
+                        current_prompt = (
+                            prompt + "\n\n[Context Rollover Notice]\n"
+                            "이전 워커가 단계 경계에서 맥락 상한에 도달하여 WORKLOG.md를 갱신하고 종료했습니다. "
+                            "WORKLOG.md의 체크포인트와 다음 할 일부터 작업을 이어서 계속 진행하십시오."
+                        )
+
+            if is_rollover:
+                continue
+
+            break
+
+        final_usage = combine_usages(accumulated_usages)
+        effective_mod = spawn_result.effective_model if spawn_result else None
         return AgentResult(
             agent=agent_type,
             agent_type=agent_type,
-            model=spawn_result.effective_model,
+            model=effective_mod,
             requested_model=model,
-            effective_model=spawn_result.effective_model,
-            stage="",
+            effective_model=effective_mod,
+            stage=stage or "",
             success=success,
             exit_code=returncode,
-            stdout_path=str(stdout_path),
-            stderr_path=str(stderr_path),
+            stdout_path=str(stdout_path) if stdout_path else "",
+            stderr_path=str(stderr_path) if stderr_path else "",
             output_text=extract_final_text(stdout_text),
-            duration_sec=duration,
+            duration_sec=accumulated_duration,
             error_message=error_msg,
             failure_classification=classification,
-            usage=(usage.to_dict() if (usage := extract_usage(stdout_text)) else None),
+            usage=final_usage,
         )
 
     def cleanup(self) -> None:
@@ -1225,8 +1586,10 @@ async def _run_stage(
         requested_model=spec.model,
     )
 
+    task_key = f"{state.task_id or 'protocol'}/{stage}"
     try:
-        result = await agent_runner.run_agent(
+        result = await invoke_agent_runner(
+            agent_runner,
             agent_type=agent_type,
             prompt=prompt,
             cwd=cwd,
@@ -1238,6 +1601,10 @@ async def _run_stage(
             # window name redundant ("DESIGN-DESIGN") without ever showing which
             # actual AI backend is running.
             label=f"{agent_type}-{stage}",
+            task_key=task_key,
+            stage=stage,
+            state_mgr=state_mgr,
+            state=state,
         )
     except BaseException as exc:
         state.status = StageStatus.BLOCKED.value

@@ -18,6 +18,7 @@ from team_harness.protocol.git import git_preflight
 from team_harness.protocol.mode_c import _block
 from team_harness.protocol.mode_c import _run_checks
 from team_harness.protocol.mode_c import AgentRunner
+from team_harness.protocol.mode_c import invoke_agent_runner
 from team_harness.protocol.models import AgentResult
 from team_harness.protocol.models import CheckStatus
 from team_harness.protocol.models import ProtocolState
@@ -249,7 +250,8 @@ async def run_mode_a(
             worktree_path=wt_path,
             base_commit=state.base_commit,
         )
-        return await agent_runner.run_agent(
+        return await invoke_agent_runner(
+            agent_runner,
             agent_type=worker_spec.agent_type,
             prompt=prompt,
             cwd=wt_path,
@@ -257,6 +259,11 @@ async def run_mode_a(
             model=worker_spec.model,
             effort=worker_spec.effort,
             label=f"worker_{worker_spec.agent_type}-independent_work",
+            task_key=f"{task_id}/lane-{worker}/independent_work",
+            lane=worker,
+            stage="independent_work",
+            state_mgr=state_mgr,
+            state=state,
         )
 
     independent_results = await asyncio.gather(
@@ -420,7 +427,8 @@ async def run_mode_a(
             target_checkpoint=target_cp,
         )
 
-        return await agent_runner.run_agent(
+        return await invoke_agent_runner(
+            agent_runner,
             agent_type=reviewer_spec.agent_type,
             prompt=prompt,
             cwd=target_wt,
@@ -428,6 +436,11 @@ async def run_mode_a(
             model=reviewer_spec.model,
             effort=reviewer_spec.effort,
             label=f"worker_{reviewer_spec.agent_type}-cross_review",
+            task_key=f"{task_id}/lane-{reviewer}/cross_review-{target}",
+            lane=reviewer,
+            stage="cross_review",
+            state_mgr=state_mgr,
+            state=state,
         )
 
     review_results = await asyncio.gather(
@@ -523,7 +536,8 @@ async def run_mode_a(
             review_findings=review_text,
         )
 
-        return await agent_runner.run_agent(
+        return await invoke_agent_runner(
+            agent_runner,
             agent_type=worker_spec.agent_type,
             prompt=prompt,
             cwd=state.worktrees[worker]["path"],
@@ -531,6 +545,11 @@ async def run_mode_a(
             model=worker_spec.model,
             effort=worker_spec.effort,
             label=f"worker_{worker_spec.agent_type}-response",
+            task_key=f"{task_id}/lane-{worker}/response",
+            lane=worker,
+            stage="response",
+            state_mgr=state_mgr,
+            state=state,
         )
 
     response_results = await asyncio.gather(
@@ -823,7 +842,8 @@ async def resume_mode_a(
         integration_branch=integration.branch,
     )
 
-    result = await agent_runner.run_agent(
+    result = await invoke_agent_runner(
+        agent_runner,
         agent_type=final_type,
         prompt=prompt,
         cwd=integration.path,
@@ -831,6 +851,10 @@ async def resume_mode_a(
         model=final_spec.model,
         effort=final_spec.effort,
         label=f"{final_type}-merge",
+        task_key=f"{task_id}/merge",
+        stage=Stage.CODEX_MERGE.value,
+        state_mgr=state_mgr,
+        state=state,
     )
     effective_model = result.resolve_effective_model(final_spec.model)
     result.agent = final_type

@@ -50,7 +50,7 @@ from team_harness.ui.prompt import make_prompt_session
 from team_harness.ui.prompt import read_user_input
 from team_harness.worker_context import ContextRequest
 from team_harness.worker_context import decide
-from team_harness.worker_context import parse_task_front_matter
+from team_harness.worker_context import parse_task_metadata
 from team_harness.worker_context import registry_path_for_workspace
 from team_harness.worker_context import WorkerContextError
 from team_harness.worker_context import WorkerContextRegistry
@@ -142,7 +142,11 @@ def worker_ctx_check(
     """Print a JSON policy decision without launching or resuming a worker."""
 
     try:
-        task_key, follow_up = parse_task_front_matter(task_file)
+        metadata = parse_task_metadata(task_file)
+        task_key = str(metadata["task_key"])
+        follow_up = str(metadata["follow_up"])
+        raw_budget = metadata.get("context_budget")
+        context_budget = int(raw_budget) if isinstance(raw_budget, int) else None
         context_registry = _worker_context_registry(registry, workspace)
         sessions = context_registry.sessions()
         current = next(
@@ -164,6 +168,7 @@ def worker_ctx_check(
             lane=lane,
             stage=stage,
             long_running_wait_requested=long_running_wait,
+            context_budget=context_budget,
         )
         settings = load_config(cwd=workspace).worker_context
         click.echo(

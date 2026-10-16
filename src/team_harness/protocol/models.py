@@ -246,6 +246,9 @@ class ProtocolState:
     # Handoff chain
     handoffs: list[dict[str, Any]] = field(default_factory=list)
 
+    # Worker context rollover (TH-D32)
+    worker_context: dict[str, Any] = field(default_factory=dict)
+
     # CHECK results
     checks: list[dict[str, Any]] = field(default_factory=list)
     test_status: str | None = None

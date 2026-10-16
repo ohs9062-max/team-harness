@@ -59,6 +59,8 @@ team-harness는 다중 에이전트 조율(multi-agent orchestration) 하네스�
 
 **에이전트 스킬 (Agent Skills)**: `skills/loader.py`는 `.agents/skills/` 디렉터리(상위 디렉터리를 순회하는 프로젝트 로컬 경로 및 `~/.agents/skills/` 전역 경로)에서 `SKILL.md` 파일을 탐색합니다. YAML 프론트매터를 파싱하여 이름과 설명을 가져옵니다. 스킬은 실행 가능한 코드가 아니라 조율자가 `read_file`을 통해 읽는 지침 문서입니다.
 
+**워커 컨텍스트 롤오버 (Worker Context Rollover, TH-D32)**: 작업서의 `context_budget`(기본 60000, 큰 단위 120000 등)까지 워커가 작업을 진행하고, 초과 시 진행 단계 경계(WORKLOG.md 갱신 직후)에서 롤오버합니다. 동일 키, `follow_up: short`, 입력 맥락 ≤ 90000일 때만 세션 resume을 허용하며, 셸(`th-launch`), run/repl(`agent_tools`), 프로토콜(`mode_a/b/c`) 세 실행 경로가 공통 판정 함수(`worker_context.py`)와 레지스트리를 공유합니다. 직전 워커가 진척 없이 상한에 걸리면 작업을 더 쪼개라는 사건을 보고합니다.
+
 ### 진입점 (Entry Points)
 
 - **CLI** (`cli.py`): `th run` (1회성 실행) 및 `th repl` (슬래시 명령어를 지원하는 대화형 루프). REPL은 `/clear`, `/compact`, `/agents`, `/log`, `/kill <agent_id>`(사람이 직접 worker 1개 종료), `/quit`을 지원합니다.

@@ -17,6 +17,20 @@
   (`orca-harness-protocol`, `orchestration`). Read only the sections of project
   rule files (AGENTS.md etc.) that the task needs; everything you read is re-sent
   on every later step.
+- **Context rollover (TH-D32):** Check policy at natural step boundaries:
+  update `WORKLOG.md` (mandatory sections) first, inspect measured context
+  or run `th worker-ctx check --phase boundary`, and exit cleanly when rollover
+  is directed. The context cap is set per task via `context_budget` in `task.md`
+  front matter (default: 60000 soft cap; larger tasks specify 120000 etc.).
+  Do not kill processes mid-action; hand off strictly at boundary after
+  persisting state. If context cap is reached without progress, do not loop
+  under the same cap; signal the coordinator to split the task further.
+  Resume requires matching `task_key`, `follow_up: short`, and tokens ≤ 90000.
+- **Experiment tracking (EXPERIMENT.md):** For multi-model training/comparison,
+  maintain `<output_root>/experiments/<experiment_key>/EXPERIMENT.md` (Purpose,
+  Baseline, Runs, Results table, Decision). Update at start, finish, analysis,
+  and decision stages, and link from `WORKLOG.md`. Detach long jobs and exit
+  rather than sleeping in a wait loop.
 - **Image guard (TH-D33):** Do not read image files (`.png`, `.jpg`, `.jpeg`,
   `.gif`, `.webp`, `.bmp`, `.tif`, `.tiff`) or place their bytes in model input.
   Make judgments from numbers (CSV, statistics, metadata) instead. If an image

@@ -15,6 +15,7 @@ from team_harness.protocol.git import relay_evidence
 from team_harness.protocol.mode_c import _block
 from team_harness.protocol.mode_c import _run_checks
 from team_harness.protocol.mode_c import AgentRunner
+from team_harness.protocol.mode_c import invoke_agent_runner
 from team_harness.protocol.models import normalize_agent_type
 from team_harness.protocol.models import ProtocolState
 from team_harness.protocol.models import Stage
@@ -163,7 +164,8 @@ async def run_mode_b(
         changed_files=evidence.changed_files,
     )
 
-    result = await agent_runner.run_agent(
+    result = await invoke_agent_runner(
+        agent_runner,
         agent_type=resolved_type,
         prompt=prompt,
         cwd=str(worktree_path),
@@ -171,6 +173,11 @@ async def run_mode_b(
         model=target_model,
         effort=target_effort,
         label=f"{target_agent}-relay",
+        task_key=f"{task_id}/relay/{target_agent}",
+        stage=Stage.CONTINUE.value,
+        follow_up="normal",
+        state_mgr=state_mgr,
+        state=state,
     )
     effective_model = result.resolve_effective_model(target_model)
     result.agent = target_agent

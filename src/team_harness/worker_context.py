@@ -74,6 +74,7 @@ class ContextRequest:
     lane: str | None = None
     stage: str | None = None
     long_running_wait_requested: bool = False
+    context_budget: int | None = None
 
     def __post_init__(self) -> None:
         if not self.task_key:
@@ -82,6 +83,8 @@ class ContextRequest:
             raise WorkerContextError("follow_up must be 'short' or 'normal'")
         if self.phase not in {"dispatch", "boundary"}:
             raise WorkerContextError("phase must be 'dispatch' or 'boundary'")
+        if self.context_budget is not None and self.context_budget <= 0:
+            raise WorkerContextError("context_budget must be positive")
 
 
 @dataclass(frozen=True)
@@ -140,8 +143,8 @@ def registry_path_for_workspace(workspace: str | Path) -> Path:
     )
 
 
-def parse_task_front_matter(path: str | Path) -> tuple[str, str]:
-    """Read only the leading YAML subset needed for context policy."""
+def parse_task_metadata(path: str | Path) -> dict[str, Any]:
+    """Read task front matter including task_key, follow_up, and context_budget."""
 
     try:
         lines = Path(path).read_text(encoding="utf-8").splitlines()
@@ -154,13 +157,40 @@ def parse_task_front_matter(path: str | Path) -> tuple[str, str]:
         if line.strip() == "---":
             break
         key, sep, value = line.partition(":")
-        if sep and key.strip() in {"task_key", "follow_up"}:
+        if sep and key.strip() in {"task_key", "follow_up", "context_budget"}:
             values[key.strip()] = value.strip().strip("\"'")
     else:
         raise WorkerContextError("task file YAML front matter is not closed")
     task_key = values.get("task_key", "")
     follow_up = values.get("follow_up", "normal")
-    ContextRequest(task_key=task_key, agent_type="codex", follow_up=follow_up)
+    budget_raw = values.get("context_budget")
+    context_budget: int | None = None
+    if budget_raw is not None:
+        try:
+            context_budget = int(budget_raw)
+        except ValueError as exc:
+            raise WorkerContextError(
+                f"invalid context_budget '{budget_raw}': must be integer"
+            ) from exc
+    ContextRequest(
+        task_key=task_key,
+        agent_type="codex",
+        follow_up=follow_up,
+        context_budget=context_budget,
+    )
+    return {
+        "task_key": task_key,
+        "follow_up": follow_up,
+        "context_budget": context_budget,
+    }
+
+
+def parse_task_front_matter(path: str | Path) -> tuple[str, str]:
+    """Read only the leading YAML subset needed for context policy."""
+
+    metadata = parse_task_metadata(path)
+    task_key = str(metadata["task_key"])
+    follow_up = str(metadata["follow_up"])
     return task_key, follow_up
 
 
@@ -361,11 +391,12 @@ def decide(
                 worklog_path=worklog_path,
                 generation=generation,
             )
-        cap = (
-            settings.resume_max_tokens
-            if request.follow_up == "short"
+        soft_cap = (
+            request.context_budget
+            if request.context_budget is not None and request.context_budget > 0
             else settings.soft_cap_tokens
         )
+        cap = settings.resume_max_tokens if request.follow_up == "short" else soft_cap
         if tokens > cap:
             return _decision_with_current(
                 "rollover",

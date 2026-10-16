@@ -17,6 +17,13 @@
 
 ### 추가됨 (Added)
 
+- **워커 컨텍스트 롤오버 세 경로 연결 및 기본 활성화 (TH-D32 3단계).**
+  - 셸(`th-launch.sh`, `th-watch-lib.sh`, `th-status.sh`), run/repl(`agent_tools.py`, `manager.py`), 프로토콜(`mode_a.py`, `mode_b.py`, `mode_c.py`, `usage.py`) 세 실행 경로에 `worker_context` 서비스를 통합하고 `[worker_context] enabled = true` 기본 활성화.
+  - 작업서 `task.md`의 `context_budget` 필드(기본 60000, 큰 단위 120000 등) 지원으로 최소 작업 단위 크기에 따른 유연한 소프트 캡 적용.
+  - 진행 단계 경계(WORKLOG 갱신 직후)에서 롤오버를 집행하며, 직전 워커가 진척 없이 상한에 걸린 경우 작업을 더 쪼개도록 `WORKER_CONTEXT_PROGRESS_STALLED` 사건 발행.
+  - `ProtocolState`에 `worker_context` 필드 및 `protocol_events.jsonl` 이벤트 기록 연동, stage 내부 롤오버 프로세스들의 사용량을 중복 없이 안전하게 합산하는 `combine_usages` 제공.
+  - `design/user_config/worker_suffix.md`에 단계 경계 롤오버 및 실험별 `EXPERIMENT.md` 작성 규칙 반영.
+
 - **명시적 worker context 등록부와 판정 CLI (TH-D32 2단계).**
   `worker_context` 서비스가 Codex rollout의 현재 입력 토큰(`last_token_usage.input_tokens`)만 측정하고,
   부작용 없는 60k/90k 판정과 프로젝트별 `.team-harness/worker_context/registry.json`의
