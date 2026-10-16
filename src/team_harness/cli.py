@@ -48,6 +48,12 @@ from team_harness.ui.console import ConsoleBase
 from team_harness.ui.console import make_console
 from team_harness.ui.prompt import make_prompt_session
 from team_harness.ui.prompt import read_user_input
+from team_harness.worker_context import ContextRequest
+from team_harness.worker_context import decide
+from team_harness.worker_context import parse_task_front_matter
+from team_harness.worker_context import registry_path_for_workspace
+from team_harness.worker_context import WorkerContextError
+from team_harness.worker_context import WorkerContextRegistry
 
 if TYPE_CHECKING:
     from team_harness.protocol.mode_c import TeamHarnessAgentRunner
@@ -96,6 +102,163 @@ def init(use_global: bool, force: bool) -> None:
     )
     text = _default_config_text() if use_global else _local_config_text()
     _write_init_files(path, text, force)
+
+
+@main.group(name="worker-ctx")
+def worker_ctx() -> None:
+    """Explicit TH-D32 context measurement, decisions, and registry actions."""
+
+
+def _worker_context_registry(
+    registry: str | None, workspace: str
+) -> WorkerContextRegistry:
+    path = Path(registry) if registry else registry_path_for_workspace(workspace)
+    return WorkerContextRegistry(path)
+
+
+@worker_ctx.command(name="check")
+@click.option(
+    "--task-file", required=True, type=click.Path(exists=True, dir_okay=False)
+)
+@click.option("--registry", type=click.Path(dir_okay=False), default=None)
+@click.option("--session-id", default=None)
+@click.option("--phase", type=click.Choice(["dispatch", "boundary"]), required=True)
+@click.option("--agent-type", default="codex", show_default=True)
+@click.option("--lane", default=None)
+@click.option("--stage", default=None)
+@click.option("--long-running-wait", is_flag=True)
+@click.option("--workspace", default=".", show_default=True)
+def worker_ctx_check(
+    task_file: str,
+    registry: str | None,
+    session_id: str | None,
+    phase: str,
+    agent_type: str,
+    lane: str | None,
+    stage: str | None,
+    long_running_wait: bool,
+    workspace: str,
+) -> None:
+    """Print a JSON policy decision without launching or resuming a worker."""
+
+    try:
+        task_key, follow_up = parse_task_front_matter(task_file)
+        context_registry = _worker_context_registry(registry, workspace)
+        sessions = context_registry.sessions()
+        current = next(
+            (
+                entry
+                for entry in sessions
+                if session_id is not None and entry.get("session_id") == session_id
+            ),
+            {},
+        )
+        snapshot = dict(current)
+        snapshot["candidates"] = sessions
+        request = ContextRequest(
+            task_key=task_key,
+            agent_type=agent_type,
+            follow_up=follow_up,
+            phase=phase,
+            session_id=session_id,
+            lane=lane,
+            stage=stage,
+            long_running_wait_requested=long_running_wait,
+        )
+        settings = load_config(cwd=workspace).worker_context
+        click.echo(
+            json.dumps(decide(request, snapshot, settings).as_dict(), sort_keys=True)
+        )
+    except WorkerContextError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+@worker_ctx.command(name="register")
+@click.option("--registry", type=click.Path(dir_okay=False), default=None)
+@click.option("--workspace", default=".", show_default=True)
+@click.option("--task-key", required=True)
+@click.option("--session-id", required=True)
+@click.option("--agent-type", required=True)
+@click.option("--model", default=None)
+@click.option("--pid", type=int, default=None)
+@click.option("--pgid", type=int, default=None)
+@click.option("--process-starttime", default=None)
+@click.option("--worklog-path", default=None)
+@click.option("--experiment-path", default=None)
+@click.option("--checkpoint", default=None)
+@click.option("--long-running-wait", is_flag=True)
+def worker_ctx_register(
+    registry: str | None,
+    workspace: str,
+    task_key: str,
+    session_id: str,
+    agent_type: str,
+    model: str | None,
+    pid: int | None,
+    pgid: int | None,
+    process_starttime: str | None,
+    worklog_path: str | None,
+    experiment_path: str | None,
+    checkpoint: str | None,
+    long_running_wait: bool,
+) -> None:
+    """Record an already-created worker; this command never creates one."""
+
+    try:
+        entry = _worker_context_registry(registry, workspace).register_active(
+            {
+                "task_key": task_key,
+                "session_id": session_id,
+                "agent_type": agent_type,
+                "model": model,
+                "pid": pid,
+                "pgid": pgid,
+                "process_starttime": process_starttime,
+                "worklog_path": worklog_path,
+                "experiment_path": experiment_path,
+                "checkpoint": checkpoint,
+                "long_running_wait_requested": long_running_wait,
+            }
+        )
+        click.echo(json.dumps(entry, sort_keys=True))
+    except WorkerContextError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+@worker_ctx.command(name="park")
+@click.option("--registry", required=True, type=click.Path(dir_okay=False))
+@click.option("--session-id", required=True)
+@click.option("--reason", default=None)
+def worker_ctx_park(registry: str, session_id: str, reason: str | None) -> None:
+    """Mark an exited active worker parked; no process action is performed."""
+
+    try:
+        click.echo(
+            json.dumps(
+                WorkerContextRegistry(registry).park(session_id, reason=reason),
+                sort_keys=True,
+            )
+        )
+    except WorkerContextError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+@worker_ctx.command(name="retire")
+@click.option("--registry", required=True, type=click.Path(dir_okay=False))
+@click.option("--session-id", required=True)
+@click.option("--reason", default=None)
+def worker_ctx_retire(registry: str, session_id: str, reason: str | None) -> None:
+    """Retire a parked session; provider files are deliberately untouched."""
+
+    try:
+        click.echo(
+            json.dumps(
+                WorkerContextRegistry(registry).retire(session_id, reason=reason),
+                sort_keys=True,
+            )
+        )
+    except WorkerContextError as exc:
+        raise click.ClickException(str(exc)) from exc
 
 
 @main.command(name="run")

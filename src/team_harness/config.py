@@ -16,6 +16,8 @@ from team_harness.agents.template import SessionCapture
 from team_harness.coordinator.system_prompt import COORDINATOR_PROMPT
 from team_harness.coordinator.system_prompt import DEFAULT_WORKER_FOOTER
 from team_harness.decisions.models import DecisionRouterSettings
+from team_harness.worker_context import WorkerContextError
+from team_harness.worker_context import WorkerContextSettings
 
 LOCAL_CONFIG_DIR_NAME = ".team-harness"
 CONFIG_PATH = Path.home() / ".team-harness" / "config.toml"
@@ -77,6 +79,9 @@ class Config:
     decision_router: DecisionRouterSettings = field(
         default_factory=DecisionRouterSettings
     )
+    # Explicit worker-context policy. Stage 2 only exposes this to the service
+    # and CLI; launch/watch/protocol wiring is intentionally deferred.
+    worker_context: WorkerContextSettings = field(default_factory=WorkerContextSettings)
     cwd: str = "."
     run_dir: Path | None = None
     global_config_path: Path | None = None
@@ -425,6 +430,16 @@ min_agent_lifetime_before_kill_s = 600.0
 # max_state_chars = 4000
 # tool_routing = true
 
+# Worker context rollover policy. Stage 2 records and checks this policy only;
+# it does not automatically launch, resume, or terminate a worker.
+# [worker_context]
+# enabled = true
+# soft_cap_tokens = 60000
+# resume_max_tokens = 90000
+# max_parked_sessions = 2
+# parked_ttl_hours = 24
+# disabled_agents = ["agy"]
+
 # --- Experimental Codex subscription coordinator ---
 # provider = "codex"
 # model = "gpt-6.1-sol"   # codex-mini-latest is rejected for ChatGPT-account tokens
@@ -545,6 +560,16 @@ min_agent_lifetime_before_kill_s = 600.0
 # timeout_s = 3.0
 # max_state_chars = 4000
 # tool_routing = true
+
+# Worker context rollover policy. Stage 2 records and checks this policy only;
+# it does not automatically launch, resume, or terminate a worker.
+# [worker_context]
+# enabled = true
+# soft_cap_tokens = 60000
+# resume_max_tokens = 90000
+# max_parked_sessions = 2
+# parked_ttl_hours = 24
+# disabled_agents = ["agy"]
 
 # --- Experimental Codex subscription coordinator ---
 # provider = "codex"
@@ -1135,6 +1160,91 @@ def _parse_decision_router(config_data: dict[str, object]) -> DecisionRouterSett
         raise SystemExit(str(exc)) from None
 
 
+def _parse_worker_context(config_data: dict[str, object]) -> WorkerContextSettings:
+    """Parse `[worker_context]` with environment overrides for explicit callers."""
+
+    section = _get_section(config_data, "worker_context")
+    defaults = WorkerContextSettings()
+    values: dict[str, object] = {
+        "enabled": section.get("enabled", defaults.enabled),
+        "soft_cap_tokens": section.get("soft_cap_tokens", defaults.soft_cap_tokens),
+        "resume_max_tokens": section.get(
+            "resume_max_tokens", defaults.resume_max_tokens
+        ),
+        "max_parked_sessions": section.get(
+            "max_parked_sessions", defaults.max_parked_sessions
+        ),
+        "parked_ttl_hours": section.get("parked_ttl_hours", defaults.parked_ttl_hours),
+        "disabled_agents": section.get(
+            "disabled_agents", list(defaults.disabled_agents)
+        ),
+    }
+    env_prefix = "TEAM_HARNESS_WORKER_CONTEXT_"
+    env_enabled = os.environ.get(env_prefix + "ENABLED")
+    if env_enabled is not None and env_enabled.strip():
+        normalized = env_enabled.strip().lower()
+        if normalized in _TRUE_STRINGS:
+            values["enabled"] = True
+        elif normalized in _FALSE_STRINGS:
+            values["enabled"] = False
+        else:
+            raise SystemExit(
+                "TEAM_HARNESS_WORKER_CONTEXT_ENABLED must be one of 1/0, "
+                "true/false, yes/no, on/off"
+            )
+    for key in (
+        "soft_cap_tokens",
+        "resume_max_tokens",
+        "max_parked_sessions",
+        "parked_ttl_hours",
+    ):
+        env_value = os.environ.get(env_prefix + key.upper())
+        if env_value is not None and env_value.strip():
+            try:
+                values[key] = int(env_value)
+            except ValueError:
+                raise SystemExit(
+                    f"{env_prefix}{key.upper()} must be an integer"
+                ) from None
+    disabled_agents = values["disabled_agents"]
+    env_agents = os.environ.get(env_prefix + "DISABLED_AGENTS")
+    if env_agents is not None:
+        disabled_agents = [
+            item.strip() for item in env_agents.split(",") if item.strip()
+        ]
+    if not isinstance(values["enabled"], bool):
+        raise SystemExit("worker_context.enabled must be true or false")
+    if not isinstance(disabled_agents, list) or not all(
+        isinstance(item, str) and item for item in disabled_agents
+    ):
+        raise SystemExit("worker_context.disabled_agents must be an array of strings")
+    for key in (
+        "soft_cap_tokens",
+        "resume_max_tokens",
+        "max_parked_sessions",
+        "parked_ttl_hours",
+    ):
+        if isinstance(values[key], bool) or not isinstance(values[key], int):
+            raise SystemExit(f"worker_context.{key} must be an integer")
+    try:
+        return WorkerContextSettings(
+            enabled=values["enabled"],  # type: ignore[arg-type]
+            soft_cap_tokens=values["soft_cap_tokens"],  # type: ignore[arg-type]
+            resume_max_tokens=values["resume_max_tokens"],  # type: ignore[arg-type]
+            max_parked_sessions=values["max_parked_sessions"],  # type: ignore[arg-type]
+            parked_ttl_hours=values["parked_ttl_hours"],  # type: ignore[arg-type]
+            disabled_agents=tuple(disabled_agents),
+        )
+    except WorkerContextError as exc:
+        raise SystemExit(str(exc)) from None
+
+
+def load_worker_context_settings(start: Path | None = None) -> WorkerContextSettings:
+    """Read the standard global/project environment-aware context policy."""
+
+    return _parse_worker_context(_merged_config_layers(start))
+
+
 def load_context_graph_settings(start: Path | None = None) -> ContextGraphSettings:
     """``[context_graph]`` from the config.toml layers relative to *start*.
 
@@ -1587,6 +1697,7 @@ def load_config(
         agent_templates=agent_templates,
         context_graph=_parse_context_graph(config_data),
         decision_router=_parse_decision_router(config_data),
+        worker_context=_parse_worker_context(config_data),
         cwd=str(start_dir),
         global_config_path=global_path,
         local_config_path=local_path,

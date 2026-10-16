@@ -34,6 +34,24 @@ def _template_command_name(template: AgentTemplate) -> str:
     return os.path.basename(template.command[0])
 
 
+def codex_rollout_paths(session_id: str, root: Path | None = None) -> list[Path]:
+    """Return only candidate rollout files for a captured Codex session.
+
+    The context service validates event identity and token shape before using a
+    file.  Keeping discovery here alongside session capture avoids a second,
+    subtly different provider-path convention when stage 3 wires it in.
+    """
+
+    sessions_root = root or Path.home() / ".codex" / "sessions"
+    if not sessions_root.exists():
+        return []
+    return [
+        path
+        for path in sessions_root.rglob("rollout-*.jsonl")
+        if session_id in str(path)
+    ]
+
+
 def _claude_session_id_fallback(
     template: AgentTemplate, event: dict[str, object], field_path: tuple[str, ...]
 ) -> str | None:

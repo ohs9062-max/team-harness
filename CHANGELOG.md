@@ -17,6 +17,15 @@
 
 ### 추가됨 (Added)
 
+- **명시적 worker context 등록부와 판정 CLI (TH-D32 2단계).**
+  `worker_context` 서비스가 Codex rollout의 현재 입력 토큰(`last_token_usage.input_tokens`)만 측정하고,
+  부작용 없는 60k/90k 판정과 프로젝트별 `.team-harness/worker_context/registry.json`의
+  active → parked → retired 상태를 제공합니다. `th worker-ctx check|register|park|retire`는
+  JSON 결과를 내며, `[worker_context]`(환경 변수 오버라이드 포함)는 `agy`를 기본 제외합니다.
+  `worker_sessions.json`에는 선택적 context registry 참조만 추가했습니다. 이 단계는
+  th-launch, th-watch, manager, run/repl 및 protocol에 연결하지 않으므로 자동 재개·재실행·종료를
+  전혀 수행하지 않습니다. 다음 3단계에서 세 경로를 함께 연결하기 전까지 수동 CLI 호출만 가능합니다.
+
 - **Worker digest (TH-D28).** 기존 watchd 사건 감지에 비동기 검수·읽기 전용 요약을 연결했습니다. 스크립트가 상태/산출물/수치/verify.sh/hook을 판정하고 workers.md에 원문을 보존합니다. 기본 agy 요약은 쿼터 잠금·실패·시간 초과 시 생략합니다. SDK·Protocol·config.toml 계약은 유지합니다. 셸 소비자는 데몬 최초 완료 알림의 검수가 `대기`일 수 있고 새 검수 결과가 있는 ths 열이 VERIFIED/VERIFY_FAILED로 표시됨에 유의해야 합니다. 기존 마커만 있는 작업의 한국어 표시는 유지합니다.
 
 - **선택형 Jev decision router (TH-D24).** `[decision_router] enabled = true` 또는 `TEAM_HARNESS_JEV=1`이면 `th run`/SDK와 `th repl`이 매 coordinator 턴 전에 TypeSafe System One의 choice 질문으로 `FULL`/`DELEGATE`/`EDIT`/`MONITOR` 도구 프로필을 고릅니다. 충분한 confidence가 있는 응답만 적용하고 API key 부재, 오류·타임아웃, 잘못된 응답, 낮은 confidence는 전체 도구로 복귀합니다. 최근 상태는 `max_state_chars`로 제한되며 각 판단의 choice/probability/usage/latency/fallback과 도구 schema 전후 크기 및 추정 절감 토큰을 `run.json.decisions`에 기록합니다. `DecisionRouter`는 worker failure/review escalation/agent selection 종류도 표현하지만, 이번 릴리스는 기존 Protocol 계약을 지키기 위해 tool selection만 자동 적용합니다. 기본값은 꺼짐입니다.

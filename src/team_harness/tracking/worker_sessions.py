@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from team_harness.tracking.models import AgentRecord
+from team_harness.tracking.models import WorkerContextReference
 from team_harness.tracking.models import WorkerResumeInfo
 from team_harness.tracking.models import WorkerSessionInfo
 from team_harness.tracking.models import WorkerSessionRecord
@@ -241,6 +242,7 @@ def write_worker_sessions_manifest(
     session_output_dir: str | Path,
     agents: list[AgentRecord],
     generated_at: datetime | None = None,
+    context_registry_path: str | None = None,
 ) -> Path:
     """Write the compact worker/session index and its referenced artifacts."""
 
@@ -263,7 +265,15 @@ def write_worker_sessions_manifest(
         artifact_paths_by_agent=artifact_paths_by_agent,
     )
     output_path = session_dir / "worker_sessions.json"
-    write_json_atomic(path=output_path, payload=manifest.model_dump(mode="json"))
+    payload = manifest.model_dump(mode="json")
+    if context_registry_path is not None:
+        reference_path = str(Path(context_registry_path).resolve())
+        for worker in payload["workers"]:
+            worker["context"] = WorkerContextReference(
+                registry_path=reference_path,
+                session_id=worker["session"]["provider_session_id"],
+            ).model_dump(mode="json")
+    write_json_atomic(path=output_path, payload=payload)
     return output_path
 
 

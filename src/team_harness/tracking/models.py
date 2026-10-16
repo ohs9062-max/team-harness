@@ -92,6 +92,15 @@ class WorkerSessionInfo(BaseModel):
     """Path to the vendor's own session file, e.g. ~/.codex/sessions/*.json (null until post-hoc harvesting)."""
 
 
+class WorkerContextReference(BaseModel):
+    """Optional additive link emitted only when a TH-D32 registry is in use."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=False)
+
+    registry_path: str
+    session_id: str | None = None
+
+
 class WorkerSessionRecord(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=False)
 
