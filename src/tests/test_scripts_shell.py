@@ -288,6 +288,17 @@ def test_th_launch_uses_one_image_envelope_and_project_python_for_each_worker_ty
     )
 
 
+def test_watch_scripts_import_team_harness_via_project_python() -> None:
+    lib = (SCRIPTS_DIR / "th-watch-lib.sh").read_text(encoding="utf-8")
+    status = (SCRIPTS_DIR / "th-status.sh").read_text(encoding="utf-8")
+    assert 'uv run --directory "$lib_dir/.." python - "$task"' in lib
+    assert 'python3 - "$task"' not in lib
+    assert 'uv run --directory "$script_dir/.." python - ' in status
+    assert "python3 - " not in status
+    assert "team_harness import failed" in status
+    assert "context inspection failed" in lib
+
+
 def test_th_watch_owner_filtering(test_env: dict):
     """ops-07: Verify th-watch filters events by workspace owner (.th_owner)."""
     task_my = _create_task_dir(test_env["tmp_path"], "task_my")

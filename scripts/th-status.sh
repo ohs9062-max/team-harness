@@ -29,7 +29,8 @@ while (($#)); do
 done
 
 render() {
-  python3 - "$script_dir/../src/team_harness/worker_digest.py" "$all_mode" "${1:-0}" << 'EOF'
+  # The heredoc imports team_harness (httpx etc.); the system python3 lacks them.
+  uv run --directory "$script_dir/.." python - "$script_dir/../src/team_harness/worker_digest.py" "$all_mode" "${1:-0}" << 'EOF'
 import sys, os, time, subprocess, re, unicodedata
 from datetime import datetime
 from pathlib import Path
@@ -417,7 +418,8 @@ try:
         parse_task_front_matter,
         registry_path_for_workspace,
     )
-except Exception:
+except Exception as exc:
+    print(f"th-status: team_harness import failed: {exc}", file=sys.stderr)
     load_worker_context_settings = None
 
 _CLI_QUOTA_PREFIX_RE = re.compile(

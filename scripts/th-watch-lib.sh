@@ -108,7 +108,8 @@ inspect_context_and_job() {
   local task=$1 lib_dir py_src
   lib_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
   py_src=$(cd "$lib_dir/../src" && pwd)
-  PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" python3 - "$task" << 'PYEOF'
+  # team_harness needs the project dependency graph (httpx); not system python3.
+  PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" uv run --directory "$lib_dir/.." python - "$task" << 'PYEOF'
 import hashlib, json, os, re, signal, sys, time
 from pathlib import Path
 from team_harness.agents.process_identity import capture_starttime
@@ -689,7 +690,10 @@ inspect_task_event() {
   fi
 
   local ctx_line ctx_event="" distinct_job_alive=0 ctx_detail=""
-  ctx_line=$(inspect_context_and_job "$task" 2>/dev/null || true)
+  ctx_line=$(inspect_context_and_job "$task" 2>/dev/null) || {
+    echo "th-watch: context inspection failed for $task (team_harness import?)" >&2
+    ctx_line=""
+  }
   if [[ -n $ctx_line ]]; then
     IFS=$'\t' read -r ctx_event distinct_job_alive ctx_detail <<< "$ctx_line"
   fi
