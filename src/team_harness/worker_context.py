@@ -17,6 +17,7 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import time
 from typing import Any
 from typing import Iterator
 from uuid import uuid4
@@ -221,6 +222,34 @@ def _matches_session(event: dict[str, object], session_id: str, path: Path) -> b
     return session_id in values or session_id in str(path)
 
 
+_ROLLOUT_RECENT_SECONDS = 2 * 24 * 3600
+
+
+def _candidate_rollouts(root: Path, session_id: str) -> Iterator[Path]:
+    """Yield rollouts that can belong to the session without opening old ones.
+
+    A rollout qualifies when its name carries the session id (Codex names files
+    `rollout-<time>-<session id>.jsonl`, and a resumed session keeps appending
+    to it) or when it was modified within the last two days.  Directory
+    listings are cheap; opening every historical rollout is not.
+    """
+
+    cutoff = time.time() - _ROLLOUT_RECENT_SECONDS
+    for dirpath, _dirnames, filenames in os.walk(root):
+        for name in filenames:
+            if not (name.startswith("rollout-") and name.endswith(".jsonl")):
+                continue
+            path = Path(dirpath) / name
+            if session_id in name:
+                yield path
+                continue
+            try:
+                if path.stat().st_mtime >= cutoff:
+                    yield path
+            except OSError:
+                continue
+
+
 def measure_codex_rollout(
     *, session_id: str, sessions_root: str | Path | None = None
 ) -> ContextMeasurement:
@@ -234,7 +263,7 @@ def measure_codex_rollout(
     if not root.exists():
         return ContextMeasurement(None, "unknown")
     newest: tuple[int, int, Path, dict[str, object]] | None = None
-    for rollout in root.rglob("rollout-*.jsonl"):
+    for rollout in _candidate_rollouts(root, session_id):
         try:
             with rollout.open("rb") as stream:
                 offset = 0

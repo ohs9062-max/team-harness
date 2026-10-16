@@ -5,6 +5,8 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 import json
+import os
+import time
 
 from click.testing import CliRunner
 import pytest
@@ -222,6 +224,46 @@ def test_codex_measurement_uses_matching_current_input_not_other_session(tmp_pat
         ).measurement_status
         == "estimated"
     )
+
+
+def _write_rollout(path, session_id, tokens, age_days):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "type": "event_msg",
+                "session_id": session_id,
+                "payload": {
+                    "call_id": "call-1",
+                    "info": {"last_token_usage": {"input_tokens": tokens}},
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    old = time.time() - age_days * 24 * 3600
+    os.utime(path, (old, old))
+
+
+def test_codex_measurement_skips_old_rollouts_without_session_id_in_name(tmp_path):
+    root = tmp_path / "sessions"
+    _write_rollout(root / "2026" / "10" / "rollout-old.jsonl", "same", 70000, 3)
+    measurement = measure_codex_rollout(session_id="same", sessions_root=root)
+    assert measurement.input_tokens is None
+    recent = root / "2026" / "10" / "rollout-recent.jsonl"
+    _write_rollout(recent, "same", 71000, 0)
+    measurement = measure_codex_rollout(session_id="same", sessions_root=root)
+    assert measurement.input_tokens == 71000
+
+
+def test_codex_measurement_includes_old_rollout_named_with_session_id(tmp_path):
+    root = tmp_path / "sessions"
+    _write_rollout(
+        root / "2026" / "10" / "rollout-2026-10-10T00-same.jsonl", "same", 72000, 5
+    )
+    measurement = measure_codex_rollout(session_id="same", sessions_root=root)
+    assert measurement.input_tokens == 72000
 
 
 def test_config_parses_worker_context_global_project_and_environment(
