@@ -67,27 +67,82 @@ def fit_width(s, width):
     padding = " " * (width - cur_w)
     return truncated + padding
 
-def get_latest_output(task):
+def _scan_latest_mtime(root_path, max_depth=3):
+    best = None
     try:
-        res = subprocess.run(
-            ["find", task, "-type", "f", "!", "-name", ".th_*", "-printf", "%T@\n"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            timeout=5
-        )
-        lines = [l.strip() for l in res.stdout.splitlines() if l.strip()]
-        if not lines:
-            return None
-        times = []
-        for l in lines:
-            try:
-                times.append(float(l.split(".")[0]))
-            except ValueError:
-                pass
-        return max(times) if times else None
-    except Exception:
+        with os.scandir(root_path) as it:
+            for entry in it:
+                name = entry.name
+                if name.startswith(".th_"):
+                    continue
+                try:
+                    if entry.is_file(follow_symlinks=False):
+                        mt = int(entry.stat(follow_symlinks=False).st_mtime)
+                        if best is None or mt > best:
+                            best = mt
+                    elif max_depth > 1 and entry.is_dir(follow_symlinks=False):
+                        sub = _scan_latest_mtime(entry.path, max_depth - 1)
+                        if sub is not None and (best is None or sub > best):
+                            best = sub
+                except OSError:
+                    continue
+    except OSError:
         return None
+    return float(best) if best is not None else None
+
+def get_latest_output(task):
+    return _scan_latest_mtime(task, max_depth=3)
+
+def format_rel_time(ts, now_ts, include_ago=True):
+    if ts is None:
+        return "?"
+    diff_sec = max(0, int(now_ts - ts))
+    suffix = " 전" if include_ago else ""
+    if diff_sec < 60:
+        return "방금" if include_ago else "1분"
+    mins = diff_sec // 60
+    if mins < 60:
+        return f"{mins}분{suffix}"
+    hours = mins // 60
+    if hours < 24:
+        return f"{hours}시간{suffix}"
+    days = hours // 24
+    return f"{days}일{suffix}"
+
+def get_task_start_ts(task_dir):
+    for fn in ("worker.pid", "job.pid", ".th_owner"):
+        p = os.path.join(task_dir, fn)
+        if os.path.isfile(p):
+            try:
+                return os.path.getmtime(p)
+            except OSError:
+                pass
+    status_file = os.path.join(task_dir, "STATUS")
+    if os.path.isfile(status_file):
+        try:
+            with open(status_file, "r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    m = re.match(r"^\[?(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?)", line)
+                    if m:
+                        ts_s = m.group(1).replace("T", " ")
+                        fmt = "%Y-%m-%d %H:%M:%S" if len(ts_s) == 19 else "%Y-%m-%d %H:%M"
+                        try:
+                            return datetime.strptime(ts_s, fmt).timestamp()
+                        except ValueError:
+                            pass
+                    break
+        except OSError:
+            pass
+    task_md = os.path.join(task_dir, "task.md")
+    if os.path.isfile(task_md):
+        try:
+            return os.path.getmtime(task_md)
+        except OSError:
+            pass
+    return None
 
 def get_task_title(task_dir):
     task_md = os.path.join(task_dir, "task.md")
@@ -108,26 +163,15 @@ def get_task_title(task_dir):
         pass
     return "-"
 
-def get_progress(task_dir):
-    status_file = os.path.join(task_dir, "STATUS")
-    if not os.path.isfile(status_file):
-        return "-"
-    last_line = ""
-    try:
-        with open(status_file, "r", encoding="utf-8", errors="replace") as f:
-            for line in f:
-                l = line.strip()
-                if l:
-                    last_line = l
-    except Exception:
-        pass
+def clean_status_line(last_line):
     if not last_line:
         return "-"
-    
     # 1. 날짜·시각 제거
-    s = re.sub(r"^\[?\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?(?:[+-]\d{2}:\d{2}|Z| KST)?\]?[:\s]*", "", last_line).strip()
-    s = re.sub(r"^\[?\d{4}-\d{2}-\d{2}\]?[:\s]*", "", s).strip()
-    
+    s = re.sub(r"^\[?\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:[+-]\d{2}:\d{2}|Z|\s*KST|\s*UTC)?\]?[:\s|]*", "", last_line).strip()
+    s = re.sub(r"^\[?\d{4}-\d{2}-\d{2}(?:\s*KST|\s*UTC)?\]?[:\s|]*", "", s).strip()
+    s = re.sub(r"^\[?\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:\s*KST|\s*UTC)?\]?[:\s|]*", "", s).strip()
+    s = re.sub(r"^(?:KST|UTC)[:\s|]+", "", s).strip()
+
     # 2. RUN 명령 경로 정제: "RUN .../src/gdino_finetune.py" -> "실행: gdino_finetune.py"
     if re.match(r"^RUN\b", s):
         rest = re.sub(r"^RUN\s+", "", s).strip()
@@ -144,10 +188,59 @@ def get_progress(task_dir):
         if not target and tokens:
             target = os.path.basename(tokens[0])
         s = f"실행: {target}"
-    
-    # 3. 50자 이내
+    return s if s else "-"
+
+def get_progress(task_dir):
+    status_file = os.path.join(task_dir, "STATUS")
+    if not os.path.isfile(status_file):
+        return "-"
+    last_line = ""
+    try:
+        with open(status_file, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                l = line.strip()
+                if l:
+                    last_line = l
+    except Exception:
+        pass
+    s = clean_status_line(last_line)
     if len(s) > 50:
         s = s[:50]
+    return s if s else "-"
+
+def get_stage_summary(task_dir, state_label):
+    status_file = os.path.join(task_dir, "STATUS")
+    last_line = ""
+    if os.path.isfile(status_file):
+        try:
+            with open(status_file, "r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    l = line.strip()
+                    if l:
+                        last_line = l
+        except Exception:
+            pass
+    s = clean_status_line(last_line)
+    s = re.sub(r"^(?:상태|결과|status)[:\s|]*", "", s, flags=re.IGNORECASE).strip()
+    s = re.sub(
+        r"^(?:(?:[A-Z0-9]+_)?(?:DONE|FAILED)(?:_[A-Z0-9]+)?|COMPLETE|COMPLETED|OK)\b[:\s—|-]*",
+        "",
+        s,
+        flags=re.IGNORECASE,
+    ).strip()
+    if not s or s == "-":
+        for fn in ("DONE", "FAILED"):
+            fp = os.path.join(task_dir, fn)
+            if os.path.isfile(fp):
+                try:
+                    with open(fp, "r", encoding="utf-8", errors="replace") as f:
+                        first = f.readline().strip()
+                        if first and first.upper() not in ("DONE", "FAILED"):
+                            s = clean_status_line(first)
+                            s = re.sub(r"^(?:DONE|FAILED)\b[:\s—|-]*", "", s, flags=re.IGNORECASE).strip()
+                            break
+                except Exception:
+                    pass
     return s if s else "-"
 
 def get_task_name(task):
@@ -157,6 +250,32 @@ def get_task_name(task):
     if len(parts) >= 1:
         return parts[-1]
     return task
+
+def get_project_short_name(task_dir):
+    candidates = [task_dir]
+    for fn in (".th_worktree", ".th_owner"):
+        fp = os.path.join(task_dir, fn)
+        if os.path.isfile(fp):
+            try:
+                val = open(fp, "r", encoding="utf-8", errors="replace").read().strip()
+                if val:
+                    candidates.append(val)
+            except OSError:
+                pass
+    joined = " ".join(candidates)
+    if "robot_vision3_autolabel" in joined:
+        return "robot3"
+    if "team-harness" in joined:
+        return "th"
+    wt = candidates[1] if len(candidates) > 1 else task_dir
+    parts = [p for p in os.path.normpath(wt).split(os.sep) if p]
+    for idx, part in enumerate(parts):
+        if part in ("_outputs", "outputs", "runs") and idx > 0:
+            return parts[idx - 1][:10]
+    if len(parts) >= 2 and parts[0] == "home":
+        if len(parts) >= 4 and parts[2] in ("rang", "orca", "workspaces"):
+            return parts[3][:10]
+    return parts[-1][:10] if parts else "-"
 
 def estimate_eta(task_dir, state, now_ts):
     if state in ('완료', '실패'):
@@ -366,14 +485,112 @@ def estimate_eta(task_dir, state, now_ts):
 watch_dir = os.environ.get("TH_WATCH_DIR", os.path.expanduser("~/.team-harness/watch"))
 registry = os.path.join(watch_dir, "tasks.txt")
 
-now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+now_dt = datetime.now()
+now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+now_hm = now_dt.strftime("%H:%M")
+
+def get_footer_line(w_dir):
+    # 1. Quota locks
+    quota_parts = []
+    if os.path.isdir(w_dir):
+        try:
+            for fn in sorted(os.listdir(w_dir)):
+                if not fn.startswith("quota_lock."):
+                    continue
+                rest = fn[len("quota_lock."):]
+                if "." in rest:
+                    continue
+                qpath = os.path.join(w_dir, fn)
+                if not os.path.isfile(qpath):
+                    continue
+                content = ""
+                try:
+                    content = open(qpath, "r", encoding="utf-8", errors="replace").read().strip()
+                except OSError:
+                    pass
+                unlock_str = ""
+                m_ampm = re.search(r"(?:try again at|until|after)\s+(\d{1,2}):(\d{2})\s*(AM|PM)", content, re.IGNORECASE)
+                if m_ampm:
+                    hh = int(m_ampm.group(1))
+                    mm = m_ampm.group(2)
+                    ap = m_ampm.group(3).upper()
+                    if ap == "PM" and hh != 12:
+                        hh += 12
+                    elif ap == "AM" and hh == 12:
+                        hh = 0
+                    unlock_str = f"{hh:02d}:{mm} 해제"
+                else:
+                    m_24 = re.search(r"(?:해제|until|try again at)\s*(\d{1,2}:\d{2})", content, re.IGNORECASE)
+                    if m_24:
+                        unlock_str = f"{m_24.group(1)} 해제"
+                if unlock_str:
+                    quota_parts.append(f"{rest} 잠김({unlock_str})")
+                else:
+                    quota_parts.append(f"{rest} 잠김")
+        except OSError:
+            pass
+    quota_summary = f"쿼터: {', '.join(quota_parts)}" if quota_parts else "쿼터: 정상"
+
+    # 2. th-watchd processes
+    watchd_procs = {}
+    default_wdir = os.path.abspath(os.path.expanduser("~/.team-harness/watch"))
+    cur_wdir = os.path.abspath(w_dir)
+    is_custom_wdir = cur_wdir != default_wdir
+    expected_env = f"TH_WATCH_DIR={w_dir}".encode()
+    for entry in Path("/proc").glob("[0-9]*"):
+        if not entry.name.isdigit():
+            continue
+        pid = int(entry.name)
+        try:
+            cmdline_bytes = (entry / "cmdline").read_bytes()
+            if b"th-watchd.sh" not in cmdline_bytes:
+                continue
+            if is_custom_wdir:
+                env_bytes = (entry / "environ").read_bytes().split(b"\0")
+                if expected_env not in env_bytes:
+                    continue
+            ppid = 0
+            stat_txt = (entry / "stat").read_text(encoding="utf-8", errors="replace")
+            after_comm = stat_txt.rsplit(") ", 1)[-1].split()
+            if after_comm and after_comm[0] == "Z":
+                continue
+            if len(after_comm) >= 2 and after_comm[1].isdigit():
+                ppid = int(after_comm[1])
+            args = cmdline_bytes.decode("utf-8", errors="replace").split("\0")
+            script_arg = next((a for a in args if "th-watchd.sh" in a), "")
+            if script_arg and os.path.isabs(script_arg):
+                base_dir = os.path.dirname(os.path.dirname(os.path.realpath(script_arg)))
+            else:
+                cwd = os.readlink(str(entry / "cwd"))
+                if script_arg:
+                    base_dir = os.path.dirname(os.path.dirname(os.path.realpath(os.path.join(cwd, script_arg))))
+                else:
+                    base_dir = cwd
+            bname = os.path.basename(base_dir)
+            label = "main" if bname == "team-harness" else (bname or "기타")
+            watchd_procs[pid] = (ppid, label)
+        except OSError:
+            continue
+    root_labels = [lbl for pid, (ppid, lbl) in watchd_procs.items() if ppid not in watchd_procs]
+    if not root_labels:
+        watchd_summary = "watchd: 없음"
+    else:
+        counts = {}
+        for lbl in root_labels:
+            counts[lbl] = counts.get(lbl, 0) + 1
+        parts = [f"{lbl} {cnt}개" for lbl, cnt in counts.items()]
+        watchd_summary = f"watchd: {', '.join(parts)}"
+
+    return f"{quota_summary} · {watchd_summary}"
 
 if not os.path.isfile(registry):
     if all_mode:
         print(now_str)
         print("등록 작업 없음")
     else:
-        print("실행 0 · 실패(24h) 0 · 완료(24h) 0 · 숨김 0")
+        print(f"작업 현황 {now_hm}  실행 0 · 주의 0 · 끝남 0 · 오래된 미정리 0 (숨김)")
+        print()
+        print(get_footer_line(watch_dir))
     print_notice()
     sys.exit(0)
 
@@ -389,7 +606,9 @@ if not valid_tasks:
         print(now_str)
         print("등록 작업 없음")
     else:
-        print("실행 0 · 실패(24h) 0 · 완료(24h) 0 · 숨김 0")
+        print(f"작업 현황 {now_hm}  실행 0 · 주의 0 · 끝남 0 · 오래된 미정리 0 (숨김)")
+        print()
+        print(get_footer_line(watch_dir))
     print_notice()
     sys.exit(0)
 
@@ -410,12 +629,17 @@ def get_verify_status(task_dir):
 
 sys.path.insert(0, str(Path(sys.argv[1]).resolve().parent.parent))
 try:
+    import json
+    from team_harness.agents.session_capture import _read_prefix_and_tail, extract_session_id
+    from team_harness.agents.template import DEFAULT_AGENT_TEMPLATES
     from team_harness.config import load_worker_context_settings
     from team_harness.worker_context import (
         ContextRequest,
         WorkerContextRegistry,
         decide,
+        measure_agent_context,
         parse_task_front_matter,
+        parse_task_metadata,
         registry_path_for_workspace,
     )
 except Exception as exc:
@@ -453,15 +677,257 @@ def is_cli_quota_error_line(raw_line):
         return False
     return bool(_CLI_QUOTA_PREFIX_RE.search(s) and _CLI_QUOTA_BODY_RE.search(s))
 
-def get_context_summary_line(task_dir, prog):
+def check_task_quota_error(task_dir):
+    for cand in ("codex.log", "agy.log", "claude.log", "worker.log"):
+        cand_path = os.path.join(task_dir, cand)
+        if not os.path.isfile(cand_path):
+            continue
+        try:
+            with open(cand_path, "r", encoding="utf-8", errors="replace") as cf:
+                head = cf.read(32768)
+                lines = head.splitlines()
+                cf.seek(0, os.SEEK_END)
+                size = cf.tell()
+                if size > 32768:
+                    cf.seek(max(32768, size - 65536), os.SEEK_SET)
+                    lines.extend(cf.read().splitlines())
+                for line in lines:
+                    if is_cli_quota_error_line(line):
+                        return True
+        except Exception:
+            pass
+    return False
+
+# Scan /proc once for live agy processes and worker command lines
+_PROC_BY_PID = {}
+_AGY_PIDS_BY_TASK = {}
+for _entry in Path("/proc").glob("[0-9]*/cmdline"):
+    try:
+        _pid = int(_entry.parent.name)
+        _args = _entry.read_bytes().decode("utf-8", errors="replace").split("\0")
+        if not _args or not _args[0]:
+            continue
+        _PROC_BY_PID[_pid] = _args
+        _exe = os.path.basename(_args[0])
+        _is_agy = _exe == "agy" or (
+            _exe in ("bash", "sh", "node", "python3")
+            and len(_args) > 1
+            and os.path.basename(_args[1]) == "agy"
+        )
+        if _is_agy and observer.pid_alive(_pid):
+            for _a in _args:
+                if _a.startswith("/"):
+                    _AGY_PIDS_BY_TASK.setdefault(_a, []).append(_pid)
+    except (OSError, ValueError):
+        continue
+
+def fast_live_pids(task_dir):
+    pids = set()
+    tpath = Path(task_dir)
+    for name in ("job.pid", "worker.pid"):
+        val = observer.read(tpath / name).strip()
+        if val.isdigit() and observer.pid_alive(int(val)):
+            pids.add(int(val))
+    for apid in _AGY_PIDS_BY_TASK.get(str(tpath), ()):
+        if observer.pid_alive(apid):
+            pids.add(apid)
+    return sorted(pids)
+
+_REGISTRY_SESSIONS_CACHE = {}
+_SETTINGS_CACHE = {}
+_WORKLOG_LAUNCH_CACHE = {}
+
+def _get_registry_sessions(reg_path):
+    key = str(reg_path)
+    if key not in _REGISTRY_SESSIONS_CACHE:
+        if reg_path is not None and reg_path.is_file():
+            try:
+                _REGISTRY_SESSIONS_CACHE[key] = WorkerContextRegistry(reg_path).sessions()
+            except Exception:
+                _REGISTRY_SESSIONS_CACHE[key] = []
+        else:
+            _REGISTRY_SESSIONS_CACHE[key] = []
+    return _REGISTRY_SESSIONS_CACHE[key]
+
+def _get_workspace_settings(workspace):
+    key = str(workspace) if workspace else ""
+    if key not in _SETTINGS_CACHE:
+        try:
+            _SETTINGS_CACHE[key] = load_worker_context_settings(workspace)
+        except Exception:
+            _SETTINGS_CACHE[key] = None
+    return _SETTINGS_CACHE[key]
+
+def _get_worklog_launches(workspace_dir):
+    if not workspace_dir:
+        return {}
+    key = str(workspace_dir)
+    if key not in _WORKLOG_LAUNCH_CACHE:
+        launches = {}
+        claude_dir = os.path.join(str(workspace_dir), ".claude")
+        if os.path.isdir(claude_dir):
+            try:
+                files = sorted(f for f in os.listdir(claude_dir) if f.startswith("work_log") and f.endswith(".md"))
+                for fn in files:
+                    fp = os.path.join(claude_dir, fn)
+                    try:
+                        with open(fp, "r", encoding="utf-8", errors="replace") as f:
+                            for line in f:
+                                if "worker=" not in line:
+                                    continue
+                                parts = [p.strip() for p in line.split("|")]
+                                if len(parts) >= 4:
+                                    tdir = parts[2]
+                                    m_w = re.search(r"worker=(\S+)", parts[3])
+                                    m_m = re.search(r"model=(.+?)(?:\s+task\.md=|$)", parts[3])
+                                    if m_w:
+                                        launches[tdir] = (
+                                            m_w.group(1).strip(),
+                                            m_m.group(1).strip() if m_m else "",
+                                        )
+                    except OSError:
+                        pass
+            except OSError:
+                pass
+        _WORKLOG_LAUNCH_CACHE[key] = launches
+    return _WORKLOG_LAUNCH_CACHE[key]
+
+def shorten_model(worker, model_raw, effort_raw=""):
+    w = (worker or "").strip().lower()
+    m = (model_raw or "").strip()
+    e = (effort_raw or "").strip().lower()
+
+    m_paren = re.search(r"\((High|Medium|Low)\)", m, re.IGNORECASE)
+    if m_paren and not e:
+        e = m_paren.group(1).lower()
+        m = re.sub(r"\s*\([^)]*\)", "", m).strip()
+
+    ml = m.lower()
+    for tail in ("-high", "-medium", "-med", "-low"):
+        if ml.endswith(tail) and not e:
+            e = tail[1:]
+            m = m[: -len(tail)]
+            ml = m.lower()
+            break
+
+    short_e = {"medium": "med", "med": "med", "high": "high", "low": "low"}.get(e, "")
+
+    short_m = ""
+    if "terra" in ml:
+        short_m = "terra"
+    elif "sol" in ml:
+        short_m = "sol"
+    elif "argon" in ml:
+        short_m = "argon"
+    elif "flash" in ml:
+        short_m = "flash"
+    elif "sonnet" in ml:
+        m_ver = re.search(r"sonnet[- ]?(\d+(?:\.\d+)?)", ml)
+        short_m = f"sonnet-{m_ver.group(1)}" if m_ver else "sonnet"
+    elif "opus" in ml:
+        m_ver = re.search(r"opus[- ]?(\d+(?:\.\d+)?)", ml)
+        short_m = f"opus-{m_ver.group(1)}" if m_ver else "opus"
+    elif "haiku" in ml:
+        short_m = "haiku"
+    elif m and m not in ("-", "default", "unknown"):
+        s = re.sub(r"^(?:gpt-|claude-|gemini-)", "", ml)
+        short_m = s[:12]
+
+    if short_m and short_e and not short_m.endswith(f"-{short_e}"):
+        short_m = f"{short_m}-{short_e}"
+
+    if not w:
+        return short_m if short_m else "-"
+    if short_m:
+        return f"{w} {short_m}"
+    return w
+
+def get_worker_and_model(task_dir, ctx_info):
+    worker = ""
+    model = ""
+    effort = ""
+
+    if isinstance(ctx_info, dict):
+        worker = str(ctx_info.get("agent_type") or "")
+        model = str(ctx_info.get("model") or "")
+
+    codex_log = os.path.join(task_dir, "codex.log")
+    if os.path.isfile(codex_log):
+        if not worker:
+            worker = "codex"
+        try:
+            with open(codex_log, "r", encoding="utf-8", errors="replace") as f:
+                head = f.read(2048)
+            m_mod = re.search(r"^model:\s*(.+)$", head, re.M)
+            if m_mod and not model:
+                model = m_mod.group(1).strip()
+            m_eff = re.search(r"^reasoning effort:\s*(.+)$", head, re.M)
+            if m_eff:
+                effort = m_eff.group(1).strip()
+        except OSError:
+            pass
+
+    if not model:
+        for pid_fn in ("worker.pid", "job.pid"):
+            pfile = os.path.join(task_dir, pid_fn)
+            if os.path.isfile(pfile):
+                try:
+                    pval = open(pfile, "r", encoding="utf-8", errors="replace").read().strip()
+                    if pval.isdigit():
+                        args = _PROC_BY_PID.get(int(pval), [])
+                        for idx, arg in enumerate(args):
+                            if arg in ("-m", "--model") and idx + 1 < len(args):
+                                model = args[idx + 1]
+                            elif arg.startswith("model_reasoning_effort="):
+                                effort = arg.split("=", 1)[1]
+                            if not worker and os.path.basename(arg) in ("codex", "agy", "claude"):
+                                worker = os.path.basename(arg)
+                except OSError:
+                    pass
+        if not model:
+            for apid in _AGY_PIDS_BY_TASK.get(task_dir, ()):
+                args = _PROC_BY_PID.get(apid, [])
+                if not worker:
+                    worker = "agy"
+                for idx, arg in enumerate(args):
+                    if arg in ("-m", "--model") and idx + 1 < len(args):
+                        model = args[idx + 1]
+
+    if not worker or not model:
+        owner = ""
+        owner_file = os.path.join(task_dir, ".th_owner")
+        if os.path.isfile(owner_file):
+            try:
+                owner = open(owner_file, "r", encoding="utf-8", errors="replace").read().strip()
+            except OSError:
+                pass
+        if not owner:
+            owner = os.environ.get("TH_WORKSPACE", "")
+        if owner:
+            launches = _get_worklog_launches(owner)
+            if task_dir in launches:
+                lw, lm = launches[task_dir]
+                if not worker:
+                    worker = lw
+                if not model:
+                    model = lm
+
+    if not worker:
+        for cand_w in ("codex", "agy", "claude"):
+            if os.path.isfile(os.path.join(task_dir, f"{cand_w}.log")):
+                worker = cand_w
+                break
+
+    return shorten_model(worker, model, effort)
+
+def inspect_task_context(task_dir, prog):
     if load_worker_context_settings is None:
-        return None
+        return None, None
     tpath = Path(task_dir)
     ctx_file = tpath / ".th_context.json"
     meta = None
     if ctx_file.is_file():
         try:
-            import json
             meta = json.loads(ctx_file.read_text(encoding="utf-8"))
         except Exception:
             meta = None
@@ -470,6 +936,9 @@ def get_context_summary_line(task_dir, prog):
     task_key = None
     follow_up = "normal"
     session_id = None
+    context_budget = None
+    agent_type = None
+    model_name = None
     if isinstance(meta, dict):
         ws_raw = meta.get("workspace")
         if isinstance(ws_raw, str) and ws_raw:
@@ -486,6 +955,15 @@ def get_context_summary_line(task_dir, prog):
         sid_raw = meta.get("session_id")
         if isinstance(sid_raw, str) and sid_raw:
             session_id = sid_raw
+        cb_raw = meta.get("context_budget")
+        if isinstance(cb_raw, int) and not isinstance(cb_raw, bool):
+            context_budget = cb_raw
+        at_raw = meta.get("agent_type")
+        if isinstance(at_raw, str) and at_raw:
+            agent_type = at_raw
+        md_raw = meta.get("model")
+        if isinstance(md_raw, str) and md_raw:
+            model_name = md_raw
     if workspace is None:
         owner_file = tpath / ".th_owner"
         if owner_file.is_file():
@@ -501,37 +979,79 @@ def get_context_summary_line(task_dir, prog):
             workspace = Path(env_ws)
     if (tpath / "task.md").is_file():
         try:
-            task_key, follow_up = parse_task_front_matter(tpath / "task.md")
+            tmeta = parse_task_metadata(tpath / "task.md")
+            if tmeta.get("task_key"):
+                task_key = str(tmeta["task_key"])
+            if tmeta.get("follow_up") in ("short", "normal"):
+                follow_up = str(tmeta["follow_up"])
+            if isinstance(tmeta.get("context_budget"), int):
+                context_budget = int(tmeta["context_budget"])
         except Exception:
             pass
     if reg_path is None and workspace is not None:
         reg_path = registry_path_for_workspace(workspace)
-    if not task_key or reg_path is None or not reg_path.is_file():
-        return None
-    try:
-        registry = WorkerContextRegistry(reg_path)
-        sessions = registry.sessions()
-    except Exception:
-        return None
+
     entry = None
-    if session_id:
-        entry = next((item for item in sessions if item.get("session_id") == session_id), None)
+    sessions = []
+    if task_key and reg_path is not None:
+        sessions = _get_registry_sessions(reg_path)
+        if session_id:
+            entry = next((item for item in sessions if item.get("session_id") == session_id), None)
+        if entry is None:
+            key_matches = [item for item in sessions if item.get("task_key") == task_key]
+            if key_matches:
+                entry = key_matches[-1]
+
+    if entry is not None:
+        if not agent_type and entry.get("agent_type"):
+            agent_type = str(entry.get("agent_type"))
+        if not model_name and entry.get("model"):
+            model_name = str(entry.get("model"))
+
+    ctx_info = {
+        "agent_type": agent_type,
+        "model": model_name,
+        "context_tag": "",
+    }
+
     if entry is None:
-        key_matches = [item for item in sessions if item.get("task_key") == task_key]
-        if key_matches:
-            entry = key_matches[-1]
-    if entry is None:
-        return None
+        return None, ctx_info
+
     stage = entry.get("stage") or entry.get("lane") or (prog[:24] if prog and prog != "-" else "-")
     tokens = entry.get("input_tokens")
     m_status = entry.get("measurement_status") or "unknown"
+    entry_state = str(entry.get("state") or "unknown")
+
+    if tokens is None and entry_state == "active":
+        try:
+            ag = str(entry.get("agent_type") or agent_type or "codex")
+            sid = str(entry.get("session_id") or session_id or "")
+            log_p = tpath / f"{ag}.log"
+            tmpl = DEFAULT_AGENT_TEMPLATES.get(ag)
+            if log_p.is_file() and tmpl is not None:
+                raw_log = _read_prefix_and_tail(log_p, 65536)
+                cap_sid = extract_session_id(tmpl, raw_log, None)
+                if cap_sid:
+                    sid = cap_sid
+            if sid:
+                s_root = Path(os.environ.get("HOME", str(Path.home()))) / ".codex" / "sessions"
+                meas = measure_agent_context(agent_type=ag, session_id=sid, sessions_root=s_root)
+                if meas.input_tokens is not None:
+                    tokens = meas.input_tokens
+                    m_status = meas.measurement_status
+        except Exception:
+            pass
+
+    settings = _get_workspace_settings(workspace)
+    cap = context_budget or (settings.soft_cap_tokens if settings else 60000)
+
     if isinstance(tokens, int) and not isinstance(tokens, bool):
         tok_str = f"{tokens // 1000}k"
+        cap_str = f"{cap // 1000}k" if isinstance(cap, int) and cap > 0 else "60k"
+        ctx_info["context_tag"] = f"맥락 {tok_str}/{cap_str}"
     else:
         tok_str = "unknown"
-    entry_state = str(entry.get("state") or "unknown")
     try:
-        settings = load_worker_context_settings(workspace)
         phase = "boundary" if entry_state == "active" else "dispatch"
         long_wait = bool(
             entry.get("long_running_wait_requested")
@@ -544,48 +1064,41 @@ def get_context_summary_line(task_dir, prog):
             phase=phase,
             session_id=str(entry.get("session_id")) if entry.get("session_id") else None,
             long_running_wait_requested=long_wait,
+            context_budget=context_budget,
         )
         snap = dict(entry)
         snap["candidates"] = sessions
-        next_action = decide(req, snap, settings).action
+        next_action = decide(req, snap, settings).action if settings else "unknown"
     except Exception:
         next_action = "unknown"
     wl_path = entry.get("worklog_path") or (meta.get("worklog_path") if isinstance(meta, dict) else None) or str(tpath / "WORKLOG.md")
-    return f"{task_key} | {stage} | 맥락 {tok_str}({m_status}) | {entry_state} | {next_action} | {wl_path}"
+    ctx_line = f"{task_key} | {stage} | 맥락 {tok_str}({m_status}) | {entry_state} | {next_action} | {wl_path}"
+    return ctx_line, ctx_info
 
 headers = ["작업", "내용", "상태", "검수", "마지막 변화", "완료 예상", "진행"]
 rows = []
+task_records = []
 now_ts = time.time()
 
 for task in valid_tasks:
-    state = '진행'
-    terminal = observer.terminal_status(Path(task))
+    tpath = Path(task)
+    pids = fast_live_pids(task)
+    is_alive = bool(pids)
+    terminal = observer.terminal_status(tpath)
+    is_quota_err = False
+
     if terminal == 'DONE':
         state = '완료'
     elif terminal == 'FAILED':
         state = '실패'
     else:
-        is_quota_err = False
-        for cand in ("codex.log", "agy.log", "claude.log", "worker.log"):
-            cand_path = os.path.join(task, cand)
-            if not os.path.isfile(cand_path):
-                continue
-            try:
-                with open(cand_path, "r", encoding="utf-8", errors="replace") as cf:
-                    for line in cf:
-                        if is_cli_quota_error_line(line):
-                            is_quota_err = True
-                            break
-            except Exception:
-                pass
-            if is_quota_err:
-                break
-        
+        is_quota_err = check_task_quota_error(task)
         if is_quota_err:
             state = '워커 오류(쿼터·용량)'
+        elif not is_alive:
+            state = '중단?'
         else:
-            if not observer.live_pids(Path(task)):
-                state = '중단?'
+            state = '진행'
 
     latest_ts = get_latest_output(task)
     if latest_ts is not None:
@@ -593,33 +1106,206 @@ for task in valid_tasks:
         age_str = f"{age_min}분 전"
     else:
         age_str = "?"
-    
+
     task_name = get_task_name(task)
-    title = get_task_title(task)
     v_status = get_verify_status(task)
     prog = get_progress(task)
-    eta = estimate_eta(task, state, now_ts)
-    ctx_line = get_context_summary_line(task, prog)
-    
-    rows.append([task_name, title, state, v_status, age_str, eta, prog, latest_ts, ctx_line])
+    ctx_line, ctx_info = inspect_task_context(task, prog)
+
+    if all_mode:
+        title = get_task_title(task)
+        eta = estimate_eta(task, state, now_ts)
+        rows.append([task_name, title, state, v_status, age_str, eta, prog, latest_ts, ctx_line])
+    else:
+        is_stalled = (
+            os.path.isfile(os.path.join(task, ".th_daemon.stall"))
+            or os.path.isfile(os.path.join(task, ".th_watch.stall"))
+        )
+        task_records.append({
+            "path": task,
+            "name": task_name,
+            "is_alive": is_alive,
+            "terminal": terminal,
+            "state": state,
+            "v_status": v_status,
+            "is_quota_err": is_quota_err,
+            "is_stalled": is_stalled,
+            "latest_ts": latest_ts,
+            "prog": prog,
+            "ctx_info": ctx_info,
+        })
 
 if not all_mode:
     recent_cutoff = now_ts - 24 * 60 * 60
-    running = [r for r in rows if r[2] not in ("완료", "실패")]
-    recent_failed = [r for r in rows if r[7] is not None and r[7] >= recent_cutoff and (r[2] == "실패" or r[3] in ("실패", "VERIFY_FAILED"))]
-    recent_done = [r for r in rows if r[7] is not None and r[7] >= recent_cutoff and r[2] == "완료"]
-    selected = []
-    for row in running + recent_failed:
-        if row not in selected:
-            selected.append(row)
-    print(f"실행 {len(running)} · 실패(24h) {len(recent_failed)} · 완료(24h) {len(recent_done)} · 숨김 {len(rows) - len(selected)}")
-    ctx_Source = selected if selected else rows
-    ctx_lines = [r[8] for r in ctx_Source if r[8]]
-    max_task_lines = max(1, 10 - len(ctx_lines[:3]))
-    for task_name, title, state, verify, age, eta, progress, _, _ in selected[:max_task_lines]:
-        print(f"{task_name} | {state} | {age} | {progress[:40]}")
-    for cline in ctx_lines[:3]:
-        print(cline)
+    running_recs = []
+    attention_recs = []
+    done_recs = []
+    old_uncleaned_count = 0
+
+    for rec in task_records:
+        is_recent = rec["latest_ts"] is not None and rec["latest_ts"] >= recent_cutoff
+        is_vfail = rec["v_status"] in ("실패", "VERIFY_FAILED")
+
+        if rec["is_alive"]:
+            if rec["terminal"] == "FAILED" or rec["is_quota_err"] or is_vfail or rec["is_stalled"]:
+                attention_recs.append(rec)
+            else:
+                running_recs.append(rec)
+        else:
+            if not is_recent:
+                old_uncleaned_count += 1
+            elif rec["terminal"] == "FAILED" or rec["is_quota_err"] or is_vfail or rec["is_stalled"] or rec["terminal"] != "DONE":
+                attention_recs.append(rec)
+            else:
+                done_recs.append(rec)
+
+    attention_recs.sort(key=lambda r: r["latest_ts"] or 0, reverse=True)
+    done_recs.sort(key=lambda r: r["latest_ts"] or 0, reverse=True)
+
+    term_cols = 110
+    env_cols = os.environ.get("COLUMNS", "").strip()
+    if env_cols.isdigit() and int(env_cols) > 0:
+        term_cols = int(env_cols)
+    else:
+        try:
+            term_cols = os.get_terminal_size().columns
+        except OSError:
+            if sys.stdout.isatty():
+                try:
+                    tp = subprocess.run(["tput", "cols"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=1)
+                    if tp.stdout.strip().isdigit() and int(tp.stdout.strip()) > 0:
+                        term_cols = int(tp.stdout.strip())
+                except Exception:
+                    term_cols = 110
+
+    show_worker_col = term_cols >= 80
+    use_color = sys.stdout.isatty() and ("NO_COLOR" not in os.environ)
+
+    def colorize(text, ansi_code):
+        if not use_color:
+            return text
+        return f"\033[{ansi_code}m{text}\033[0m"
+
+    def build_display_row(rec, section_kind):
+        proj = get_project_short_name(rec["path"])
+        tname = rec["name"]
+        wm = get_worker_and_model(rec["path"], rec["ctx_info"])
+        updated = format_rel_time(rec["latest_ts"], now_ts, include_ago=True)
+        stage = get_stage_summary(rec["path"], rec["state"])
+
+        if section_kind == "running":
+            start_ts = get_task_start_ts(rec["path"]) or rec["latest_ts"]
+            elapsed = format_rel_time(start_ts, now_ts, include_ago=False)
+            ctx_tag = rec["ctx_info"].get("context_tag", "") if rec["ctx_info"] else ""
+            if ctx_tag:
+                stage = f"{stage} · {ctx_tag}" if stage and stage != "-" else ctx_tag
+        elif section_kind == "attention":
+            if rec["is_quota_err"]:
+                elapsed = "쿼터오류"
+            elif rec["terminal"] == "FAILED":
+                elapsed = "실패"
+            elif rec["v_status"] in ("실패", "VERIFY_FAILED"):
+                elapsed = "검수실패"
+            elif rec["is_stalled"]:
+                elapsed = "멈춤"
+            else:
+                elapsed = "중단"
+        else:
+            elapsed = "완료"
+
+        return {
+            "proj": proj,
+            "task": tname,
+            "wm": wm,
+            "elapsed": elapsed,
+            "updated": updated,
+            "stage": stage,
+        }
+
+    run_rows = [build_display_row(r, "running") for r in running_recs]
+    att_rows = [build_display_row(r, "attention") for r in attention_recs]
+    done_rows = [build_display_row(r, "done") for r in done_recs]
+    all_disp = run_rows + att_rows + done_rows
+
+    task_cap = 22 if term_cols <= 90 else 28
+    w_proj = min(max([str_width("프로젝트")] + [str_width(r["proj"]) for r in all_disp]), 8)
+    w_task = min(max([str_width("작업"), 14] + [str_width(r["task"]) for r in all_disp]), task_cap)
+    w_wm = min(max([str_width("워커/모델"), 10] + [str_width(r["wm"]) for r in all_disp]), 16)
+    w_elap = min(max([str_width("경과"), 4] + [str_width(r["elapsed"]) for r in all_disp]), 8)
+    w_upd = min(max([str_width("갱신"), 6] + [str_width(r["updated"]) for r in all_disp]), 8)
+
+    if show_worker_col:
+        prefix_w = 2 + w_proj + 2 + w_task + 2 + w_wm + 2 + w_elap + 2 + w_upd + 2
+    else:
+        prefix_w = 2 + w_proj + 2 + w_task + 2 + w_elap + 2 + w_upd + 2
+    w_stage = max(14, term_cols - prefix_w)
+
+    def format_section_header():
+        if show_worker_col:
+            return (
+                "  "
+                + fit_width("프로젝트", w_proj) + "  "
+                + fit_width("작업", w_task) + "  "
+                + fit_width("워커/모델", w_wm) + "  "
+                + fit_width("경과", w_elap) + "  "
+                + fit_width("갱신", w_upd) + "  "
+                + "단계"
+            )
+        return (
+            "  "
+            + fit_width("프로젝트", w_proj) + "  "
+            + fit_width("작업", w_task) + "  "
+            + fit_width("경과", w_elap) + "  "
+            + fit_width("갱신", w_upd) + "  "
+            + "단계"
+        )
+
+    def format_section_row(drow):
+        st = fit_width(drow["stage"], w_stage).rstrip()
+        if show_worker_col:
+            return (
+                "  "
+                + fit_width(drow["proj"], w_proj) + "  "
+                + fit_width(drow["task"], w_task) + "  "
+                + fit_width(drow["wm"], w_wm) + "  "
+                + fit_width(drow["elapsed"], w_elap) + "  "
+                + fit_width(drow["updated"], w_upd) + "  "
+                + st
+            )
+        return (
+            "  "
+            + fit_width(drow["proj"], w_proj) + "  "
+            + fit_width(drow["task"], w_task) + "  "
+            + fit_width(drow["elapsed"], w_elap) + "  "
+            + fit_width(drow["updated"], w_upd) + "  "
+            + st
+        )
+
+    print(
+        f"작업 현황 {now_hm}  "
+        f"실행 {len(run_rows)} · 주의 {len(att_rows)} · 끝남 {len(done_rows)} · "
+        f"오래된 미정리 {old_uncleaned_count} (숨김)"
+    )
+
+    sections = [
+        ("▶ 실행 중", "32", run_rows, True),
+        ("⚠ 주의 필요", "33", att_rows, False),
+        ("✓ 최근 끝남 (24h)", "90", done_rows, False),
+    ]
+    printed_header = False
+    for title_txt, color_code, srows, show_cols in sections:
+        if not srows:
+            continue
+        print()
+        print(colorize(title_txt, color_code))
+        if show_cols or not printed_header:
+            print(format_section_header())
+            printed_header = True
+        for drow in srows:
+            print(format_section_row(drow))
+
+    print()
+    print(get_footer_line(watch_dir))
     print_notice()
     sys.exit(0)
 

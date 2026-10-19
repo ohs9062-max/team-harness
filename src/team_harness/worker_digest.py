@@ -80,17 +80,21 @@ def terminal_status(task: Path) -> str:
     line = status_line(task)
     line = re.sub(
         r"^\[?\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?"
-        r"(?:Z|[+-]\d{2}:\d{2}| KST)?\]?[:\s]*",
+        r"(?:Z|[+-]\d{2}:\d{2}| KST)?\]?[:\s|]*",
         "",
         line,
     )
+    line = re.sub(r"^\[?\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?\]?[:\s|]*", "", line)
+    line = re.sub(r"^(?:상태|결과|status)[:\s|]*", "", line, flags=re.IGNORECASE)
     if (task / "FAILED").is_file() or any(
         path.is_file() for path in task.glob("FAILED.*")
     ):
         return "FAILED"
-    if re.match(r"FAILED\b", line):
+    if re.match(r"(?:[A-Z0-9]+_)?FAILED(?:_[A-Z0-9]+)?\b", line):
         return "FAILED"
-    if (task / "DONE").is_file() or re.match(r"DONE\b", line):
+    if (task / "DONE").is_file() or re.match(
+        r"(?:[A-Z0-9]+_)?DONE(?:_[A-Z0-9]+)?\b", line
+    ):
         return "DONE"
     return ""
 

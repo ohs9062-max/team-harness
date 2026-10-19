@@ -672,8 +672,8 @@ def test_th_status_worker_pid_alive_shows_running(test_env: dict):
             [str(status_script)], env=test_env["env"], capture_output=True, text=True
         )
         assert res.returncode == 0
-        assert "진행" in res.stdout
-        assert "중단?" not in res.stdout
+        assert "실행 중" in res.stdout
+        assert "중단" not in res.stdout
     finally:
         proc.terminate()
         proc.wait()
@@ -832,7 +832,14 @@ def test_th_status_recognizes_claude_log_quota(test_env: dict):
         [str(status_script)], env=test_env["env"], capture_output=True, text=True
     )
     assert res.returncode == 0
-    assert "워커 오" in res.stdout
+    assert "주의 필요" in res.stdout
+    assert "쿼터오류" in res.stdout
+
+    res_all = subprocess.run(
+        [str(status_script), "-a"], env=test_env["env"], capture_output=True, text=True
+    )
+    assert res_all.returncode == 0
+    assert "워커 오" in res_all.stdout
 
 
 def test_th_watch_cpu_ticks_includes_grandchild_processes():
@@ -1637,13 +1644,27 @@ def test_th_launch_and_watch_context_rollover_resume_and_status(test_env: dict):
     assert res_conflict.returncode != 0
     assert "already has an active worker" in res_conflict.stderr
 
-    # Check th-status shows active context line
+    # Check th-status shows active context tag on running row in default view and full line in -a
     status_active = subprocess.run(
-        [str(SCRIPTS_DIR / "th-status.sh")], env=env, capture_output=True, text=True
+        [str(SCRIPTS_DIR / "th-status.sh")],
+        env={**env, "COLUMNS": "120"},
+        capture_output=True,
+        text=True,
     )
     assert status_active.returncode == 0
-    assert "exp/stage3a |" in status_active.stdout
-    assert "| active |" in status_active.stdout
+    assert "▶ 실행 중" in status_active.stdout
+    assert "맥락 58k/60k" in status_active.stdout
+    assert "unknown" not in status_active.stdout
+
+    status_active_all = subprocess.run(
+        [str(SCRIPTS_DIR / "th-status.sh"), "-a"],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert status_active_all.returncode == 0
+    assert "exp/stage3a |" in status_active_all.stdout
+    assert "| active |" in status_active_all.stdout
 
     # Kill the sleep worker and mark DONE so th-watch reaps and parks it
     w_pid = int((task_dir / "worker.pid").read_text(encoding="utf-8").strip())
@@ -1930,3 +1951,161 @@ def test_th_launch_handoff_preserves_job_pid_and_embeds_experiment_and_minimal_w
             if proc.poll() is None:
                 proc.terminate()
                 proc.wait(timeout=5)
+
+
+def test_th_status_sectioned_table_and_formatting(test_env: dict):
+    """Verify sectioned human-readable table: classification, time units, EAW alignment, narrow width, and NO_COLOR."""
+    import unicodedata
+
+    now_ts = time.time()
+    status_script = SCRIPTS_DIR / "th-status.sh"
+
+    # 1. Running task (robot_vision3_autolabel -> robot3, started 42m ago, updated <1m ago)
+    t_run = _create_task_dir(
+        test_env["tmp_path"] / "robot_vision3_autolabel" / "outputs" / "runs",
+        "한글작업_실행",
+    )
+    (t_run / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
+    (t_run / "codex.log").write_text(
+        "model: gpt-5.6-terra\nreasoning effort: medium\n", encoding="utf-8"
+    )
+    (t_run / "STATUS").write_text(
+        "2026-10-19T10:20:00+09:00 HUMAN smoke 진행\n", encoding="utf-8"
+    )
+
+    # 2. Failed task (updated 38m ago)
+    t_fail = _create_task_dir(
+        test_env["tmp_path"] / "robot_vision3_autolabel" / "outputs" / "runs", "eval_h1"
+    )
+    (t_fail / "codex.log").write_text(
+        "model: gpt-5.6-terra\nreasoning effort: medium\n", encoding="utf-8"
+    )
+    (t_fail / "FAILED").write_text("self-check mismatch\n", encoding="utf-8")
+    (t_fail / "STATUS").write_text(
+        "2026-10-19T10:30:00+09:00 FAILED: self-check mismatch\n", encoding="utf-8"
+    )
+    fail_ts = now_ts - 38 * 60
+    for p in t_fail.iterdir():
+        os.utime(p, (fail_ts, fail_ts))
+
+    # 3. Done within 24h (updated 2h ago)
+    t_done = _create_task_dir(
+        test_env["tmp_path"] / "team-harness" / "_outputs", "worker_read_policy"
+    )
+    (t_done / "codex.log").write_text(
+        "model: gpt-5.6-terra\nreasoning effort: high\n", encoding="utf-8"
+    )
+    (t_done / "DONE").write_text("1034 passed\n", encoding="utf-8")
+    (t_done / "STATUS").write_text(
+        "2026-10-19T09:00:00+09:00 DONE: 1034 passed\n", encoding="utf-8"
+    )
+    done_ts = now_ts - 2 * 3600 - 120
+    for p in t_done.iterdir():
+        os.utime(p, (done_ts, done_ts))
+
+    # 4. Dead task from 3 days ago (no DONE/FAILED, no live process)
+    t_old_dead = _create_task_dir(
+        test_env["tmp_path"] / "robot_vision3_autolabel" / "outputs" / "runs",
+        "old_dead_task",
+    )
+    (t_old_dead / "worker.pid").write_text("999996\n", encoding="utf-8")
+    (t_old_dead / "STATUS").write_text(
+        "2026-10-16T10:00:00+09:00 WAITING_FOR_S_DISTILL\n", encoding="utf-8"
+    )
+    old_ts = now_ts - 3 * 24 * 3600
+    for p in t_old_dead.iterdir():
+        os.utime(p, (old_ts, old_ts))
+
+    # 5. Task with only DONE in STATUS (no DONE file, updated 50m ago)
+    t_status_done = _create_task_dir(
+        test_env["tmp_path"] / "team-harness" / "_outputs", "status_only_done"
+    )
+    (t_status_done / "STATUS").write_text("상태: DONE\n", encoding="utf-8")
+    sd_ts = now_ts - 50 * 60
+    for p in t_status_done.iterdir():
+        os.utime(p, (sd_ts, sd_ts))
+
+    # Quota lock with unlock time
+    (test_env["watch_dir"] / "quota_lock.codex").write_text(
+        "2026-10-19 10:06 | task | You've hit your usage limit ... try again at 1:50 PM\n",
+        encoding="utf-8",
+    )
+
+    proc = subprocess.Popen(["sleep", "30"])
+    try:
+        (t_run / "worker.pid").write_text(f"{proc.pid}\n", encoding="utf-8")
+        start_42m = now_ts - 42 * 60
+        os.utime(t_run / "worker.pid", (start_42m, start_42m))
+        os.utime(t_run / "STATUS", (now_ts - 10, now_ts - 10))
+
+        tasks_txt = test_env["watch_dir"] / "tasks.txt"
+        tasks_txt.write_text(
+            "\n".join(map(str, [t_run, t_fail, t_done, t_old_dead, t_status_done]))
+            + "\n",
+            encoding="utf-8",
+        )
+
+        res = subprocess.run(
+            [str(status_script)],
+            env={**test_env["env"], "COLUMNS": "100", "NO_COLOR": "1"},
+            capture_output=True,
+            text=True,
+        )
+        assert res.returncode == 0, res.stderr
+        out = res.stdout
+        assert "\033[" not in out
+
+        # Header counts: 실행 1 · 주의 1 · 끝남 2 · 오래된 미정리 1 (숨김)
+        assert "실행 1 · 주의 1 · 끝남 2 · 오래된 미정리 1 (숨김)" in out
+        assert "▶ 실행 중" in out
+        assert "⚠ 주의 필요" in out
+        assert "✓ 최근 끝남 (24h)" in out
+        assert "old_dead_task" not in out
+        assert "status_only_done" in out
+
+        # Time formatting check: 42분, 방금, 38분 전, 2시간 전, 50분 전
+        assert "42분" in out
+        assert "방금" in out
+        assert "38분 전" in out
+        assert "2시간 전" in out
+        assert "50분 전" in out
+        assert "codex 잠김(13:50 해제)" in out
+
+        # East Asian Width alignment check across table rows
+        def disp_w(s: str) -> int:
+            return sum(
+                2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in s
+            )
+
+        header_line = next(
+            line
+            for line in out.splitlines()
+            if "프로젝트" in line and "워커/모델" in line
+        )
+        stage_col_offset = disp_w(header_line.split("단계")[0])
+        for row_marker in ("한글작업_실행", "eval_h1", "worker_read_policy"):
+            row_line = next(line for line in out.splitlines() if row_marker in line)
+            # Verify the stage column starts at the exact same display width column
+            acc_w = 0
+            cut_idx = 0
+            for idx, ch in enumerate(row_line):
+                if acc_w == stage_col_offset:
+                    cut_idx = idx
+                    break
+                acc_w += 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+            assert acc_w == stage_col_offset, f"Misaligned row: {row_line}"
+            assert row_line[cut_idx - 2 : cut_idx] == "  "
+
+        # Narrow terminal (<80 cols) drops 워커/모델 column
+        res_narrow = subprocess.run(
+            [str(status_script)],
+            env={**test_env["env"], "COLUMNS": "72", "NO_COLOR": "1"},
+            capture_output=True,
+            text=True,
+        )
+        assert res_narrow.returncode == 0
+        assert "워커/모델" not in res_narrow.stdout
+        assert "codex terra-med" not in res_narrow.stdout
+    finally:
+        proc.terminate()
+        proc.wait()
