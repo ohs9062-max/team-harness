@@ -1,6 +1,10 @@
 <!-- TEAM-HARNESS-COORDINATOR-JOURNAL:BEGIN -->
 ## Coordinator journal (automatic)
 
+If `TH_ROLE=worker` is set, or this process is a worker launched by th-launch or
+the th protocol, ignore this entire block and do not read or write any file
+under `.claude/`.
+
 Regardless of mode or loaded skills, coordinators must maintain the current
 workspace's `.claude/current_status.md` and `.claude/work_log.md`.
 Read `current_status.md` at startup, after compaction, and before long work.

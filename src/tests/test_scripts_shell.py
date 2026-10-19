@@ -189,6 +189,35 @@ def test_th_launch_passes_terra_model_and_effort_to_codex(
     ]
 
 
+def test_th_launch_marks_codex_as_worker_and_ends_option_parsing(test_env: dict):
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_role_codex")
+    captured_args = test_env["tmp_path"] / "codex-args.txt"
+    captured_env = test_env["tmp_path"] / "codex-env.txt"
+    codex_stub = test_env["bin_dir"] / "codex"
+    codex_stub.write_text(
+        f'#!/usr/bin/env bash\nprintf "%s\\n" "$@" > "{captured_args}"\nprintf "%s" "$TH_ROLE" > "{captured_env}"\n',
+        encoding="utf-8",
+    )
+    codex_stub.chmod(codex_stub.stat().st_mode | stat.S_IEXEC)
+
+    result = subprocess.run(
+        [str(SCRIPTS_DIR / "th-launch.sh"), str(task_dir)],
+        env=test_env["env"],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    deadline = time.time() + 3
+    while not captured_args.exists() and time.time() < deadline:
+        time.sleep(0.05)
+    argv = captured_args.read_text(encoding="utf-8").splitlines()
+    assert captured_env.read_text(encoding="utf-8") == "worker"
+    assert argv[argv.index("project_doc_max_bytes=0") - 1] == "-c"
+    separator = argv.index("--")
+    assert argv[separator + 1].startswith("# Test Task")
+
+
 @pytest.mark.parametrize("worker_type", ["codex", "claude"])
 def test_th_launch_sets_image_permission_to_blocked_by_default(
     test_env: dict, worker_type: str
@@ -278,7 +307,13 @@ def test_th_launch_uses_one_image_envelope_and_project_python_for_each_worker_ty
     None
 ):
     source = (SCRIPTS_DIR / "th-launch.sh").read_text(encoding="utf-8")
-    assert source.count('env "${image_env[@]}" setsid nohup') == 3
+    assert source.count('env "${worker_env[@]}" setsid nohup') == 3
+    assert 'worker_env=("TH_ROLE=worker" "${image_env[@]}")' in source
+    assert source.count("project_doc_max_bytes=0") == 2
+    # Codex and Claude receive a positional prompt. agy uses an unambiguous
+    # --print=<value> option, so it has no separate positional prompt token.
+    assert source.count('"$@" -- "$prompt"') == 2
+    assert '"$@" --print="$prompt"' in source
     assert 'context_python=(uv run --directory "$script_dir/.." python)' in source
     assert (
         source.count(
@@ -300,6 +335,50 @@ def test_watch_scripts_import_team_harness_via_project_python() -> None:
     assert "python3 - " not in status
     assert "team_harness import failed" in status
     assert "context inspection failed" in lib
+
+
+def test_install_journal_rule_replaces_existing_block_and_keeps_surroundings(
+    tmp_path: Path,
+):
+    home = tmp_path / "home"
+    claude = home / ".claude" / "CLAUDE.md"
+    codex = home / ".codex" / "AGENTS.md"
+    old = (
+        "before\n<!-- TEAM-HARNESS-COORDINATOR-JOURNAL:BEGIN -->\nold rule\n"
+        "<!-- TEAM-HARNESS-COORDINATOR-JOURNAL:END -->\nafter\n"
+    )
+    claude.parent.mkdir(parents=True)
+    codex.parent.mkdir(parents=True)
+    claude.write_text(old, encoding="utf-8")
+    codex.write_text(old, encoding="utf-8")
+
+    result = subprocess.run(
+        [str(SCRIPTS_DIR / "install-journal-rule.sh")],
+        env={**os.environ, "HOME": str(home)},
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    for target in (claude, codex):
+        text = target.read_text(encoding="utf-8")
+        assert text.startswith("before\n")
+        assert text.endswith("\nafter\n")
+        assert text.count("TEAM-HARNESS-COORDINATOR-JOURNAL:BEGIN") == 1
+        assert "TH_ROLE=worker" in text
+        assert "old rule" not in text
+
+
+def test_journal_hook_is_noop_for_worker(tmp_path: Path):
+    result = subprocess.run(
+        [str(SCRIPTS_DIR / "journal-hook.sh")],
+        cwd=tmp_path,
+        env={**os.environ, "TH_ROLE": "worker"},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0
+    assert result.stdout == ""
 
 
 def test_th_watch_owner_filtering(test_env: dict):

@@ -415,6 +415,26 @@ protocol backend 자동 교체 금지는 바꾸지 않는다.
 exceeded`, `RESOURCE_EXHAUSTED` 등은 여전히 전역 잠금과 알림을 만든다. 완료/실패
 소비자 계약(TH-D3)은 바뀌지 않는다.
 
+## TH-D34. 워커 역할을 코디네이터 일지와 프로젝트 지시문에서 격리한다
+
+**결정.** `th-launch`와 공통 Python spawner가 만드는 모든 worker에는 `TH_ROLE=worker`를
+명시한다. 글로벌 일지 규칙은 이 환경과 th-launch/th protocol worker에서 완전히 무시하도록
+하며 `.claude/` 아래를 읽거나 쓰지 않는다. Codex worker 명령은
+`-c project_doc_max_bytes=0`으로 프로젝트 `AGENTS.md` 자동 로드를 끄고, worker prompt 앞에
+`--`를 넣어 YAML front matter가 CLI 옵션으로 해석되지 않게 한다. agy는 prompt가
+`--print=<value>`에 포함되므로 별도 종료 토큰이 필요 없다.
+
+**맥락.** 코디네이터용 전역 일지 블록과 큰 프로젝트 `AGENTS.md`가 one-shot worker에도
+재전송되어 작업 하나당 수십만 토큰을 소비했고, 실제 s1 실행은 178,735 토큰을 사용했다.
+역할 경계 없이 global hook까지 실행되면 worker가 코디네이터 상태를 읽고 쓰는 부작용도 생긴다.
+
+**결과.** 일지 설치기는 기존 marker block을 최신 템플릿으로 교체하되 그 밖의 사용자 지시를
+보존하고, Claude SessionStart hook은 worker에서 no-op 한다. 전역 규칙은 coordinator에게만
+계속 적용된다. Protocol, SDK, shell launcher가 같은 환경 변수를 설정하므로 일부 실행 경로만
+수정한 채 재실행하지 않는다. `project_doc_max_bytes=0`이 전역 `~/.codex/AGENTS.md`까지
+차단하는지는 격리된 실측 결과로 기록하며, 전역 규칙 자체는 `TH_ROLE` 분기로 안전하게 남는다.
+
+
 ## TH-D33. 이미지 모델 입력은 사용자 명시 요청이 있는 현재 턴으로 제한한다
 
 **결정.** 이미지 파일(`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.bmp`, `.tif`,

@@ -74,6 +74,8 @@ DEFAULT_AGENT_TEMPLATES: dict[str, AgentTemplate] = {
             "--json",
             "-c",
             "mcp_servers={}",
+            "-c",
+            "project_doc_max_bytes=0",
         ),
         resume_prefix=("resume",),
         resume_flags=("{session_id}",),

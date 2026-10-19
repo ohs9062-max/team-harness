@@ -140,6 +140,8 @@ shared_flags = [
     "--json",
     "-c",
     "mcp_servers={}",
+    "-c",
+    "project_doc_max_bytes=0",
 ]
 resume_prefix = ["resume"]
 resume_flags = ["{session_id}"]

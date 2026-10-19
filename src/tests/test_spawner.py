@@ -101,6 +101,34 @@ printf '%s' "$TH_ALLOW_IMAGES" > "$IMAGE_PERMISSION_DUMP"
 
 
 @pytest.mark.asyncio
+async def test_spawn_always_marks_child_as_worker(tmp_path):
+    fake_worker = tmp_path / "fake-worker"
+    fake_worker.write_text(
+        '#!/bin/sh\nprintf "%s" "$TH_ROLE" > "$ROLE_DUMP"\n', encoding="utf-8"
+    )
+    fake_worker.chmod(0o755)
+    dump = tmp_path / "role.txt"
+    config = Config(
+        agent_templates={
+            "codex": AgentTemplate(command=(str(fake_worker),), model_flag=None)
+        }
+    )
+
+    result = await spawn(
+        agent_id="worker_role",
+        agent_type="codex",
+        prompt="hello",
+        cwd=tmp_path,
+        config=config,
+        log_dir=tmp_path / "logs",
+        extra_env={"ROLE_DUMP": str(dump), "TH_ROLE": "coordinator"},
+    )
+    await asyncio.wait_for(result.proc.wait(), 2)
+
+    assert dump.read_text(encoding="utf-8") == "worker"
+
+
+@pytest.mark.asyncio
 async def test_spawn_default_model_injected_as_model_flag(tmp_path):
     """A template with `default_model` gets the flag appended automatically
     when the caller does not pass an explicit `model=`."""

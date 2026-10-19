@@ -9,6 +9,8 @@
 
 ### 변경됨 (Changed)
 
+- **워커 역할 격리 (TH-D34).** Shell·Protocol worker는 `TH_ROLE=worker`를 받고 coordinator journal 규칙·hook을 무시하며, Codex worker는 프로젝트 `AGENTS.md` 자동 로드를 끄고 front-matter prompt를 `--` 뒤로 전달합니다.
+
 - **Claude 코디네이터 전용 및 명시 요청 워커 (TH-D30).** Claude는 기본 코디네이터 전용이며 Protocol 기본 역할·자동 대체·조사 병렬 참가자로 선택되지 않습니다. 사용자 명시 요청 때만 `claude-sonnet-5`(명시 모델 우선) Claude 워커를 실행하고, launcher는 `TH_USER_REQUESTED_CLAUDE=1` 없이는 exit 4로 거부합니다. MODE C 설계 기본 역할은 Codex `gpt-5.6-terra` high이고, Codex 쿼터 잠금 시 대체는 agy만 사용하며 코드 결과를 검증합니다.
 
 - **`ths` 기본 출력 축약 및 쿼터 오탐 방지 (TH-D31).** 기본 조회는 실행 중과 최근 24시간 실패·검수 실패만 최대 10줄로 보이고, 전체 표는 `-a`로 유지합니다. 상태 표에는 대화 재출력 금지 안내를 붙였으며, `th-watch`는 프롬프트/worker suffix에 에코된 쿼터 문구를 잠금으로 오인하지 않고 쿼터 사건 뒤에도 이후 DONE/FAILED를 계속 알립니다.

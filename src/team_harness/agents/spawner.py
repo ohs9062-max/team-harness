@@ -120,6 +120,9 @@ async def spawn(
         **template_env,
         **(extra_env or {}),
         "TH_ALLOW_IMAGES": image_permission,
+        # Every subprocess produced by this module is a worker, including
+        # Protocol stages. Never let a coordinator's ambient role leak in.
+        "TH_ROLE": "worker",
     }
     if extra_env is None or INHERITED_CALLER_CONTEXT_ENV not in extra_env:
         # The environment belongs to the harness coordinator process. A stale

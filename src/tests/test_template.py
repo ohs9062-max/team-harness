@@ -25,7 +25,6 @@ def test_parse_structured_template_fields():
             },
         },
     )
-
     # Missing fields (default_model, model_env_vars, reasoning_effort_flag)
     # are inherited from the built-in codex default.
     assert template == AgentTemplate(
@@ -48,6 +47,14 @@ def test_parse_structured_template_fields():
             field_path=("thread_id",),
         ),
     )
+
+
+def test_default_codex_template_disables_project_instruction_loading():
+    from team_harness.agents.template import DEFAULT_AGENT_TEMPLATES
+
+    flags = DEFAULT_AGENT_TEMPLATES["codex"].shared_flags
+    index = flags.index("project_doc_max_bytes=0")
+    assert flags[index - 1] == "-c"
 
 
 def test_parse_default_model_override_as_string():

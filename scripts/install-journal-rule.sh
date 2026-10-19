@@ -4,26 +4,47 @@ set -euo pipefail
 
 repo_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 begin='<!-- TEAM-HARNESS-COORDINATOR-JOURNAL:BEGIN -->'
+end='<!-- TEAM-HARNESS-COORDINATOR-JOURNAL:END -->'
 rule_template="$repo_dir/templates/journal_rule_block.md"
 [[ -f $rule_template ]] || { echo "journal rule template missing: $rule_template" >&2; exit 1; }
 
-insert_rule() {
+install_rule() {
   local target=$1 dir tmp
   dir=$(dirname "$target")
   mkdir -p "$dir"
   [[ -e $target ]] || : > "$target"
-  if grep -qF "$begin" "$target"; then
-    return
-  fi
   tmp=$(mktemp "$dir/.journal.XXXXXX")
-  # Keep this file-based insertion: the Markdown backticks in the rule must
-  # never be interpreted as shell command substitutions.
-  { cat "$rule_template"; printf '\n\n'; cat "$target"; } > "$tmp"
+  # Replace the marked block if present, retaining all content outside it.
+  # Keep this file-based operation: Markdown backticks must never be evaluated
+  # by the shell.
+  python3 - "$target" "$rule_template" "$tmp" "$begin" "$end" <<'PY'
+from pathlib import Path
+import sys
+
+target = Path(sys.argv[1])
+template = Path(sys.argv[2])
+output = Path(sys.argv[3])
+begin, end = sys.argv[4:6]
+current = target.read_text(encoding="utf-8")
+rule = template.read_text(encoding="utf-8").rstrip()
+first = current.find(begin)
+if first < 0:
+    rewritten = f"{rule}\n\n{current}"
+else:
+    last = current.find(end, first)
+    if last < 0:
+        raise SystemExit(f"unterminated journal rule block in {target}")
+    last += len(end)
+    if current.find(begin, last) >= 0:
+        raise SystemExit(f"multiple journal rule blocks in {target}")
+    rewritten = current[:first] + rule + current[last:]
+output.write_text(rewritten, encoding="utf-8")
+PY
   mv "$tmp" "$target"
 }
 
-insert_rule "$HOME/.claude/CLAUDE.md"
-insert_rule "$HOME/.codex/AGENTS.md"
+install_rule "$HOME/.claude/CLAUDE.md"
+install_rule "$HOME/.codex/AGENTS.md"
 
 # agy has no documented universal instruction-file location.  Support known
 # local conventions without guessing a new one; report absence for the caller.
@@ -32,7 +53,7 @@ for candidate in "$HOME/.agy/AGENTS.md" "$HOME/.agy/INSTRUCTIONS.md" "$HOME/.con
   if [[ -f $candidate ]]; then agy_target=$candidate; break; fi
 done
 if [[ -n $agy_target ]]; then
-  insert_rule "$agy_target"
+  install_rule "$agy_target"
   printf 'agy: installed %s\n' "$agy_target"
 else
   printf 'agy: global instruction file not found; not installed\n' >&2

@@ -1,5 +1,7 @@
 ## Worker rules
 
+Do not read or write the coordinator journal (`.claude/current_status.md`, `.claude/work_log.md`, `.claude/inbox.md`, `.claude/workers.md`); global journal rules apply to coordinators only.
+
 - State lives in files, not chat: `STATUS` (one timestamped line per stage),
   `WORKLOG.md` (≤60 lines, replaced: goal, done/remaining, method,
   assumptions, problems, output paths), `DONE` or `FAILED` (short reason).
