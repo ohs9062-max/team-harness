@@ -4,14 +4,17 @@ import json
 import os
 from pathlib import Path
 
+import pytest
+
 from team_harness import watch_inspect
 from team_harness.worker_context import ContextMeasurement
 from team_harness.worker_context import WorkerContextSettings
 
 
 def test_watcher_requests_rollover_from_current_codex_context(
-    tmp_path: Path, monkeypatch, capsys
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+
     task = tmp_path / "task"
     task.mkdir()
     (task / "task.md").write_text(
