@@ -7,6 +7,7 @@ import pytest
 from team_harness.agents.spawner import spawn
 from team_harness.agents.template import AgentTemplate
 from team_harness.config import Config
+from team_harness.coordinator_zone import WORKER_PROMPT_HEADER
 
 
 def _write_capture_script(path):
@@ -51,6 +52,8 @@ async def test_spawn_resume_passes_resume_session_id(tmp_path):
         "resume",
         "--json",
         "abc-123",
+        WORKER_PROMPT_HEADER,
+        "",
         "continue here",
     ]
 
@@ -82,6 +85,8 @@ async def test_spawn_fresh_passes_prompt_and_model_override(tmp_path):
         "--json",
         "--model",
         "gpt-5.5",
+        WORKER_PROMPT_HEADER,
+        "",
         "hello world",
     ]
 

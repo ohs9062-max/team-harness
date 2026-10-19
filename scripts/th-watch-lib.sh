@@ -78,10 +78,13 @@ quota_error_line() {
     }
     {
       if (prompt[$0]) next
+      lower = tolower($0)
+      # The suffix is also normally echoed inside the initial worker prompt;
+      # never turn its own fail-fast instruction into a quota lock.
+      if (lower ~ /^[-*[:space:]]*quota\/permission\/license error[[:space:]]*→[[:space:]]*`?failed`?/) next
       if ($0 ~ /^[[:space:]]*([-*+#]|>|[0-9]+[.)])[[:space:]]/) next
       if ($0 ~ /^[+-][^+-]/ || $0 ~ /^@@ /) next
       if ($0 ~ /^ERROR:[[:space:]]*test_/) next
-      lower = tolower($0)
       if (lower ~ /→[[:space:]]*`?failed`?/ || lower ~ /error[[:space:]]*→[[:space:]]*failed/) next
       if (lower ~ /(if[[:space:]]*\(|re\.search|awk[[:space:]]|grep[[:space:]]|~[[:space:]]*\/|last[[:space:]]*=[[:space:]]*\$0)/) next
       if (lower ~ /^([0-9]{4}-[0-9]{2}-[0-9]{2}[t ][0-9:.+-]+[[:space:]]+)?(error[: ]|api error[: ]|api response[: ]|agy_error[: ]|stream error[: ]|fatal[: ]|resource_exhausted[: ]|\{"(type":"error|error":))/ &&

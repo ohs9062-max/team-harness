@@ -9,6 +9,8 @@
 
 ### 변경됨 (Changed)
 
+- **워커 문서·인계 경계 강화 (TH-D32 보완).** 워커는 지시서의 `## 읽을 문서`만 읽고, 완료된 작업의 오래된 WORKLOG는 인계하지 않습니다. 감시기가 Codex의 현재 입력 맥락(누적 사용량 아님)을 측정해 상한 초과를 요청하며, coordinator 영역 훅·명시적 `allow_paths` 예외와 검수 호환성을 제공합니다.
+
 - **워커 역할 격리 (TH-D34).** Shell·Protocol worker는 `TH_ROLE=worker`를 받고 coordinator journal 규칙·hook을 무시하며, Codex worker는 프로젝트 `AGENTS.md` 자동 로드를 끄고 front-matter prompt를 `--` 뒤로 전달합니다.
 
 - **Claude 코디네이터 전용 및 명시 요청 워커 (TH-D30).** Claude는 기본 코디네이터 전용이며 Protocol 기본 역할·자동 대체·조사 병렬 참가자로 선택되지 않습니다. 사용자 명시 요청 때만 `claude-sonnet-5`(명시 모델 우선) Claude 워커를 실행하고, launcher는 `TH_USER_REQUESTED_CLAUDE=1` 없이는 exit 4로 거부합니다. MODE C 설계 기본 역할은 Codex `gpt-5.6-terra` high이고, Codex 쿼터 잠금 시 대체는 agy만 사용하며 코드 결과를 검증합니다.

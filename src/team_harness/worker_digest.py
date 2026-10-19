@@ -167,11 +167,21 @@ def check_artifacts(task: Path) -> dict[str, str]:
         )
     descriptions = []
     missing = []
+    worktree = Path(read(task / ".th_worktree").strip() or task)
+    bases = [task, worktree]
     for spec in paths:
-        path = Path(spec)
-        if not path.is_absolute():
-            path = task / path
-        matches = [Path(p) for p in glob.glob(str(path), recursive=True)]
+        paths_to_match = (
+            [Path(spec)]
+            if Path(spec).is_absolute()
+            else [base / spec for base in bases]
+        )
+        matches = list(
+            dict.fromkeys(
+                Path(p).resolve()
+                for path in paths_to_match
+                for p in glob.glob(str(path), recursive=True)
+            )
+        )
         count = sum(
             sum(1 for child in p.rglob("*") if child.is_file()) if p.is_dir() else 1
             for p in matches
@@ -248,6 +258,7 @@ def run_bounded(
     prompt: str | None = None,
     stderr_path: Path | None = None,
     include_stderr: bool = False,
+    env: dict[str, str] | None = None,
 ) -> tuple[int, str]:
     # GNU timeout owns the complete process group, including CLI children.
     process = subprocess.Popen(
@@ -258,6 +269,7 @@ def run_bounded(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         start_new_session=True,
+        env=env,
     )
     previous = signal.getsignal(signal.SIGTERM)
 
@@ -300,11 +312,14 @@ def check_script(task: Path) -> dict[str, str]:
             return saved["item"]
     except ValueError:
         pass
+    verify_env = dict(os.environ)
+    verify_env.pop("PYTHONPATH", None)
     code, output = run_bounded(
         ["bash", str(script)],
         worktree,
         timeout_setting("TH_VERIFY_TIMEOUT"),
         include_stderr=True,
+        env=verify_env,
     )
     atomic_write(
         task / ".th_verify_output.txt", "\n".join(output.splitlines()[-40:]) + "\n"
@@ -528,10 +543,22 @@ def summarize(task: Path, verification: str) -> str:
             )
             if code:
                 errors = summary + read(cwd / "stderr.txt")
-                if re.search(
-                    r"quota exceeded|rate[ _-]?limit|usage[ _-]?limit|at capacity|capacity exceeded|RESOURCE_EXHAUSTED",
-                    errors,
-                    re.IGNORECASE,
+                error_lines = [
+                    line
+                    for line in errors.splitlines()
+                    if re.match(
+                        r"^(?:ERROR|API error|API response|fatal|RESOURCE_EXHAUSTED|\{\"type\":\"error\")",
+                        line,
+                        re.IGNORECASE,
+                    )
+                ]
+                if any(
+                    re.search(
+                        r"quota exceeded|rate[ _-]?limit|usage[ _-]?limit|at capacity|capacity exceeded|RESOURCE_EXHAUSTED|(?:^|\s)429(?:\s|$)",
+                        line,
+                        re.IGNORECASE,
+                    )
+                    for line in error_lines
                 ):
                     atomic_write(
                         watch / f"quota_lock.{worker}",

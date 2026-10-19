@@ -19,6 +19,7 @@ import os
 from pathlib import Path
 import time
 from typing import Any
+from typing import Iterable
 from typing import Iterator
 from uuid import uuid4
 
@@ -184,6 +185,28 @@ def parse_task_metadata(path: str | Path) -> dict[str, Any]:
         "follow_up": follow_up,
         "context_budget": context_budget,
     }
+
+
+def parse_task_allow_paths(path: str | Path) -> list[str]:
+    """Read only explicit ``allow_paths`` entries from task front matter."""
+
+    try:
+        lines = Path(path).read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise WorkerContextError(f"cannot read task file {path}: {exc}") from exc
+    allowed: list[str] = []
+    active = False
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        if line.strip() == "allow_paths:":
+            active = True
+            continue
+        if active and line.strip().startswith("- "):
+            allowed.append(line.strip()[2:].strip().strip("\"'"))
+        elif active:
+            active = False
+    return allowed
 
 
 def parse_task_front_matter(path: str | Path) -> tuple[str, str]:
@@ -512,6 +535,32 @@ def dispatch(
         return decide(request, None, settings), registry
     snapshot: dict[str, Any] = {"candidates": registry.sessions()}
     return decide(request, snapshot, settings), registry
+
+
+def should_prepare_handoff(
+    *,
+    task_key: str,
+    sessions: Iterable[dict[str, Any]],
+    terminal: bool,
+    context_exit_requested: bool,
+) -> bool:
+    """Decide whether a new worker receives prior state documents.
+
+    A stale WORKLOG is not evidence of continuity: completed/failed tasks and
+    different task keys start fresh.  Only a rollover request or an unfinished
+    record for this exact task key is an actual handoff.
+    """
+
+    if terminal:
+        return False
+    if context_exit_requested:
+        return True
+    return any(
+        item.get("task_key") == task_key
+        and item.get("state") in {"active", "parked"}
+        and item.get("reason") not in {"completed", "failed"}
+        for item in sessions
+    )
 
 
 def _new_registry(workspace_id: str) -> dict[str, object]:

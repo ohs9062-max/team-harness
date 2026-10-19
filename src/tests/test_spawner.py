@@ -7,6 +7,7 @@ import pytest
 from team_harness.agents.spawner import spawn
 from team_harness.agents.template import AgentTemplate
 from team_harness.config import Config
+from team_harness.coordinator_zone import WORKER_PROMPT_HEADER
 from tests.helpers import fake_agent_template
 
 
@@ -26,7 +27,9 @@ async def test_spawn_creates_logs_and_uses_devnull(tmp_path):
     await asyncio.wait_for(proc.proc.wait(), 2)
 
     assert proc.proc.stdin is None
-    assert (log_dir / "agent_test_stdout.log").read_text().strip() == "hello"
+    assert (log_dir / "agent_test_stdout.log").read_text().strip() == (
+        f"{WORKER_PROMPT_HEADER}\n\nhello"
+    )
     assert (log_dir / "agent_test_stderr.log").exists()
 
 
@@ -576,7 +579,15 @@ async def test_spawn_openhands_sets_llm_model_env_without_model_flag(
     await asyncio.wait_for(result.proc.wait(), 2)
 
     argv = argv_dump.read_text(encoding="utf-8").splitlines()
-    assert argv == ["--headless", "--json", "--override-with-envs", "-t", "hello"]
+    assert argv == [
+        "--headless",
+        "--json",
+        "--override-with-envs",
+        "-t",
+        WORKER_PROMPT_HEADER,
+        "",
+        "hello",
+    ]
     assert "--model" not in argv
 
     dumped = _parse_env_dump(env_dump)

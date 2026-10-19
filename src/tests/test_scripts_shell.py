@@ -215,7 +215,7 @@ def test_th_launch_marks_codex_as_worker_and_ends_option_parsing(test_env: dict)
     assert captured_env.read_text(encoding="utf-8") == "worker"
     assert argv[argv.index("project_doc_max_bytes=0") - 1] == "-c"
     separator = argv.index("--")
-    assert argv[separator + 1].startswith("# Test Task")
+    assert argv[separator + 1].startswith("너는 team-harness 워커다")
 
 
 @pytest.mark.parametrize("worker_type", ["codex", "claude"])
@@ -308,8 +308,9 @@ def test_th_launch_uses_one_image_envelope_and_project_python_for_each_worker_ty
 ):
     source = (SCRIPTS_DIR / "th-launch.sh").read_text(encoding="utf-8")
     assert source.count('env "${worker_env[@]}" setsid nohup') == 3
-    assert 'worker_env=("TH_ROLE=worker" "${image_env[@]}")' in source
-    assert source.count("project_doc_max_bytes=0") == 2
+    assert '"TH_WORKER_ALLOW_PATHS=$worker_allow_paths"' in source
+    assert "TH_CODEX_PROJECT_DOC" in source
+    assert source.count("project_doc_max_bytes=0") == 1
     # Codex and Claude receive a positional prompt. agy uses an unambiguous
     # --print=<value> option, so it has no separate positional prompt token.
     assert source.count('"$@" -- "$prompt"') == 2
@@ -1532,6 +1533,9 @@ def test_quota_error_line_ignores_code_and_diff_lines(test_env: dict):
     (task_dir / "codex.log").write_text(
         log.read_text(encoding="utf-8"), encoding="utf-8"
     )
+    (task_dir / "context_exit_requested.json").write_text(
+        '{"action":"rollover","reason":"context_cap_exceeded"}\n', encoding="utf-8"
+    )
     (test_env["watch_dir"] / "tasks.txt").write_text(f"{task_dir}\n", encoding="utf-8")
     status_res = subprocess.run(
         [str(SCRIPTS_DIR / "th-status.sh"), "-a"],
@@ -1861,6 +1865,9 @@ def test_th_launch_handoff_preserves_job_pid_and_embeds_experiment_and_minimal_w
     (task_dir / "WORKLOG.md").write_text(oversized_wl + "\n", encoding="utf-8")
     (task_dir / "codex.log").write_text(
         "SECRET_PREVIOUS_SESSION_LOG_DO_NOT_INLINE\n", encoding="utf-8"
+    )
+    (task_dir / "context_exit_requested.json").write_text(
+        '{"action":"rollover","reason":"context_cap_exceeded"}\n', encoding="utf-8"
     )
 
     job_proc = subprocess.Popen(["sleep", "30"])

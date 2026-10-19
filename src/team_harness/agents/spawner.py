@@ -16,6 +16,7 @@ from team_harness.agents.template import template_supports_effort
 from team_harness.agents.template import template_uses_generated_uuid
 from team_harness.caller_contract import INHERITED_CALLER_CONTEXT_ENV
 from team_harness.config import Config
+from team_harness.coordinator_zone import WORKER_PROMPT_HEADER
 
 
 @dataclass(frozen=True)
@@ -60,6 +61,8 @@ async def spawn(
     hints, process identity for recovery, and effective model/effort audit data.
     """
 
+    # Keep fixed worker identity before every task-specific protocol prompt.
+    prompt = f"{WORKER_PROMPT_HEADER}\n\n{prompt}"
     template = resolve_template(agent_type=agent_type, config=config)
     if template_uses_generated_uuid(template=template):
         if generated_uuid is None:
@@ -123,6 +126,8 @@ async def spawn(
         # Every subprocess produced by this module is a worker, including
         # Protocol stages. Never let a coordinator's ambient role leak in.
         "TH_ROLE": "worker",
+        "TH_WORKSPACE": str(cwd),
+        "TH_HARNESS_SRC": str(Path(__file__).resolve().parents[2]),
     }
     if extra_env is None or INHERITED_CALLER_CONTEXT_ENV not in extra_env:
         # The environment belongs to the harness coordinator process. A stale

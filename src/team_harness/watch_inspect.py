@@ -19,9 +19,14 @@ from team_harness.agents.process_identity import capture_starttime
 from team_harness.agents.session_capture import _read_prefix_and_tail
 from team_harness.agents.session_capture import extract_session_id
 from team_harness.agents.template import DEFAULT_AGENT_TEMPLATES
+from team_harness.config import load_worker_context_settings
 from team_harness.tracking.persistence import write_json_atomic
+from team_harness.worker_context import ContextRequest
+from team_harness.worker_context import decide
 from team_harness.worker_context import measure_agent_context
+from team_harness.worker_context import measure_codex_rollout
 from team_harness.worker_context import parse_task_front_matter
+from team_harness.worker_context import parse_task_metadata
 from team_harness.worker_context import registry_path_for_workspace
 from team_harness.worker_context import utc_timestamp
 from team_harness.worker_context import WorkerContextError
@@ -150,6 +155,60 @@ def main(task: Path) -> None:
         meta["parked"] = True
         if (task / ".th_context.json").is_file():
             write_json_atomic(path=task / ".th_context.json", payload=meta)
+
+    # The watcher enforces the cap even when a worker never invokes the CLI
+    # itself.  Codex's rollout input_tokens is the current context size; its
+    # separate cumulative "tokens used" figure is deliberately not a limit.
+    if (
+        worker_alive
+        and not (task / "DONE").is_file()
+        and not (task / "FAILED").is_file()
+    ):
+        meta = load_ctx_meta()
+        request_file = task / "context_exit_requested.json"
+        if (
+            meta
+            and str(meta.get("agent_type")) == "codex"
+            and meta.get("session_id")
+            and not request_file.is_file()
+        ):
+            try:
+                metadata = parse_task_metadata(task / "task.md")
+                workspace = Path(str(meta.get("workspace"))).resolve()
+                measurement = measure_codex_rollout(session_id=str(meta["session_id"]))
+                decision = decide(
+                    ContextRequest(
+                        task_key=str(metadata["task_key"]),
+                        agent_type="codex",
+                        follow_up=str(metadata["follow_up"]),
+                        phase="boundary",
+                        context_budget=metadata.get("context_budget"),
+                    ),
+                    {
+                        "input_tokens": measurement.input_tokens,
+                        "measurement_status": measurement.measurement_status,
+                    },
+                    load_worker_context_settings(workspace),
+                )
+                if (
+                    decision.action == "rollover"
+                    and decision.reason == "context_cap_exceeded"
+                ):
+                    write_json_atomic(
+                        path=request_file,
+                        payload={
+                            "action": "rollover",
+                            "reason": decision.reason,
+                            "input_tokens": measurement.input_tokens,
+                            "measurement_status": measurement.measurement_status,
+                            "basis": "current_input_context_not_cumulative_tokens_used",
+                            "requested_at": utc_timestamp(),
+                            "requested_at_epoch": int(time.time()),
+                            "worker_pid": worker_pid,
+                        },
+                    )
+            except (OSError, WorkerContextError, ValueError):
+                pass
 
     if not worker_alive:
         park_worker_if_needed()

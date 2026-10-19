@@ -19,7 +19,10 @@ from team_harness.worker_context import ContextRequest
 from team_harness.worker_context import decide
 from team_harness.worker_context import measure_agent_context
 from team_harness.worker_context import measure_codex_rollout
+from team_harness.worker_context import parse_task_allow_paths
+from team_harness.worker_context import parse_task_metadata
 from team_harness.worker_context import RegistryConflictError
+from team_harness.worker_context import should_prepare_handoff
 from team_harness.worker_context import utc_now
 from team_harness.worker_context import utc_timestamp
 from team_harness.worker_context import WorkerContextRegistry
@@ -112,6 +115,53 @@ def test_unknown_never_causes_token_rollover_or_resume():
     )
     assert boundary.action == "continue"
     assert dispatch.action == "fresh"
+
+
+def test_handoff_requires_rollover_or_unfinished_same_key_not_stale_documents(tmp_path):
+    assert not should_prepare_handoff(
+        task_key="task/current",
+        sessions=[],
+        terminal=False,
+        context_exit_requested=False,
+    )
+    assert not should_prepare_handoff(
+        task_key="task/current",
+        sessions=[
+            {"task_key": "task/current", "state": "parked", "reason": "completed"}
+        ],
+        terminal=False,
+        context_exit_requested=False,
+    )
+    assert not should_prepare_handoff(
+        task_key="task/current",
+        sessions=[{"task_key": "task/old", "state": "parked"}],
+        terminal=False,
+        context_exit_requested=False,
+    )
+    assert should_prepare_handoff(
+        task_key="task/current",
+        sessions=[],
+        terminal=False,
+        context_exit_requested=True,
+    )
+    assert should_prepare_handoff(
+        task_key="task/current",
+        sessions=[
+            {
+                "task_key": "task/current",
+                "state": "parked",
+                "reason": "context_cap_exceeded",
+            }
+        ],
+        terminal=False,
+        context_exit_requested=False,
+    )
+    task = tmp_path / "task.md"
+    task.write_text(
+        "---\ntask_key: task/current\nallow_paths:\n  - ~/.team-harness/worker_suffix.md\n---\n",
+        encoding="utf-8",
+    )
+    assert parse_task_allow_paths(task) == ["~/.team-harness/worker_suffix.md"]
 
 
 def _register_and_park(
@@ -626,7 +676,6 @@ def test_context_budget_boundary_conditions_and_front_matter(tmp_path):
     from team_harness.worker_context import ContextRequest
     from team_harness.worker_context import decide
     from team_harness.worker_context import parse_task_front_matter
-    from team_harness.worker_context import parse_task_metadata
     from team_harness.worker_context import WorkerContextError
     from team_harness.worker_context import WorkerContextSettings
 

@@ -486,6 +486,10 @@ TH-D2/4대로 워커가 경계에서 판정하고 종료하며 하네스는 실�
 상세 정책·상태·실패·구현 분할은 [공식 설계](designs/worker_context_rollover.md)를 따른다.
 
 **결과.** 현재 맥락과 누적 비용을 분리하고 Codex/Claude의 검증 가능한 입력값만 사용한다.
+감시기는 Codex rollout의 `last_token_usage.input_tokens`(현재 입력 맥락)만 상한과 비교해
+`context_exit_requested.json`을 한 번 기록하며, 누적 "tokens used"는 비용 보고로만 남긴다.
+인계는 같은 키의 미완료 parked/active 세션 또는 그 요청에서만 만들고, DONE/FAILED의 남은
+WORKLOG·다른 키 문서는 새 작업에 주입하지 않는다. EXPERIMENT 인계는 80줄로 제한한다.
 Agy는 토큰 정보가 없어 초기 자동 롤오버에서 제외한다. 기존 stage handoffs·비용 집계·
 manifest·정상 반환 의미를 보존하고 별도 context 상태를 추가한다. TH-D16에 따라 base의
 WIP 커밋 없이 인계한다. TH-D28 digest와 ths에 한 줄만 더하며 새 감시 LLM은 만들지 않는다.

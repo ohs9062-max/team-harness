@@ -396,3 +396,26 @@ def test_quota_without_error_prefix(tmp_path: Path, sandbox: tuple[Path, Path, P
     assert shell("th-watchd.sh").returncode == 0
     assert (watch / "quota_lock.agy").is_file()
     assert (task / ".th_digest.quota").is_file()
+
+
+def test_artifacts_resolve_repo_relative_path_and_verify_clears_pythonpath(
+    tmp_path: Path, sandbox: tuple[Path, Path, Path], monkeypatch: pytest.MonkeyPatch
+):
+    workspace, _, _ = sandbox
+    task = make_task(tmp_path, "repo_relative")
+    (task / "task.md").write_text(
+        "# Fixture\n## 기대 산출물\n- `_outputs/repo_relative/RESULTS.md`\n",
+        encoding="utf-8",
+    )
+    output = workspace / "_outputs" / "repo_relative"
+    output.mkdir(parents=True)
+    (output / "RESULTS.md").write_text("ok\n", encoding="utf-8")
+    (task / ".th_worktree").write_text(str(workspace), encoding="utf-8")
+    assert wd.check_artifacts(task)["verdict"] == "PASS"
+
+    verify = task / "verify.sh"
+    verify.write_text(
+        '#!/usr/bin/env bash\ntest -z "${PYTHONPATH-}"\n', encoding="utf-8"
+    )
+    monkeypatch.setenv("PYTHONPATH", "/opt/ros/jazzy")
+    assert wd.check_script(task)["verdict"] == "PASS"

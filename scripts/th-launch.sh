@@ -121,8 +121,11 @@ from team_harness.worker_context import (
     WorkerContextRegistry,
     dispatch,
     measure_agent_context,
+    parse_task_allow_paths,
+    parse_task_metadata,
     parse_task_front_matter,
     registry_path_for_workspace,
+    should_prepare_handoff,
     write_minimal_worklog,
 )
 
@@ -175,9 +178,15 @@ has_front_matter = bool(lines and lines[0].strip() == "---")
 
 task_key = ""
 follow_up = "normal"
+context_budget = None
+allow_paths: list[str] = []
 if has_front_matter:
     try:
-        task_key, follow_up = parse_task_front_matter(task_md)
+        task_meta = parse_task_metadata(task_md)
+        task_key = str(task_meta["task_key"])
+        follow_up = str(task_meta["follow_up"])
+        context_budget = task_meta.get("context_budget")
+        allow_paths = parse_task_allow_paths(task_md)
     except WorkerContextError as exc:
         print(f"worker context error: {exc}", file=sys.stderr)
         sys.exit(1)
@@ -196,16 +205,9 @@ distinct_job_alive = (
     and job_pid != worker_pid_prev
     and pid_alive(job_pid)
 )
-has_handoff_docs = (
-    (task_dir / "WORKLOG.md").is_file()
-    or (task_dir / "WORKLOG.minimal.md").is_file()
-    or (task_dir / "EXPERIMENT.md").is_file()
-)
-
 if not context_active:
     preserve_job = bool(
         distinct_job_alive
-        or (job_pid is not None and job_pid != worker_pid_prev and has_handoff_docs)
     )
     out_file.write_text(
         json.dumps(
@@ -269,7 +271,8 @@ try:
     decision, registry = dispatch(
         workspace=workspace,
         request=ContextRequest(
-            task_key=task_key, agent_type=worker_type, follow_up=effective_follow_up
+            task_key=task_key, agent_type=worker_type, follow_up=effective_follow_up,
+            context_budget=context_budget,
         ),
         settings=settings,
     )
@@ -277,10 +280,12 @@ except WorkerContextError as exc:
     print(f"worker context error: {exc}", file=sys.stderr)
     sys.exit(1)
 
-prior_key_sessions = [
-    item for item in registry.sessions() if item.get("task_key") == task_key
-]
-is_handoff = bool(prior_key_sessions or has_handoff_docs or force_fresh)
+is_handoff = should_prepare_handoff(
+    task_key=task_key,
+    sessions=registry.sessions(),
+    terminal=(task_dir / "DONE").is_file() or (task_dir / "FAILED").is_file(),
+    context_exit_requested=(task_dir / "context_exit_requested.json").is_file() or force_fresh,
+)
 
 worklog_path = str((task_dir / "WORKLOG.md").resolve())
 experiment_path: str | None = None
@@ -351,9 +356,11 @@ if is_handoff:
         handoff_parts.append(f"## Handoff WORKLOG ({worklog_path})\n{wl_text.strip()}")
         if exp_doc is not None:
             try:
-                exp_text = exp_doc.read_text(encoding="utf-8").strip()
-                if exp_text:
-                    handoff_parts.append(f"## Handoff EXPERIMENT ({exp_doc})\n{exp_text}")
+                exp_lines = exp_doc.read_text(encoding="utf-8").splitlines()
+                if exp_lines and len(exp_lines) <= 80:
+                    handoff_parts.append(f"## Handoff EXPERIMENT ({exp_doc})\n" + "\n".join(exp_lines))
+                elif exp_lines:
+                    handoff_parts.append(f"## Handoff EXPERIMENT\nPrior experiment is at {exp_doc}; it exceeds the 80-line handoff limit.")
             except OSError:
                 pass
 else:
@@ -400,6 +407,8 @@ out_file.write_text(
             "workspace": str(workspace),
             "task_key": task_key,
             "follow_up": follow_up,
+            "context_budget": context_budget,
+            "allow_paths": allow_paths,
             "agent_type": worker_type,
             "mode": spawn_mode,
             "session_id": session_id,
@@ -436,6 +445,12 @@ handoff_prompt=$(python3 - "$ctx_prep_file" << 'PYEOF'
 import json, sys
 data = json.loads(open(sys.argv[1], encoding="utf-8").read())
 print(data.get("handoff_text", ""), end="")
+PYEOF
+)
+worker_allow_paths=$(python3 - "$ctx_prep_file" << 'PYEOF'
+import json, sys
+data = json.loads(open(sys.argv[1], encoding="utf-8").read())
+print(json.dumps(data.get("allow_paths", [])))
 PYEOF
 )
 
@@ -479,7 +494,10 @@ if [[ -n $handoff_prompt ]]; then
 $handoff_prompt"
 fi
 
-prompt="$task_body
+worker_header='너는 team-harness 워커다(TH_ROLE=worker). 코디네이터가 아니다. 이 지시서의 작업만 하고 결과는 결과 폴더에만 남긴다.'
+prompt="$worker_header
+
+$task_body
 
 ---
 $(<"$suffix")
@@ -493,13 +511,17 @@ image_env=("TH_ALLOW_IMAGES=0")
 if [[ ${TH_ALLOW_IMAGES:-0} == 1 ]]; then
   image_env=("TH_ALLOW_IMAGES=1")
 fi
-worker_env=("TH_ROLE=worker" "${image_env[@]}")
+worker_env=("TH_ROLE=worker" "TH_WORKSPACE=$journal_workspace" "TH_WORKER_OUTPUT_DIR=$task_dir" "TH_WORKER_ALLOW_PATHS=$worker_allow_paths" "TH_HARNESS_SRC=$py_src" "${image_env[@]}")
 
 if [[ "$worker_type" == "codex" ]]; then
+  project_doc_args=("-c" "project_doc_max_bytes=0")
+  if [[ ${TH_CODEX_PROJECT_DOC:-0} == 1 ]]; then
+    project_doc_args=()
+  fi
   if [[ "$spawn_mode" == "resume" && -n "$resume_session_id" ]]; then
-    worker_cmd=(codex exec resume -m "$model" -c "model_reasoning_effort=$effort" -c "mcp_servers={}" -c "project_doc_max_bytes=0" --dangerously-bypass-approvals-and-sandbox -C "$worktree" "$resume_session_id")
+    worker_cmd=(codex exec resume -m "$model" -c "model_reasoning_effort=$effort" -c "mcp_servers={}" "${project_doc_args[@]}" --dangerously-bypass-approvals-and-sandbox -C "$worktree" "$resume_session_id")
   else
-    worker_cmd=(codex exec -m "$model" -c "model_reasoning_effort=$effort" -c "mcp_servers={}" -c "project_doc_max_bytes=0" --dangerously-bypass-approvals-and-sandbox -C "$worktree")
+    worker_cmd=(codex exec -m "$model" -c "model_reasoning_effort=$effort" -c "mcp_servers={}" "${project_doc_args[@]}" --dangerously-bypass-approvals-and-sandbox -C "$worktree")
   fi
   env "${worker_env[@]}" setsid nohup "${worker_cmd[@]}" "$@" -- "$prompt" < /dev/null > codex.log 2>&1 &
   printf '%s\n' "$!" > "$task_dir/worker.pid"

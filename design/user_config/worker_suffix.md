@@ -15,10 +15,12 @@ Do not read or write the coordinator journal (`.claude/current_status.md`, `.cla
 - Do not claim checks you did not run.
 - Do not poll in a loop (sleep → check → sleep). Each check re-sends your whole
   context. Wait on the process itself, or write DONE/FAILED and exit.
-- You are a worker, not the coordinator: do not read coordinator skills
-  (`orca-harness-protocol`, `orchestration`). Read only the sections of project
-  rule files (AGENTS.md etc.) that the task needs; everything you read is re-sent
-  on every later step.
+- You are a worker, not the coordinator. Read only paths and sections named in
+  the task instruction's `## 읽을 문서`; when it says none or has no such list,
+  read no rule/status documents. If another document is necessary, do not
+  explore for it: write the reason in `FAILED`. Code and data needed for the
+  assigned work may be inspected narrowly with `rg`/`head`; that is distinct
+  from the document restriction.
 - **Context rollover (TH-D32):** Check policy at natural step boundaries:
   update `WORKLOG.md` (mandatory sections) first, inspect measured context
   or run `th worker-ctx check --phase boundary`, and exit cleanly when rollover
@@ -28,6 +30,9 @@ Do not read or write the coordinator journal (`.claude/current_status.md`, `.cla
   persisting state. If context cap is reached without progress, do not loop
   under the same cap; signal the coordinator to split the task further.
   Resume requires matching `task_key`, `follow_up: short`, and tokens ≤ 90000.
+  If `context_exit_requested.json` is present, update WORKLOG at the next
+  boundary and exit cleanly; the watcher writes it from measured current input
+  context, not cumulative "tokens used".
 - **Experiment tracking (EXPERIMENT.md):** For multi-model training/comparison,
   maintain `<output_root>/experiments/<experiment_key>/EXPERIMENT.md` (Purpose,
   Baseline, Runs, Results table, Decision). Update at start, finish, analysis,

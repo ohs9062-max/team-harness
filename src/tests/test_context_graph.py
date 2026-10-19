@@ -21,6 +21,7 @@ from team_harness.config import AgentTemplate
 from team_harness.config import Config
 from team_harness.config import load_config
 from team_harness.config import load_context_graph_settings
+from team_harness.coordinator_zone import WORKER_PROMPT_HEADER
 from team_harness.protocol.mode_c import TeamHarnessAgentRunner
 
 FAKE_GRAFT = """
@@ -295,6 +296,7 @@ async def test_protocol_runner_sends_hint_and_env_to_worker(
 
     assert result.success is True
     seen = json.loads(record.read_text(encoding="utf-8"))
-    assert seen["prompt"].startswith("[Code graph]")
+    assert seen["prompt"].startswith(WORKER_PROMPT_HEADER)
+    assert "[Code graph]" in seen["prompt"]
     assert seen["prompt"].endswith("the task")
     assert seen["dnt"] == "1"
