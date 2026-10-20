@@ -159,7 +159,7 @@ def parse_task_metadata(path: str | Path) -> dict[str, Any]:
         if line.strip() == "---":
             break
         key, sep, value = line.partition(":")
-        if sep and key.strip() in {"task_key", "follow_up", "context_budget"}:
+        if sep and key.strip() in {"task_key", "follow_up", "context_budget", "kind"}:
             values[key.strip()] = value.strip().strip("\"'")
     else:
         raise WorkerContextError("task file YAML front matter is not closed")
@@ -180,11 +180,14 @@ def parse_task_metadata(path: str | Path) -> dict[str, Any]:
         follow_up=follow_up,
         context_budget=context_budget,
     )
-    return {
+    metadata: dict[str, Any] = {
         "task_key": task_key,
         "follow_up": follow_up,
         "context_budget": context_budget,
     }
+    if "kind" in values:
+        metadata["kind"] = values["kind"]
+    return metadata
 
 
 def parse_task_allow_paths(path: str | Path) -> list[str]:

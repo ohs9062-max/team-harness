@@ -93,6 +93,7 @@ team-harness 코디네이터 모드가 준비됐습니다.
 - Claude는 기본 코디네이터 전용이며 자동 기본값·fallback·조사 참가자로 고르지 않는다. 사용자가 Claude 워커를 명시했을 때만 `claude-sonnet-5`(다른 모델 지정 시 그대로)를 쓴다: `TH_USER_REQUESTED_CLAUDE=1 th-launch.sh <폴더> claude claude-sonnet-5 none <작업트리>`.
 - 실행 중 모델 변경은 불가하고 새 워커는 맥락을 다시 읽으므로 단계별 모델 지정은 하지 않는다. 앞단이 큰 경우(환경 준비 등 대략 5만 토큰 이상 예상)에만 "싼 워커로 준비 → WORKLOG.md 인계 → 알맞은 모델로 본 작업"으로 나눈다. 모델은 지시서 문장이 아닌 th-launch 실행 인자로 고르며 검증은 가능한 한 스크립트(LLM 없이)로 한다.
 - `agy`는 지름길·거짓 완료가 잦으므로 단순·대량·비코드 작업(조사, 문서, 데이터 처리)에만 쓴다(effort 인자 없음). 로직 구현·코드 변경은 작더라도 codex(기본 Terra medium)다. agy가 코드를 맡는 것은 codex 쿼터 잠금(`~/.team-harness/watch/quota_lock.codex`)일 때 대체뿐이며, 그때는 결과를 반드시 검증한다.
+- th-launch가 강제한다: codex 동시 2개, high/sol은 `TH_HIGH_REASON`, codex는 front matter `kind: code`만(아니면 `TH_CODEX_REASON`), 최근 5시간 codex 사용 90% 이상이면 거부. 우회 사유는 work_log에 남는다.
 
 ## 작업 크기에 맞는 실행 방식
 

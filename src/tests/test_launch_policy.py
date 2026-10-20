@@ -1,0 +1,312 @@
+"""Unit and CLI tests for team_harness.launch_policy."""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+import time
+
+import pytest
+
+from team_harness.launch_policy import check
+from team_harness.launch_policy import check_warnings
+from team_harness.launch_policy import main
+from team_harness.launch_policy import Violation
+
+
+def _make_task(
+    root: Path,
+    name: str = "task_a",
+    *,
+    kind: str | None = "code",
+    front_matter: bool = True,
+) -> Path:
+    task_dir = root / name
+    task_dir.mkdir(parents=True, exist_ok=True)
+    if front_matter:
+        lines = ["---", f"task_key: {name}", "follow_up: normal"]
+        if kind is not None:
+            lines.append(f"kind: {kind}")
+        lines.extend(["---", f"# {name}", "Task body."])
+        content = "\n".join(lines) + "\n"
+    else:
+        content = f"# {name}\nTask body without front matter.\n"
+    (task_dir / "task.md").write_text(content, encoding="utf-8")
+    return task_dir
+
+
+def _write_rollout(
+    sessions_dir: Path, name: str, total_tokens: int, *, mtime: float | None = None
+) -> Path:
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    path = sessions_dir / name
+    lines = [
+        json.dumps({"type": "session_meta", "payload": {"id": name}}),
+        json.dumps(
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "total_token_usage": {
+                            "input_tokens": total_tokens - 100,
+                            "output_tokens": 100,
+                            "total_tokens": total_tokens,
+                        }
+                    },
+                },
+            }
+        ),
+    ]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    if mtime is not None:
+        os.utime(path, (mtime, mtime))
+    return path
+
+
+def _base_env(tmp_path: Path, **extra: str) -> dict[str, str]:
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    return {"TH_CODEX_SESSIONS_DIR": str(sessions_dir), **extra}
+
+
+def test_parallel_pass_when_below_limit_and_dead_pids_ignored(tmp_path: Path) -> None:
+    watch_dir = tmp_path / "watch"
+    watch_dir.mkdir()
+    alive_task = _make_task(tmp_path, "alive_1")
+    (alive_task / "worker.pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
+    (alive_task / "codex.log").write_text("running\n", encoding="utf-8")
+
+    dead_task = _make_task(tmp_path, "dead_1")
+    (dead_task / "worker.pid").write_text("99999999\n", encoding="utf-8")
+    (dead_task / "codex.log").write_text("finished\n", encoding="utf-8")
+
+    other_worker = _make_task(tmp_path, "agy_1")
+    (other_worker / "worker.pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
+    (other_worker / "agy.log").write_text("running agy\n", encoding="utf-8")
+
+    target_task = _make_task(tmp_path, "target")
+    (watch_dir / "tasks.txt").write_text(
+        f"{alive_task}\n{dead_task}\n{other_worker}\n{target_task}\n", encoding="utf-8"
+    )
+
+    violations = check(
+        target_task, "codex", "gpt-5.6-terra", "medium", watch_dir, _base_env(tmp_path)
+    )
+    assert violations == []
+
+
+def test_parallel_reject_when_at_or_above_limit(tmp_path: Path) -> None:
+    watch_dir = tmp_path / "watch"
+    watch_dir.mkdir()
+    task_a = _make_task(tmp_path, "task_a")
+    task_b = _make_task(tmp_path, "task_b")
+    for item in (task_a, task_b):
+        (item / "worker.pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
+        (item / "codex.log").write_text("running\n", encoding="utf-8")
+
+    target = _make_task(tmp_path, "task_c")
+    (watch_dir / "tasks.txt").write_text(f"{task_a}\n{task_b}\n", encoding="utf-8")
+
+    violations = check(
+        target, "codex", "gpt-5.6-terra", "medium", watch_dir, _base_env(tmp_path)
+    )
+    assert len(violations) == 1
+    assert violations[0] == Violation(
+        "parallel",
+        "codex 동시 실행 2개 상한: 이미 2개 실행 중(task_a, task_b). 끝난 뒤 띄우거나 TH_MAX_PARALLEL=3",
+    )
+
+
+def test_parallel_override_with_th_max_parallel(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    watch_dir = tmp_path / "watch"
+    watch_dir.mkdir()
+    for name in ("task_a", "task_b"):
+        item = _make_task(tmp_path, name)
+        (item / "worker.pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
+        (item / "codex.log").write_text("running\n", encoding="utf-8")
+        with (watch_dir / "tasks.txt").open("a", encoding="utf-8") as stream:
+            stream.write(f"{item}\n")
+
+    target = _make_task(tmp_path, "task_c")
+    env = _base_env(tmp_path, TH_MAX_PARALLEL="3")
+    violations = check(target, "codex", "gpt-5.6-terra", "medium", watch_dir, env)
+    assert violations == []
+
+    rc = main(
+        ["check", str(target), "codex", "gpt-5.6-terra", "medium", str(watch_dir)],
+        env=env,
+    )
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "override: TH_MAX_PARALLEL=3" in captured.out
+
+
+def test_high_pass_with_terra_medium(tmp_path: Path) -> None:
+    watch_dir = tmp_path / "watch"
+    watch_dir.mkdir()
+    target = _make_task(tmp_path, "task_normal")
+    violations = check(
+        target, "codex", "gpt-5.6-terra", "medium", watch_dir, _base_env(tmp_path)
+    )
+    assert violations == []
+
+
+@pytest.mark.parametrize(
+    ("model", "effort"),
+    [("gpt-5.6-terra", "high"), ("gpt-5.6-terra", "xhigh"), ("gpt-6.1-sol", "medium")],
+)
+def test_high_reject_without_reason(tmp_path: Path, model: str, effort: str) -> None:
+    watch_dir = tmp_path / "watch"
+    watch_dir.mkdir()
+    target = _make_task(tmp_path, "task_high")
+    violations = check(
+        target,
+        "codex",
+        model,
+        effort,
+        watch_dir,
+        _base_env(tmp_path, TH_HIGH_REASON="   "),
+    )
+    assert [v.code for v in violations] == ["high"]
+    assert "TH_HIGH_REASON" in violations[0].message
+
+
+def test_high_override_with_th_high_reason(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    watch_dir = tmp_path / "watch"
+    watch_dir.mkdir()
+    target = _make_task(tmp_path, "task_high_ok")
+    env = _base_env(tmp_path, TH_HIGH_REASON="복잡한 동시성 버그 디버깅")
+    violations = check(target, "codex", "gpt-6.1-sol", "high", watch_dir, env)
+    assert violations == []
+
+    rc = main(
+        ["check", str(target), "codex", "gpt-6.1-sol", "high", str(watch_dir)], env=env
+    )
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "override: TH_HIGH_REASON=복잡한 동시성 버그 디버깅" in captured.out
+
+
+def test_kind_pass_when_kind_is_code_or_non_codex_worker(tmp_path: Path) -> None:
+    watch_dir = tmp_path / "watch"
+    watch_dir.mkdir()
+    code_task = _make_task(tmp_path, "task_code", kind="code")
+    docs_task = _make_task(tmp_path, "task_docs", kind="docs")
+    env = _base_env(tmp_path)
+
+    assert check(code_task, "codex", "gpt-5.6-terra", "medium", watch_dir, env) == []
+    assert (
+        check(docs_task, "agy", "Gemini 3.8 Flash (High)", "none", watch_dir, env) == []
+    )
+
+
+@pytest.mark.parametrize("kind", [None, "research", "data", "docs", "invalid"])
+def test_kind_reject_when_missing_or_not_code(tmp_path: Path, kind: str | None) -> None:
+    watch_dir = tmp_path / "watch"
+    watch_dir.mkdir()
+    target = _make_task(tmp_path, f"task_{kind}", kind=kind)
+    violations = check(
+        target, "codex", "gpt-5.6-terra", "medium", watch_dir, _base_env(tmp_path)
+    )
+    assert [v.code for v in violations] == ["kind"]
+    assert "TH_CODEX_REASON" in violations[0].message
+
+
+def test_kind_override_with_th_codex_reason(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    watch_dir = tmp_path / "watch"
+    watch_dir.mkdir()
+    target = _make_task(tmp_path, "task_docs_codex", kind="docs")
+    env = _base_env(tmp_path, TH_CODEX_REASON="코드와 문서 동시 검증")
+    violations = check(target, "codex", "gpt-5.6-terra", "medium", watch_dir, env)
+    assert violations == []
+
+    rc = main(
+        ["check", str(target), "codex", "gpt-5.6-terra", "medium", str(watch_dir)],
+        env=env,
+    )
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "override: TH_CODEX_REASON=코드와 문서 동시 검증" in captured.out
+
+
+def test_budget_pass_and_warning_and_old_rollout_ignored(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    watch_dir = tmp_path / "watch"
+    watch_dir.mkdir()
+    target = _make_task(tmp_path, "task_budget_ok")
+    sessions_dir = tmp_path / "sessions"
+    now = time.time()
+
+    _write_rollout(sessions_dir, "rollout-old.jsonl", 950_000, mtime=now - 6 * 3600)
+    _write_rollout(sessions_dir, "rollout-recent-1.jsonl", 400_000, mtime=now - 600)
+    _write_rollout(sessions_dir, "rollout-recent-2.jsonl", 350_000, mtime=now - 300)
+
+    env = _base_env(tmp_path, TH_CODEX_5H_BUDGET="1000000")
+    violations = check(target, "codex", "gpt-5.6-terra", "medium", watch_dir, env)
+    assert violations == []
+    warnings = check_warnings("codex", env)
+    assert len(warnings) == 1
+    assert "70% 이상" in warnings[0]
+
+    rc = main(
+        ["check", str(target), "codex", "gpt-5.6-terra", "medium", str(watch_dir)],
+        env=env,
+    )
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "70% 이상" in captured.err
+
+
+def test_budget_reject_when_at_or_above_90_percent(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    watch_dir = tmp_path / "watch"
+    watch_dir.mkdir()
+    target = _make_task(tmp_path, "task_budget_reject")
+    sessions_dir = tmp_path / "sessions"
+    _write_rollout(sessions_dir, "rollout-1.jsonl", 500_000)
+    _write_rollout(sessions_dir, "rollout-2.jsonl", 400_000)
+
+    env = _base_env(tmp_path, TH_CODEX_5H_BUDGET="1000000")
+    violations = check(target, "codex", "gpt-5.6-terra", "medium", watch_dir, env)
+    assert [v.code for v in violations] == ["budget"]
+    assert "TH_IGNORE_BUDGET=1" in violations[0].message
+
+    rc = main(
+        ["check", str(target), "codex", "gpt-5.6-terra", "medium", str(watch_dir)],
+        env=env,
+    )
+    captured = capsys.readouterr()
+    assert rc == 4
+    assert "TH_IGNORE_BUDGET=1" in captured.err
+
+
+def test_budget_override_with_th_ignore_budget(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    watch_dir = tmp_path / "watch"
+    watch_dir.mkdir()
+    target = _make_task(tmp_path, "task_budget_override")
+    sessions_dir = tmp_path / "sessions"
+    _write_rollout(sessions_dir, "rollout-1.jsonl", 950_000)
+
+    env = _base_env(tmp_path, TH_CODEX_5H_BUDGET="1000000", TH_IGNORE_BUDGET="1")
+    violations = check(target, "codex", "gpt-5.6-terra", "medium", watch_dir, env)
+    assert violations == []
+
+    rc = main(
+        ["check", str(target), "codex", "gpt-5.6-terra", "medium", str(watch_dir)],
+        env=env,
+    )
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "override: TH_IGNORE_BUDGET=1" in captured.out

@@ -76,6 +76,16 @@ sleep 15 &
     env["TH_WATCH_DIR"] = str(watch_dir)
     env["TH_WORKSPACE"] = str(workspace)
     env["TH_WORKER_SUFFIX"] = str(suffix_file)
+    sessions_dir = tmp_path / "codex_sessions"
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    env["TH_CODEX_SESSIONS_DIR"] = str(sessions_dir)
+    for override_key in (
+        "TH_MAX_PARALLEL",
+        "TH_HIGH_REASON",
+        "TH_CODEX_REASON",
+        "TH_IGNORE_BUDGET",
+    ):
+        env.pop(override_key, None)
     # Individual daemon-start tests opt in; ordinary th-launch tests must not leak one.
     env["TH_NO_DAEMON"] = "1"
     env["TH_DIGEST_COMMAND"] = "/bin/true"
@@ -99,7 +109,10 @@ def _create_task_dir(
     task_dir = parent / name
     task_dir.mkdir(parents=True, exist_ok=True)
     task_md = task_dir / "task.md"
-    task_md.write_text(f"# {title}\nTask description.\n", encoding="utf-8")
+    task_md.write_text(
+        f"---\ntask_key: {name}\nfollow_up: normal\nkind: code\n---\n# {title}\nTask description.\n",
+        encoding="utf-8",
+    )
     return task_dir
 
 
@@ -120,7 +133,7 @@ def test_th_launch_retains_th_owner(test_env: dict):
         str(launch_script),
         str(task_dir),
         "codex",
-        "gpt-6.1-sol",
+        "gpt-5.6-terra",
         "medium",
         str(task_dir),
     ]
@@ -320,7 +333,7 @@ def test_th_launch_uses_one_image_envelope_and_project_python_for_each_worker_ty
         source.count(
             'PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" "${context_python[@]}"'
         )
-        == 2
+        == 3
     )
 
 
@@ -537,8 +550,13 @@ def test_th_launch_concurrent_registry_integrity(test_env: dict):
     import concurrent.futures
 
     def launch_one(t: Path):
-        cmd = [str(launch_script), str(t), "codex", "gpt-6.1-sol", "medium", str(t)]
-        res = subprocess.run(cmd, env=test_env["env"], capture_output=True, text=True)
+        cmd = [str(launch_script), str(t), "codex", "gpt-5.6-terra", "medium", str(t)]
+        res = subprocess.run(
+            cmd,
+            env={**test_env["env"], "TH_MAX_PARALLEL": "20"},
+            capture_output=True,
+            text=True,
+        )
         assert res.returncode == 0, f"launch failed: {res.stderr}"
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
@@ -987,7 +1005,7 @@ def test_th_launch_extracts_verify_sh(test_env: dict):
     task_dir = _create_task_dir(test_env["tmp_path"], "task_verify_extract")
     task_md = task_dir / "task.md"
     task_md.write_text(
-        "# Test Task\nSome description.\n\n## 검수\n```bash\npytest -q\n```\n",
+        "---\ntask_key: task_verify_extract\nfollow_up: normal\nkind: code\n---\n# Test Task\nSome description.\n\n## 검수\n```bash\npytest -q\n```\n",
         encoding="utf-8",
     )
     worktree_dir = test_env["tmp_path"] / "fake_worktree"
@@ -998,7 +1016,7 @@ def test_th_launch_extracts_verify_sh(test_env: dict):
         str(launch_script),
         str(task_dir),
         "codex",
-        "gpt-6.1-sol",
+        "gpt-5.6-terra",
         "medium",
         str(worktree_dir),
     ]
@@ -1023,7 +1041,7 @@ def test_th_launch_warns_when_no_verify_block(test_env: dict):
         str(launch_script),
         str(task_dir),
         "codex",
-        "gpt-6.1-sol",
+        "gpt-5.6-terra",
         "medium",
         str(task_dir),
     ]
@@ -1339,7 +1357,7 @@ def test_th_launch_starts_daemon_if_not_running(test_env: dict):
         "scripts/th-launch.sh",
         str(task_dir),
         "codex",
-        "gpt-6.1-sol",
+        "gpt-5.6-terra",
         "medium",
         str(task_dir),
     ]
@@ -1617,7 +1635,7 @@ def test_th_launch_and_watch_context_rollover_resume_and_status(test_env: dict):
 
     task_dir = _create_task_dir(test_env["tmp_path"], "task_ctx_3a")
     (task_dir / "task.md").write_text(
-        "---\ntask_key: exp/stage3a\nfollow_up: normal\n---\n# Stage 3a Task\nRun step 1.\n",
+        "---\ntask_key: exp/stage3a\nfollow_up: normal\nkind: code\n---\n# Stage 3a Task\nRun step 1.\n",
         encoding="utf-8",
     )
     (task_dir / "STATUS").write_text("2026-10-16T10:00:00Z STEP1\n", encoding="utf-8")
@@ -1693,7 +1711,7 @@ def test_th_launch_and_watch_context_rollover_resume_and_status(test_env: dict):
     # Re-add task to tasks.txt and check th-status renders 58k(measured) | parked | resume
     (test_env["watch_dir"] / "tasks.txt").write_text(f"{task_dir}\n", encoding="utf-8")
     (task_dir / "task.md").write_text(
-        "---\ntask_key: exp/stage3a\nfollow_up: short\n---\n# Stage 3a Task\nQuick fix.\n",
+        "---\ntask_key: exp/stage3a\nfollow_up: short\nkind: code\n---\n# Stage 3a Task\nQuick fix.\n",
         encoding="utf-8",
     )
     status_parked = subprocess.run(
@@ -1729,7 +1747,7 @@ def test_th_watch_long_running_wait_detection_and_job_preservation(test_env: dic
     task_dir = _create_task_dir(test_env["tmp_path"], "task_long_job")
     (task_dir / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
     (task_dir / "task.md").write_text(
-        "---\ntask_key: exp/long-job\nfollow_up: normal\n---\n# Long Job\nDo not sleep in a loop.\n",
+        "---\ntask_key: exp/long-job\nfollow_up: normal\nkind: code\n---\n# Long Job\nDo not sleep in a loop.\n",
         encoding="utf-8",
     )
     (task_dir / "STATUS").write_text(
@@ -1826,7 +1844,7 @@ def test_th_watch_long_running_wait_detection_and_job_preservation(test_env: dic
         )
         codex_stub.chmod(0o755)
         (task_dir / "task.md").write_text(
-            "---\ntask_key: exp/long-job\nfollow_up: short\n---\n# Analyze Long Job\n",
+            "---\ntask_key: exp/long-job\nfollow_up: short\nkind: code\n---\n# Analyze Long Job\n",
             encoding="utf-8",
         )
         res_post = subprocess.run(
@@ -1876,7 +1894,7 @@ def test_th_launch_handoff_preserves_job_pid_and_embeds_experiment_and_minimal_w
     )
 
     (task_dir / "task.md").write_text(
-        "---\ntask_key: experiment/resnet-baseline\nfollow_up: normal\n---\n# ResNet Handoff\nContinue work.\n",
+        "---\ntask_key: experiment/resnet-baseline\nfollow_up: normal\nkind: code\n---\n# ResNet Handoff\nContinue work.\n",
         encoding="utf-8",
     )
     # Write oversized (>60 lines) WORKLOG.md to trigger minimal worklog snapshot while preserving original
@@ -2109,3 +2127,45 @@ def test_th_status_sectioned_table_and_formatting(test_env: dict):
     finally:
         proc.terminate()
         proc.wait()
+
+
+def test_th_launch_rejects_codex_without_kind_and_does_not_invoke_cli(
+    test_env: dict,
+) -> None:
+    """th-launch exits 4 and never runs fake codex when task.md has no kind: code."""
+    task_dir = test_env["tmp_path"] / "task_missing_kind"
+    task_dir.mkdir(parents=True, exist_ok=True)
+    (task_dir / "task.md").write_text(
+        "---\ntask_key: task_missing_kind\nfollow_up: normal\n---\n# Missing kind\nBody.\n",
+        encoding="utf-8",
+    )
+
+    marker = test_env["tmp_path"] / "codex_ran.txt"
+    codex_stub = test_env["bin_dir"] / "codex"
+    codex_stub.write_text(
+        f'#!/usr/bin/env bash\necho "ran" > "{marker}"\nsleep 1\n', encoding="utf-8"
+    )
+    codex_stub.chmod(codex_stub.stat().st_mode | stat.S_IEXEC)
+
+    res = subprocess.run(
+        [str(SCRIPTS_DIR / "th-launch.sh"), str(task_dir), "codex", str(task_dir)],
+        env=test_env["env"],
+        capture_output=True,
+        text=True,
+    )
+    assert res.returncode == 4
+    assert "kind: code" in res.stderr
+    assert not marker.exists()
+    assert not (task_dir / "worker.pid").exists()
+
+    res_override = subprocess.run(
+        [str(SCRIPTS_DIR / "th-launch.sh"), str(task_dir), "codex", str(task_dir)],
+        env={**test_env["env"], "TH_CODEX_REASON": "긴급 비코드 테스트"},
+        capture_output=True,
+        text=True,
+    )
+    assert res_override.returncode == 0, res_override.stderr
+    work_log = (test_env["workspace"] / ".claude" / "work_log.md").read_text(
+        encoding="utf-8"
+    )
+    assert " | override: TH_CODEX_REASON=긴급 비코드 테스트" in work_log

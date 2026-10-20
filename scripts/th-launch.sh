@@ -5,6 +5,8 @@
 #       TH_USER_REQUESTED_CLAUDE=1 th-launch.sh <작업폴더> claude claude-sonnet-5 <effort> <작업트리>
 #       (워커 생략 시 기본값: codex)
 #       Codex 모델 생략: <작업폴더> [codex] [작업트리] [추가 인자] → gpt-5.6-terra medium
+#       강제: codex 동시 2개, high/sol은 TH_HIGH_REASON, codex는 front matter kind: code만(아니면 TH_CODEX_REASON),
+#       최근 5시간 codex 사용 90% 이상이면 거부. 우회 사유는 work_log에 남는다.
 # 정책 변경은 다음 launch부터 적용하며 실행 중 워커는 교체하지 않는다.
 set -euo pipefail
 
@@ -30,8 +32,12 @@ journal_append() {
   mkdir -p "$(dirname "$journal_log")"
   rotate_journal_if_needed
   touch "$journal_log"
-  printf '%s | 지시 | %s | worker=%s model=%s task.md=%s | %s\n' \
-    "$(date '+%F %R')" "$task_dir" "$worker_type" "$model" "$task_dir/task.md" "$journal_workspace" >> "$journal_log"
+  local override_suffix=""
+  if [[ -n ${policy_override:-} ]]; then
+    override_suffix=" | $policy_override"
+  fi
+  printf '%s | 지시 | %s | worker=%s model=%s task.md=%s | %s%s\n' \
+    "$(date '+%F %R')" "$task_dir" "$worker_type" "$model" "$task_dir/task.md" "$journal_workspace" "$override_suffix" >> "$journal_log"
 }
 
 (( $# >= 1 )) || { echo '사용: th-launch.sh <작업폴더> [codex|agy|claude] <모델> <effort> <작업트리> [추가 인자]'; exit 2; }
@@ -96,13 +102,28 @@ if [[ -f $quota_lock && ${TH_IGNORE_QUOTA_LOCK:-0} != 1 ]]; then
   exit 3
 fi
 [[ -f $task_dir/task.md ]] || { echo "task.md 없음: $task_dir"; exit 1; }
-[[ -f $suffix ]] || { echo "worker_suffix.md 없음(최신 정책을 붙일 수 없음): $suffix"; exit 1; }
-
 py_src=$(cd "$script_dir/../src" && pwd)
 # worker_context imports the project dependency graph (including httpx).  Do
 # not use the system interpreter here: th-launch may be started outside an
 # activated development shell.
 context_python=(uv run --directory "$script_dir/.." python)
+policy_rc=0
+policy_out=$(PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" "${context_python[@]}" -m team_harness.launch_policy check "$task_dir" "$worker_type" "$model" "$effort" "$watch_dir") || policy_rc=$?
+if (( policy_rc != 0 )); then
+  exit "$policy_rc"
+fi
+policy_override=""
+while IFS= read -r line; do
+  if [[ $line == override:* ]]; then
+    if [[ -n $policy_override ]]; then
+      policy_override="$policy_override | $line"
+    else
+      policy_override="$line"
+    fi
+  fi
+done <<< "$policy_out"
+[[ -f $suffix ]] || { echo "worker_suffix.md 없음(최신 정책을 붙일 수 없음): $suffix"; exit 1; }
+
 ctx_prep_file=$(mktemp "${TMPDIR:-/tmp}/th-launch-ctx.XXXXXX")
 cleanup_ctx_prep() { rm -f "$ctx_prep_file"; }
 trap cleanup_ctx_prep EXIT
