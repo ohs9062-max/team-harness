@@ -7,6 +7,8 @@ description: (코디네이터 전용 — 워커로 실행 중이면 이 스킬�
 
 ## 작업일지 및 inbox (모든 코디네이터에 자동 적용)
 
+inbox는 프로젝트 메인 체크아웃(`git --git-common-dir`의 부모)의 `.claude/inbox.md` 하나다. 작업 트리 세션도 그 파일을 본다.
+
 모드·스킬 사용 여부와 무관하게 전역 에이전트 지시가 이 규칙을 강제한다. 코디네이터는
 작업 공간의 `.claude/current_status.md`를 40줄 이내로 유지하고, 지시·시작·완료·실패·결정·실수마다
 `.claude/work_log.md`에 한 줄을 추가한다. 시작·대화 요약 직후·긴 작업 전에는 current_status를

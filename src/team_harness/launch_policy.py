@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from collections.abc import Sequence
+from datetime import datetime
 import json
 import os
 from pathlib import Path
@@ -15,7 +16,7 @@ from team_harness.worker_context import parse_task_metadata
 from team_harness.worker_context import WorkerContextError
 
 ALLOWED_KINDS = frozenset({"code", "research", "data", "docs"})
-DEFAULT_CODEX_5H_BUDGET = 1_000_000
+DEFAULT_CODEX_5H_BUDGET = 2_000_000
 RECENT_WINDOW_SECONDS = 5 * 3600
 _REVERSE_CHUNK_BYTES = 65536
 
@@ -178,7 +179,10 @@ def _extract_billable_tokens(event: dict[str, object]) -> int | None:
     return max(0, billable)
 
 
-def _read_last_rollout_total_tokens(path: Path) -> int:
+def _read_rollout_window_tokens(path: Path, cutoff: float) -> int:
+    """Return token-counter growth within the rolling time window."""
+    latest: int | None = None
+    before_window: int | None = None
     try:
         with path.open("rb") as stream:
             stream.seek(0, os.SEEK_END)
@@ -207,11 +211,26 @@ def _read_last_rollout_total_tokens(path: Path) -> int:
                     if not isinstance(event, dict):
                         continue
                     tokens = _extract_billable_tokens(event)
-                    if tokens is not None:
-                        return tokens
+                    timestamp = event.get("timestamp")
+                    if tokens is None or not isinstance(timestamp, str):
+                        continue
+                    try:
+                        event_time = datetime.fromisoformat(
+                            timestamp.replace("Z", "+00:00")
+                        ).timestamp()
+                    except ValueError:
+                        continue
+                    if event_time >= cutoff:
+                        if latest is None:
+                            latest = tokens
+                    else:
+                        before_window = tokens
+                        break
     except OSError:
         return 0
-    return 0
+    if latest is None:
+        return 0
+    return max(0, latest - (before_window or 0))
 
 
 def _sessions_dir_from_env(env: Mapping[str, str]) -> Path:
@@ -242,7 +261,7 @@ def sum_recent_codex_tokens(
                     continue
             except OSError:
                 continue
-            total += _read_last_rollout_total_tokens(path)
+            total += _read_rollout_window_tokens(path, cutoff)
     return total
 
 

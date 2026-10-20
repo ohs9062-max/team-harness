@@ -11,6 +11,8 @@
 set -euo pipefail
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=scripts/th-watch-lib.sh
+source "$script_dir/th-watch-lib.sh"
 
 journal_workspace=${TH_WORKSPACE:-}
 if [[ -z $journal_workspace ]]; then
@@ -97,9 +99,14 @@ suffix=${TH_WORKER_SUFFIX:-"$HOME/.team-harness/worker_suffix.md"}
 # 쿼터·용량 오류 뒤에는 같은 종류 워커를 새로 띄우지 않는다(th-watch가 잠금 생성).
 quota_lock="$watch_dir/quota_lock.$worker_type"
 if [[ -f $quota_lock && ${TH_IGNORE_QUOTA_LOCK:-0} != 1 ]]; then
-  echo "쿼터 잠금으로 $worker_type 실행 거부: $(cat "$quota_lock")"
-  echo "쿼터가 풀렸으면 rm '$quota_lock' 후 다시 실행"
-  exit 3
+  lock_text=$(<"$quota_lock")
+  lock_expiry=""
+  [[ $lock_text =~ (^|[[:space:]])expires=([0-9]+) ]] && lock_expiry=${BASH_REMATCH[2]}
+  if [[ -z $lock_expiry || $lock_expiry -gt $(date +%s) ]]; then
+    echo "쿼터 잠금으로 $worker_type 실행 거부: $lock_text"
+    echo "쿼터가 풀렸으면 rm '$quota_lock' 후 다시 실행"
+    exit 3
+  fi
 fi
 [[ -f $task_dir/task.md ]] || { echo "task.md 없음: $task_dir"; exit 1; }
 py_src=$(cd "$script_dir/../src" && pwd)
@@ -484,7 +491,7 @@ if [[ $preserve_job_pid != 1 ]]; then
   rm -f "$task_dir/job.pid"
 fi
 # 이 작업을 띄운 작업 공간. th-watch는 소유자 작업만 알린다(다른 코디네이터 사건을 가로채지 않게).
-printf '%s\n' "$journal_workspace" > "$task_dir/.th_owner"
+project_owner "$journal_workspace" > "$task_dir/.th_owner"
 printf '%s\n' "$worktree" > "$task_dir/.th_worktree"
 if [[ -n ${TH_WORKERS_FILE:-} ]]; then
   printf '%s\n' "$TH_WORKERS_FILE" > "$task_dir/.th_workers_file"

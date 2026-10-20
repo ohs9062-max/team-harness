@@ -52,6 +52,30 @@ worker_digest_program() {
   printf '%s/../src/team_harness/worker_digest.py\n' "$lib_dir"
 }
 
+project_owner() {
+  # Worktrees share the main repository's common .git directory, so use its
+  # parent as the one coordinator inbox for the whole project.
+  if [[ -n ${TH_INBOX_OWNER:-} ]]; then
+    printf '%s\n' "$TH_INBOX_OWNER"
+    return
+  fi
+  local directory=$1 common
+  common=$(git -C "$directory" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || {
+    printf '%s\n' "$directory"
+    return
+  }
+  if [[ $(basename "$common") == .git ]]; then
+    dirname "$common"
+  else
+    printf '%s\n' "$directory"
+  fi
+}
+
+log_is_from_current_worker() {
+  local task=$1 log=$2 pid_file="$task/worker.pid"
+  [[ ! -f $pid_file || ! $log -ot $pid_file ]]
+}
+
 run_verification() {
   local task=$1 program
   program=$(worker_digest_program)
@@ -109,13 +133,18 @@ inspect_task_event() {
   [[ -n $task && -d $task ]] || return 0
   local marker="$task/$marker_prefix"
 
-  local owner
+  local owner owner_source
   owner=$(cat "$task/.th_owner" 2>/dev/null || true)
-  if [[ -z $owner && -n $target_workspace ]]; then
+  if [[ -n $owner ]]; then
+    owner=$(project_owner "$owner")
+  elif [[ -f $task/.th_worktree ]]; then
+    owner_source=$(<"$task/.th_worktree")
+    owner=$(project_owner "$owner_source")
+  elif [[ -n $target_workspace ]]; then
     local journal_log="$target_workspace/.claude/work_log.md"
     local journal_logs=("$(dirname "$journal_log")"/work_log*.md)
     if (( ${#journal_logs[@]} > 0 )) && grep -qsF "| $task |" "${journal_logs[@]}"; then
-      owner=$target_workspace
+      owner=$(project_owner "$target_workspace")
     else
       owner="(unknown)"
     fi
@@ -123,14 +152,23 @@ inspect_task_event() {
 
   # target_workspace가 지정되어 있고 본인 소유가 아닌 경우:
   # 쿼터 잠금만 생성하고 사건 통지는 건너뜀
-  if [[ -n $target_workspace && -n $owner && $owner != "$target_workspace" ]]; then
+  local target_owner=""
+  [[ -n $target_workspace ]] && target_owner=$(project_owner "$target_workspace")
+  if [[ -n $target_owner && -n $owner && $owner != "$target_owner" ]]; then
     for cand in "$task/codex.log" "$task/agy.log" "$task/claude.log"; do
       [[ -f $cand ]] || continue
+      log_is_from_current_worker "$task" "$cand" || continue
       local lock="$watch_dir/quota_lock.$(basename "$cand" .log)"
       [[ -f $lock || -f $task/DONE || -f $task/FAILED ]] && continue
       local qline
       qline=$(quota_error_line "$cand")
-      [[ -n $qline ]] && printf '%s | %s | %s\n' "$(date '+%F %R')" "$task" "$qline" > "$lock"
+      if [[ -n $qline ]]; then
+        if [[ ${qline,,} == *"at capacity"* || ${qline,,} == *"capacity exceeded"* ]]; then
+          printf '%s | %s | %s | expires=%s\n' "$(date '+%F %R')" "$task" "$qline" "$(( $(date +%s) + 900 ))" > "$lock"
+        else
+          printf '%s | %s | %s\n' "$(date '+%F %R')" "$task" "$qline" > "$lock"
+        fi
+      fi
     done
     return 0
   fi
@@ -157,7 +195,8 @@ inspect_task_event() {
   # Failures take precedence over a stale DONE marker.
   # 1. 완료 판정 (단, 분리된 긴 job.pid가 아직 실행 중이면 인계만으로 최종 DONE 처리하지 않음)
   if [[ $terminal == DONE && $distinct_job_alive != 1 ]]; then
-    if [[ ! -f $marker.done ]]; then
+    if [[ ! -f $marker.done || $task/DONE -nt $marker.done ]]; then
+      rm -f "$marker.failed"
       touch "$marker.done"
       local v_res
       if [[ $marker_prefix == .th_daemon ]]; then
@@ -172,7 +211,8 @@ inspect_task_event() {
 
   # 2. 실패 판정
   if [[ $terminal == FAILED ]]; then
-    if [[ ! -f $marker.failed ]]; then
+    if [[ ! -f $marker.failed || $failed_file -nt $marker.failed ]]; then
+      rm -f "$marker.done"
       touch "$marker.failed"
       local reason
       reason=$(tail -n 5 "$failed_file" 2>/dev/null | tr '\n' ' ')
@@ -203,6 +243,7 @@ inspect_task_event() {
   local log_file=""
   for cand in "$task/codex.log" "$task/agy.log" "$task/claude.log" "$task/worker.log"; do
     [[ -f $cand ]] || continue
+    log_is_from_current_worker "$task" "$cand" || continue
     if [[ -n $(quota_error_line "$cand") ]]; then
       log_file=$cand
       break
@@ -215,7 +256,11 @@ inspect_task_event() {
     local lock_type
     lock_type=$(basename "$log_file" .log)
     [[ $lock_type == worker ]] && lock_type=unknown
-    printf '%s | %s | %s\n' "$(date '+%F %R')" "$task" "$line" > "$watch_dir/quota_lock.$lock_type"
+    if [[ ${line,,} == *"at capacity"* || ${line,,} == *"capacity exceeded"* ]]; then
+      printf '%s | %s | %s | expires=%s\n' "$(date '+%F %R')" "$task" "$line" "$(( $(date +%s) + 900 ))" > "$watch_dir/quota_lock.$lock_type"
+    else
+      printf '%s | %s | %s\n' "$(date '+%F %R')" "$task" "$line" > "$watch_dir/quota_lock.$lock_type"
+    fi
     "$callback_fn" "$task" "워커 오류(쿼터·용량)" "워커 오류(쿼터·용량) — $line (새 $lock_type 실행 잠금: $watch_dir/quota_lock.$lock_type)" "-" "$owner"
     # A quota event is non-terminal.  Continue so a later DONE/FAILED marker is
     # still observed on the next pass (and dead-process handling remains intact).

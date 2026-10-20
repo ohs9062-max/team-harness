@@ -69,16 +69,41 @@ path = pathlib.Path(sys.argv[1])
 hook = sys.argv[2]
 data = json.loads(path.read_text()) if path.exists() and path.read_text().strip() else {}
 hooks = data.setdefault("hooks", {})
-entries = hooks.setdefault("SessionStart", [])
 command = f'"{hook}"'
-for entry in entries:
-    if entry.get("matcher") == "startup|resume|compact":
-        nested = entry.setdefault("hooks", [])
-        if not any(h.get("type") == "command" and h.get("command") == command for h in nested):
-            nested.append({"type": "command", "command": command})
-        break
-else:
-    entries.append({"matcher": "startup|resume|compact", "hooks": [{"type": "command", "command": command}]})
+prompt_command = f'"{hook}" prompt'
+
+def is_journal_hook(item):
+    return item.get("type") == "command" and "journal-hook.sh" in item.get("command", "")
+
+session_entries = hooks.setdefault("SessionStart", [])
+kept_session = []
+installed = False
+for entry in session_entries:
+    nested = [item for item in entry.get("hooks", []) if not is_journal_hook(item)]
+    if entry.get("matcher") == "startup|resume|compact" and not installed:
+        nested.append({"type": "command", "command": command})
+        installed = True
+    if nested:
+        entry["hooks"] = nested
+        kept_session.append(entry)
+if not installed:
+    kept_session.append({"matcher": "startup|resume|compact", "hooks": [{"type": "command", "command": command}]})
+hooks["SessionStart"] = kept_session
+
+prompt_entries = hooks.setdefault("UserPromptSubmit", [])
+kept_prompt = []
+prompt_installed = False
+for entry in prompt_entries:
+    nested = [item for item in entry.get("hooks", []) if not is_journal_hook(item)]
+    if not prompt_installed:
+        nested.append({"type": "command", "command": prompt_command})
+        prompt_installed = True
+    if nested:
+        entry["hooks"] = nested
+        kept_prompt.append(entry)
+if not prompt_installed:
+    kept_prompt.append({"hooks": [{"type": "command", "command": prompt_command}]})
+hooks["UserPromptSubmit"] = kept_prompt
 path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
 PY
 printf 'claude/codex: installed; Claude SessionStart hook merged\n'

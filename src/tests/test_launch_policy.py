@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+from datetime import timezone
 import json
 import os
 from pathlib import Path
@@ -46,6 +48,7 @@ def _write_rollout(
     cached_input_tokens: int = 0,
     output_tokens: int = 100,
     mtime: float | None = None,
+    timestamp: float | None = None,
 ) -> Path:
     sessions_dir.mkdir(parents=True, exist_ok=True)
     path = sessions_dir / name
@@ -58,6 +61,9 @@ def _write_rollout(
         json.dumps(
             {
                 "type": "event_msg",
+                "timestamp": datetime.fromtimestamp(
+                    time.time() if timestamp is None else timestamp, timezone.utc
+                ).isoformat(),
                 "payload": {
                     "type": "token_count",
                     "info": {
@@ -324,6 +330,39 @@ def test_budget_pass_when_cached_input_tokens_large(tmp_path: Path) -> None:
     assert sum_recent_codex_tokens(sessions_dir) == 60_000
     assert check(target, "codex", "gpt-5.6-terra", "medium", watch_dir, env) == []
     assert check_warnings("codex", env) == []
+
+
+def test_budget_counts_only_token_growth_inside_window(tmp_path: Path) -> None:
+    sessions_dir = tmp_path / "sessions"
+    now = time.time()
+    path = sessions_dir / "rollout-window.jsonl"
+    path.parent.mkdir()
+
+    def event(timestamp: float, total: int) -> str:
+        return json.dumps(
+            {
+                "type": "event_msg",
+                "timestamp": datetime.fromtimestamp(
+                    timestamp, timezone.utc
+                ).isoformat(),
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "total_token_usage": {
+                            "input_tokens": total - 100,
+                            "cached_input_tokens": 0,
+                            "output_tokens": 100,
+                        }
+                    },
+                },
+            }
+        )
+
+    path.write_text(
+        event(now - 6 * 3600, 900_000) + "\n" + event(now - 3600, 1_000_000) + "\n",
+        encoding="utf-8",
+    )
+    assert sum_recent_codex_tokens(sessions_dir) == 100_000
 
 
 def test_budget_reject_when_at_or_above_90_percent(

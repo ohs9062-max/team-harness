@@ -159,6 +159,44 @@ def test_th_launch_retains_th_owner(test_env: dict):
     assert str(task_dir) in tasks_txt.read_text(encoding="utf-8")
 
 
+def test_th_launch_uses_main_checkout_as_worktree_owner(test_env: dict):
+    main = test_env["tmp_path"] / "main"
+    subprocess.run(["git", "init", str(main)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(main), "config", "user.email", "test@example.com"], check=True
+    )
+    subprocess.run(["git", "-C", str(main), "config", "user.name", "Test"], check=True)
+    (main / "README").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(main), "add", "README"], check=True)
+    subprocess.run(
+        ["git", "-C", str(main), "commit", "-m", "base"],
+        check=True,
+        capture_output=True,
+    )
+    worktree = test_env["tmp_path"] / "linked"
+    subprocess.run(
+        ["git", "-C", str(main), "worktree", "add", str(worktree)],
+        check=True,
+        capture_output=True,
+    )
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_worktree_owner")
+    result = subprocess.run(
+        [
+            str(SCRIPTS_DIR / "th-launch.sh"),
+            str(task_dir),
+            "codex",
+            "gpt-5.6-terra",
+            "medium",
+            str(worktree),
+        ],
+        env={**test_env["env"], "TH_WORKSPACE": str(worktree)},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert (task_dir / ".th_owner").read_text(encoding="utf-8").strip() == str(main)
+
+
 @pytest.mark.parametrize(
     "arguments", [[], ["codex"], ["codex", "worktree"], ["explicit"]]
 )
@@ -393,6 +431,46 @@ def test_journal_hook_is_noop_for_worker(tmp_path: Path):
     )
     assert result.returncode == 0
     assert result.stdout == ""
+
+
+def test_journal_hook_prompt_emits_each_new_inbox_line_once(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    inbox = workspace / ".claude" / "inbox.md"
+    inbox.parent.mkdir(parents=True)
+    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(workspace), "TH_ROLE": ""}
+    result = subprocess.run(
+        [str(SCRIPTS_DIR / "journal-hook.sh")],
+        cwd=workspace,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0
+    first = subprocess.run(
+        [str(SCRIPTS_DIR / "journal-hook.sh"), "prompt"],
+        cwd=workspace,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert first.returncode == 0 and first.stdout == ""
+    inbox.write_text("new event\n", encoding="utf-8")
+    second = subprocess.run(
+        [str(SCRIPTS_DIR / "journal-hook.sh"), "prompt"],
+        cwd=workspace,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert "## 새 사건" in second.stdout and "new event" in second.stdout
+    third = subprocess.run(
+        [str(SCRIPTS_DIR / "journal-hook.sh"), "prompt"],
+        cwd=workspace,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert third.stdout == ""
 
 
 def test_th_watch_owner_filtering(test_env: dict):
@@ -1270,6 +1348,107 @@ def test_th_watchd_notifies_inbox_and_events_log(test_env: dict):
         if line.strip()
     ]
     assert len(lines) == 1, "Same event must be recorded only once"
+
+
+def test_th_watchd_normalizes_legacy_worktree_owner(test_env: dict):
+    main = test_env["tmp_path"] / "owner-main"
+    subprocess.run(["git", "init", str(main)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(main), "config", "user.email", "test@example.com"], check=True
+    )
+    subprocess.run(["git", "-C", str(main), "config", "user.name", "Test"], check=True)
+    (main / "README").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(main), "add", "README"], check=True)
+    subprocess.run(
+        ["git", "-C", str(main), "commit", "-m", "base"],
+        check=True,
+        capture_output=True,
+    )
+    linked = test_env["tmp_path"] / "owner-linked"
+    subprocess.run(
+        ["git", "-C", str(main), "worktree", "add", str(linked)],
+        check=True,
+        capture_output=True,
+    )
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_legacy_linked")
+    (task_dir / ".th_owner").write_text(str(linked), encoding="utf-8")
+    (task_dir / "DONE").write_text("done\n", encoding="utf-8")
+    (test_env["watch_dir"] / "tasks.txt").write_text(f"{task_dir}\n", encoding="utf-8")
+    result = subprocess.run(
+        [str(SCRIPTS_DIR / "th-watchd.sh")],
+        env={**test_env["env"], "TH_ONCE": "1"},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "task_legacy_linked" in (main / ".claude" / "inbox.md").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_th_watchd_notifies_done_after_prior_failed_marker(test_env: dict):
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_rerun")
+    (task_dir / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
+    (task_dir / "FAILED").write_text("first failure\n", encoding="utf-8")
+    (test_env["watch_dir"] / "tasks.txt").write_text(f"{task_dir}\n", encoding="utf-8")
+    env = {**test_env["env"], "TH_ONCE": "1"}
+    assert (
+        subprocess.run(
+            [str(SCRIPTS_DIR / "th-watchd.sh")], env=env, capture_output=True, text=True
+        ).returncode
+        == 0
+    )
+    (task_dir / "FAILED").unlink()
+    time.sleep(0.02)
+    (task_dir / "DONE").write_text("rerun done\n", encoding="utf-8")
+    assert (
+        subprocess.run(
+            [str(SCRIPTS_DIR / "th-watchd.sh")], env=env, capture_output=True, text=True
+        ).returncode
+        == 0
+    )
+    inbox = (test_env["workspace"] / ".claude" / "inbox.md").read_text(encoding="utf-8")
+    assert "실패" in inbox and "완료" in inbox
+
+
+def test_th_watchd_ignores_quota_log_older_than_worker_pid(test_env: dict):
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_stale_quota")
+    (task_dir / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
+    log = task_dir / "agy.log"
+    log.write_text("ERROR: rate limit exceeded\n", encoding="utf-8")
+    time.sleep(0.02)
+    (task_dir / "worker.pid").write_text("999999\n", encoding="utf-8")
+    (test_env["watch_dir"] / "tasks.txt").write_text(f"{task_dir}\n", encoding="utf-8")
+    result = subprocess.run(
+        [str(SCRIPTS_DIR / "th-watchd.sh")],
+        env={**test_env["env"], "TH_ONCE": "1"},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0
+    assert not (test_env["watch_dir"] / "quota_lock.agy").exists()
+
+
+def test_th_launch_expired_capacity_lock_does_not_block_but_quota_does(test_env: dict):
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_expired_capacity")
+    lock = test_env["watch_dir"] / "quota_lock.codex"
+    lock.write_text("capacity exceeded | expires=1\n", encoding="utf-8")
+    env = {**test_env["env"], "TH_IGNORE_QUOTA_LOCK": "0"}
+    allowed = subprocess.run(
+        [str(SCRIPTS_DIR / "th-launch.sh"), str(task_dir)],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert allowed.returncode == 0, allowed.stderr
+    lock.write_text("rate limit exceeded\n", encoding="utf-8")
+    blocked = subprocess.run(
+        [str(SCRIPTS_DIR / "th-launch.sh"), str(task_dir)],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert blocked.returncode == 3
 
 
 def test_th_watchd_notify_send_desktop(test_env: dict):
