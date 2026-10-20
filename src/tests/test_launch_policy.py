@@ -12,6 +12,7 @@ import pytest
 from team_harness.launch_policy import check
 from team_harness.launch_policy import check_warnings
 from team_harness.launch_policy import main
+from team_harness.launch_policy import sum_recent_codex_tokens
 from team_harness.launch_policy import Violation
 
 
@@ -37,10 +38,21 @@ def _make_task(
 
 
 def _write_rollout(
-    sessions_dir: Path, name: str, total_tokens: int, *, mtime: float | None = None
+    sessions_dir: Path,
+    name: str,
+    total_tokens: int = 0,
+    *,
+    input_tokens: int | None = None,
+    cached_input_tokens: int = 0,
+    output_tokens: int = 100,
+    mtime: float | None = None,
 ) -> Path:
     sessions_dir.mkdir(parents=True, exist_ok=True)
     path = sessions_dir / name
+    actual_input = (
+        total_tokens - output_tokens if input_tokens is None else input_tokens
+    )
+    actual_total = total_tokens if total_tokens > 0 else actual_input + output_tokens
     lines = [
         json.dumps({"type": "session_meta", "payload": {"id": name}}),
         json.dumps(
@@ -50,9 +62,10 @@ def _write_rollout(
                     "type": "token_count",
                     "info": {
                         "total_token_usage": {
-                            "input_tokens": total_tokens - 100,
-                            "output_tokens": 100,
-                            "total_tokens": total_tokens,
+                            "input_tokens": actual_input,
+                            "cached_input_tokens": cached_input_tokens,
+                            "output_tokens": output_tokens,
+                            "total_tokens": actual_total,
                         }
                     },
                 },
@@ -246,16 +259,43 @@ def test_budget_pass_and_warning_and_old_rollout_ignored(
     sessions_dir = tmp_path / "sessions"
     now = time.time()
 
-    _write_rollout(sessions_dir, "rollout-old.jsonl", 950_000, mtime=now - 6 * 3600)
-    _write_rollout(sessions_dir, "rollout-recent-1.jsonl", 400_000, mtime=now - 600)
-    _write_rollout(sessions_dir, "rollout-recent-2.jsonl", 350_000, mtime=now - 300)
+    _write_rollout(
+        sessions_dir,
+        "rollout-old.jsonl",
+        1_050_000,
+        input_tokens=1_040_000,
+        cached_input_tokens=100_000,
+        output_tokens=10_000,
+        mtime=now - 6 * 3600,
+    )
+    _write_rollout(
+        sessions_dir,
+        "rollout-recent-1.jsonl",
+        500_000,
+        input_tokens=490_000,
+        cached_input_tokens=100_000,
+        output_tokens=10_000,
+        mtime=now - 600,
+    )
+    _write_rollout(
+        sessions_dir,
+        "rollout-recent-2.jsonl",
+        450_000,
+        input_tokens=440_000,
+        cached_input_tokens=100_000,
+        output_tokens=10_000,
+        mtime=now - 300,
+    )
 
     env = _base_env(tmp_path, TH_CODEX_5H_BUDGET="1000000")
     violations = check(target, "codex", "gpt-5.6-terra", "medium", watch_dir, env)
     assert violations == []
     warnings = check_warnings("codex", env)
     assert len(warnings) == 1
-    assert "70% 이상" in warnings[0]
+    assert (
+        "토큰 사용량(캐시 제외, codex 'tokens used' 기준) 70% 이상(750,000/1,000,000, 75%)"
+        in warnings[0]
+    )
 
     rc = main(
         ["check", str(target), "codex", "gpt-5.6-terra", "medium", str(watch_dir)],
@@ -264,6 +304,26 @@ def test_budget_pass_and_warning_and_old_rollout_ignored(
     captured = capsys.readouterr()
     assert rc == 0
     assert "70% 이상" in captured.err
+
+
+def test_budget_pass_when_cached_input_tokens_large(tmp_path: Path) -> None:
+    watch_dir = tmp_path / "watch"
+    watch_dir.mkdir()
+    target = _make_task(tmp_path, "task_budget_cached_ok")
+    sessions_dir = tmp_path / "sessions"
+    _write_rollout(
+        sessions_dir,
+        "rollout-cached.jsonl",
+        1_010_000,
+        input_tokens=1_000_000,
+        cached_input_tokens=950_000,
+        output_tokens=10_000,
+    )
+
+    env = _base_env(tmp_path, TH_CODEX_5H_BUDGET="1000000")
+    assert sum_recent_codex_tokens(sessions_dir) == 60_000
+    assert check(target, "codex", "gpt-5.6-terra", "medium", watch_dir, env) == []
+    assert check_warnings("codex", env) == []
 
 
 def test_budget_reject_when_at_or_above_90_percent(
@@ -279,6 +339,10 @@ def test_budget_reject_when_at_or_above_90_percent(
     env = _base_env(tmp_path, TH_CODEX_5H_BUDGET="1000000")
     violations = check(target, "codex", "gpt-5.6-terra", "medium", watch_dir, env)
     assert [v.code for v in violations] == ["budget"]
+    assert (
+        "토큰 사용량(캐시 제외, codex 'tokens used' 기준) 90% 이상"
+        in violations[0].message
+    )
     assert "TH_IGNORE_BUDGET=1" in violations[0].message
 
     rc = main(

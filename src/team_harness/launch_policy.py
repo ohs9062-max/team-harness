@@ -147,7 +147,7 @@ def _read_task_kind(task_md: Path) -> str | None:
     return raw_kind or None
 
 
-def _extract_total_tokens(event: dict[str, object]) -> int | None:
+def _extract_billable_tokens(event: dict[str, object]) -> int | None:
     event_type = event.get("type")
     if event_type not in (None, "event_msg", "token_count"):
         return None
@@ -163,10 +163,19 @@ def _extract_total_tokens(event: dict[str, object]) -> int | None:
     usage = info.get("total_token_usage")
     if not isinstance(usage, dict):
         return None
-    tokens = usage.get("total_tokens")
-    if isinstance(tokens, int) and not isinstance(tokens, bool) and tokens >= 0:
-        return tokens
-    return None
+    keys = ("input_tokens", "cached_input_tokens", "output_tokens")
+    if not any(key in usage for key in keys):
+        return None
+    values: dict[str, int] = {}
+    for key in keys:
+        raw = usage.get(key, 0)
+        if not isinstance(raw, int) or isinstance(raw, bool) or raw < 0:
+            return None
+        values[key] = raw
+    billable = (
+        values["input_tokens"] - values["cached_input_tokens"] + values["output_tokens"]
+    )
+    return max(0, billable)
 
 
 def _read_last_rollout_total_tokens(path: Path) -> int:
@@ -189,7 +198,7 @@ def _read_last_rollout_total_tokens(path: Path) -> int:
                     candidates = lines
                 for raw in reversed(candidates):
                     stripped = raw.strip()
-                    if not stripped or b"total_tokens" not in stripped:
+                    if not stripped or b"token_count" not in stripped:
                         continue
                     try:
                         event = json.loads(stripped)
@@ -197,7 +206,7 @@ def _read_last_rollout_total_tokens(path: Path) -> int:
                         continue
                     if not isinstance(event, dict):
                         continue
-                    tokens = _extract_total_tokens(event)
+                    tokens = _extract_billable_tokens(event)
                     if tokens is not None:
                         return tokens
     except OSError:
@@ -311,7 +320,8 @@ def check(
                 violations.append(
                     Violation(
                         "budget",
-                        f"codex 최근 5시간 토큰 사용량 90% 이상({total_tokens:,}/{budget:,}, {pct}%) 거부: "
+                        "codex 최근 5시간 토큰 사용량(캐시 제외, codex 'tokens used' 기준) "
+                        f"90% 이상({total_tokens:,}/{budget:,}, {pct}%) 거부: "
                         "잠시 기다리거나 agy를 쓰거나 TH_IGNORE_BUDGET=1",
                     )
                 )
@@ -333,7 +343,8 @@ def check_warnings(worker_type: str, env: Mapping[str, str] | None = None) -> li
     if budget * 7 <= total_tokens * 10 < budget * 9:
         pct = (total_tokens * 100) // budget
         return [
-            f"경고: codex 최근 5시간 토큰 사용량 70% 이상({total_tokens:,}/{budget:,}, {pct}%). "
+            "경고: codex 최근 5시간 토큰 사용량(캐시 제외, codex 'tokens used' 기준) "
+            f"70% 이상({total_tokens:,}/{budget:,}, {pct}%). "
             "쿼터 소진에 주의하세요"
         ]
     return []
