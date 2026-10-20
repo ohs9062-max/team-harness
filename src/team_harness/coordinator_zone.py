@@ -76,6 +76,8 @@ def is_coordinator_zone(
     target = _resolved(path, cwd)
     if any(_within(target, _resolved(item, cwd)) for item in allowed_paths):
         return False
+    if ".claude" in target.parts:
+        return True
     home = _resolved(Path.home())
     if any(_within(target, zone) for zone in coordinator_zone_paths(home=home)):
         return True
@@ -91,9 +93,6 @@ def is_coordinator_zone(
         ):
             if _within(target, skill):
                 return True
-        for root in (ws / ".claude",):
-            if _within(target, root):
-                return True
         for output_root in (ws / "_outputs", ws / "outputs" / "runs"):
             if _within(target, output_root):
                 own = _resolved(output_dir, cwd) if output_dir else None
@@ -102,7 +101,7 @@ def is_coordinator_zone(
 
 
 _PATH_TOKEN = re.compile(
-    r"(?:~[/\\][^\s'\";|&]+|/[^\s'\";|&]+|(?:\./)?(?:\.claude|_outputs|outputs/runs|skills)[/\\][^\s'\";|&]+)"
+    r"(?:~[/\\][^\s'\";|&]+|/[^\s'\";|&]+|(?:\./)?(?:\.claude|_outputs|outputs/runs|skills)[/\\][^\s'\";|&]+|(?:\.\.?[/\\])+(?:[^\s'\";|&/\\]+[/\\])*(?:\.claude|_outputs|outputs[/\\]runs|skills)[/\\][^\s'\";|&]+)"
 )
 
 

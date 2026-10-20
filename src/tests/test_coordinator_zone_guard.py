@@ -8,6 +8,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+from team_harness.coordinator_zone import coordinator_paths_in_command
+
 REPO = Path(__file__).resolve().parents[2]
 GUARD = REPO / "scripts" / "hooks" / "coordinator_zone_guard.py"
 
@@ -84,6 +86,56 @@ def test_worker_guard_allows_explicit_task_front_matter_path(tmp_path: Path) -> 
         TH_WORKER_ALLOW_PATHS=json.dumps([str(target)]),
     )
     assert not denied(result)
+
+
+def test_worker_guard_blocks_claude_directory_in_any_project(tmp_path: Path) -> None:
+    other_project_record = tmp_path / "other-project" / ".claude" / "work_log.md"
+    payload = {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Read",
+        "tool_input": {"file_path": str(other_project_record)},
+    }
+    common = {"TH_ROLE": "worker", "TH_WORKSPACE": str(tmp_path / "workspace")}
+
+    assert denied(run_guard(tmp_path, payload, **common))
+    assert not denied(
+        run_guard(
+            tmp_path,
+            payload,
+            TH_WORKER_ALLOW_PATHS=json.dumps([str(other_project_record)]),
+            **common,
+        )
+    )
+    for name in (".claude_backup", "claude"):
+        allowed_path = tmp_path / "other-project" / name / "work_log.md"
+        payload["tool_input"] = {"file_path": str(allowed_path)}
+        assert not denied(run_guard(tmp_path, payload, **common))
+
+
+def test_worker_guard_blocks_absolute_and_parent_claude_command_paths(
+    tmp_path: Path,
+) -> None:
+    absolute = "/tmp/p/.claude/current_status.md"
+    parent_relative = "../p/.claude/x.md"
+    assert coordinator_paths_in_command(f"cat {absolute}", cwd=tmp_path) == [
+        Path(absolute)
+    ]
+    assert coordinator_paths_in_command(f"cat {parent_relative}", cwd=tmp_path) == [
+        (tmp_path / parent_relative).resolve()
+    ]
+
+    for command in (f"cat {absolute}", f"cat {parent_relative}"):
+        assert denied(
+            run_guard(
+                tmp_path,
+                {
+                    "hook_event_name": "PreToolUse",
+                    "tool_name": "Bash",
+                    "tool_input": {"command": command},
+                },
+                TH_ROLE="worker",
+            )
+        )
 
 
 def test_worker_guard_handles_codex_payloads_and_allows_without_worker_role(
