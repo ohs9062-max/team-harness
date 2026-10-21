@@ -128,6 +128,28 @@ inspect_context_and_job() {
   PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" uv run --directory "$lib_dir/.." python -m team_harness.watch_inspect "$task"
 }
 
+status_failure_reason() {
+  local status_file=$1 line
+  [[ -f $status_file ]] || return 0
+  line=$(tail -n 1 "$status_file" 2>/dev/null) || return 0
+  # Keep the status content, not its timestamp, and cap by characters so UTF-8
+  # notices remain readable.
+  python3 - "$line" <<'PY'
+import re
+import sys
+
+line = sys.argv[1].strip()
+line = re.sub(
+    r"^\[?\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?"
+    r"(?:Z|[+-]\d{2}:\d{2}| KST)?\]?[:\s|]*",
+    "",
+    line,
+)
+line = re.sub(r"^\[?\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?\]?[:\s|]*", "", line)
+print(line[:200], end="")
+PY
+}
+
 inspect_task_event() {
   local task=$1 watch_dir=$2 marker_prefix=$3 stall_sec=$4 target_workspace=$5 callback_fn=$6
   [[ -n $task && -d $task ]] || return 0
@@ -215,7 +237,11 @@ inspect_task_event() {
       rm -f "$marker.done"
       touch "$marker.failed"
       local reason
-      reason=$(tail -n 5 "$failed_file" 2>/dev/null | tr '\n' ' ')
+      if [[ -f $failed_file ]]; then
+        reason=$(tail -n 5 "$failed_file" 2>/dev/null | tr '\n' ' ')
+      else
+        reason=$(status_failure_reason "$task/STATUS")
+      fi
       "$callback_fn" "$task" "실패" "실패 — $reason" "-" "$owner"
     fi
     return 0
@@ -234,7 +260,18 @@ inspect_task_event() {
   elif [[ $ctx_event == "job_completed" ]]; then
     if [[ ! -f $marker.job_done ]]; then
       touch "$marker.job_done"
-      "$callback_fn" "$task" "잡 완료" "$ctx_detail" "-" "$owner"
+      local worker_pid worker_alive=0 job_pid status_detail
+      worker_pid=$(cat "$task/worker.pid" 2>/dev/null || true)
+      if [[ $worker_pid =~ ^[1-9][0-9]*$ ]] && kill -0 "$worker_pid" 2>/dev/null; then
+        worker_alive=1
+      fi
+      if (( worker_alive )); then
+        "$callback_fn" "$task" "잡 완료" "$ctx_detail" "-" "$owner"
+      else
+        job_pid=$(cat "$task/job.pid" 2>/dev/null || true)
+        status_detail=$(status_failure_reason "$task/STATUS")
+        "$callback_fn" "$task" "실패 의심" "실패 의심 — job.pid(${job_pid:-?}) 종료, DONE/FAILED 없음; STATUS: ${status_detail:-없음}" "-" "$owner"
+      fi
     fi
     return 0
   fi

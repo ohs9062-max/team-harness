@@ -91,6 +91,18 @@ remove_task() {
   ) 200>"$watch_dir/tasks.lock"
 }
 
+task_processes_dead() {
+  local task=$1 pid_file pid
+  for pid_file in "$task/worker.pid" "$task/job.pid"; do
+    [[ -f $pid_file ]] || continue
+    pid=$(<"$pid_file")
+    if pid_alive "$pid"; then
+      return 1
+    fi
+  done
+  return 0
+}
+
 notify() {
   local task=$1 message=$2
   local kind='실패'
@@ -113,14 +125,19 @@ latest_signature() {
 handle_watch_event() {
   local task=$1 event_type=$2 summary=$3 v_res=$4 owner=$5
   local name=${task#"$HOME"/}
+  # A terminal marker can arrive before a worker has finished its final
+  # cleanup.  Keep it registered until both the worker and any detached job
+  # are gone.  Non-terminal notices (such as quota) never unregister it.
+  case "$event_type" in
+    완료|'잡 완료'|실패|'실패 의심'|중단)
+      task_processes_dead "$task" && remove_task "$task"
+      ;;
+  esac
   if [[ $event_type == "완료" ]]; then
-    remove_task "$task"
     notify "$name" "완료 (검수 $v_res)"
   elif [[ $event_type == "잡 완료" ]]; then
-    remove_task "$task"
     notify "$name" "$summary"
-  elif [[ $event_type == "실패" || $event_type == "중단" ]]; then
-    remove_task "$task"
+  elif [[ $event_type == "실패" || $event_type == "실패 의심" || $event_type == "중단" ]]; then
     notify "$name" "$summary"
   elif [[ $event_type == "워커 오류(쿼터·용량)" ]]; then
     # A quota lock prevents new launches, but this worker can still finish and
@@ -135,6 +152,12 @@ while (( $(date +%s) < deadline )); do
   while IFS= read -r task || [[ -n $task ]]; do
     [[ -n $task && -d $task ]] || continue
     inspect_task_event "$task" "$watch_dir" ".th_notified" "$stall_sec" "$journal_workspace" handle_watch_event
+    # Once an already-notified terminal task has fully exited, reap it without
+    # emitting a duplicate notice.  Do not mutate another coordinator's task
+    # merely because this watcher skipped its owner-filtered event.
+    if [[ -f $task/.th_notified.done || -f $task/.th_notified.failed || -f $task/.th_notified.job_done || -f $task/.th_notified.dead ]] && task_processes_dead "$task"; then
+      remove_task "$task"
+    fi
   done < "$registry"
   sleep "$poll_sec"
 done

@@ -160,6 +160,47 @@ def test_th_launch_retains_th_owner(test_env: dict):
     assert str(task_dir) in tasks_txt.read_text(encoding="utf-8")
 
 
+def test_th_launch_appends_launch_status_and_avoids_prior_status_failure(
+    test_env: dict,
+):
+    """A relaunch must mask a previous STATUS-only failure until this run reports one."""
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_relaunch_status")
+    (task_dir / "STATUS").write_text(
+        "2026-10-21 14:08:00 FAILED gpu_unavailable old attempt\n", encoding="utf-8"
+    )
+    codex_stub = test_env["bin_dir"] / "codex"
+    codex_stub.write_text("#!/usr/bin/env bash\nexec sleep 30\n", encoding="utf-8")
+    codex_stub.chmod(codex_stub.stat().st_mode | stat.S_IEXEC)
+
+    result = subprocess.run(
+        [str(SCRIPTS_DIR / "th-launch.sh"), str(task_dir), str(task_dir)],
+        env=test_env["env"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert re.search(
+        r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} LAUNCH worker=codex ",
+        (task_dir / "STATUS").read_text(encoding="utf-8").splitlines()[-1],
+    )
+
+    try:
+        watched = subprocess.run(
+            [str(SCRIPTS_DIR / "th-watch.sh"), "1"],
+            env={**test_env["env"], "TH_POLL_SEC": "1"},
+            capture_output=True,
+            text=True,
+        )
+        assert watched.returncode == 0
+        assert "실패" not in watched.stdout
+    finally:
+        worker_pid = int((task_dir / "worker.pid").read_text(encoding="utf-8"))
+        try:
+            os.killpg(os.getpgid(worker_pid), signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+
+
 def test_th_launch_uses_main_checkout_as_worktree_owner(test_env: dict):
     main = test_env["tmp_path"] / "main"
     subprocess.run(["git", "init", str(main)], check=True, capture_output=True)
@@ -701,6 +742,127 @@ def test_th_watch_dead_process_removes_task(test_env: dict):
 
     # Must be removed from registry
     assert str(task_dir) not in tasks_txt.read_text(encoding="utf-8")
+
+
+def test_th_watch_status_failure_keeps_live_task_and_reports_later_failed_file(
+    test_env: dict,
+):
+    """STATUS-only failures are deduplicated but do not unregister a live worker."""
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_live_status_failure")
+    (task_dir / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
+    (task_dir / "STATUS").write_text(
+        "2026-10-21 15:00:00 FAILED status-only reason\n", encoding="utf-8"
+    )
+    worker = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    (task_dir / "worker.pid").write_text(f"{worker.pid}\n", encoding="utf-8")
+    tasks_txt = test_env["watch_dir"] / "tasks.txt"
+    tasks_txt.write_text(f"{task_dir}\n", encoding="utf-8")
+    env = {**test_env["env"], "TH_POLL_SEC": "1"}
+    try:
+        first = subprocess.run(
+            [str(SCRIPTS_DIR / "th-watch.sh"), "1"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert first.returncode == 0
+        assert "실패 — FAILED status-only reason" in first.stdout
+        assert str(task_dir) in tasks_txt.read_text(encoding="utf-8")
+
+        duplicate = subprocess.run(
+            [str(SCRIPTS_DIR / "th-watch.sh"), "1"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert duplicate.returncode == 0
+        assert "실패" not in duplicate.stdout
+
+        time.sleep(0.02)
+        (task_dir / "FAILED").write_text("later marker reason\n", encoding="utf-8")
+        later = subprocess.run(
+            [str(SCRIPTS_DIR / "th-watch.sh"), "1"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert later.returncode == 0
+        assert "later marker reason" in later.stdout
+        assert str(task_dir) in tasks_txt.read_text(encoding="utf-8")
+    finally:
+        worker.terminate()
+        worker.wait(timeout=5)
+
+
+def test_watchers_flag_dead_detached_job_as_suspected_failure(test_env: dict):
+    """Both watcher front ends classify a silent dead job as a suspected failure."""
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_silent_job_watch")
+    (task_dir / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
+    (task_dir / "STATUS").write_text(
+        "2026-10-21 15:10:00 processing\n", encoding="utf-8"
+    )
+    (task_dir / "worker.pid").write_text("999999\n", encoding="utf-8")
+    (task_dir / "job.pid").write_text("999998\n", encoding="utf-8")
+    (test_env["watch_dir"] / "tasks.txt").write_text(f"{task_dir}\n", encoding="utf-8")
+
+    watched = subprocess.run(
+        [str(SCRIPTS_DIR / "th-watch.sh"), "1"],
+        env={**test_env["env"], "TH_POLL_SEC": "1"},
+        capture_output=True,
+        text=True,
+    )
+    assert watched.returncode == 0
+    assert "실패 의심" in watched.stdout
+    assert "job.pid(999998) 종료, DONE/FAILED 없음" in watched.stdout
+    assert "STATUS: processing" in watched.stdout
+
+    handoff_task = _create_task_dir(test_env["tmp_path"], "task_job_handoff")
+    (handoff_task / ".th_owner").write_text(
+        str(test_env["workspace"]), encoding="utf-8"
+    )
+    handoff_worker = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    (handoff_task / "worker.pid").write_text(
+        f"{handoff_worker.pid}\n", encoding="utf-8"
+    )
+    (handoff_task / "job.pid").write_text("999995\n", encoding="utf-8")
+    (test_env["watch_dir"] / "tasks.txt").write_text(
+        f"{handoff_task}\n", encoding="utf-8"
+    )
+    try:
+        handoff = subprocess.run(
+            [str(SCRIPTS_DIR / "th-watch.sh"), "1"],
+            env={**test_env["env"], "TH_POLL_SEC": "1"},
+            capture_output=True,
+            text=True,
+        )
+        assert handoff.returncode == 0
+        assert "잡 완료" in handoff.stdout
+        assert str(handoff_task) in (test_env["watch_dir"] / "tasks.txt").read_text(
+            encoding="utf-8"
+        )
+    finally:
+        handoff_worker.terminate()
+        handoff_worker.wait(timeout=5)
+
+    daemon_task = _create_task_dir(test_env["tmp_path"], "task_silent_job_daemon")
+    (daemon_task / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
+    (daemon_task / "STATUS").write_text(
+        "2026-10-21 15:10:00 processing\n", encoding="utf-8"
+    )
+    (daemon_task / "worker.pid").write_text("999997\n", encoding="utf-8")
+    (daemon_task / "job.pid").write_text("999996\n", encoding="utf-8")
+    (test_env["watch_dir"] / "tasks.txt").write_text(
+        f"{daemon_task}\n", encoding="utf-8"
+    )
+    daemon = subprocess.run(
+        [str(SCRIPTS_DIR / "th-watchd.sh")],
+        env={**test_env["env"], "TH_ONCE": "1"},
+        capture_output=True,
+        text=True,
+    )
+    assert daemon.returncode == 0, daemon.stderr
+    inbox = (test_env["workspace"] / ".claude" / "inbox.md").read_text(encoding="utf-8")
+    assert "실패 의심" in inbox
 
 
 def test_th_watch_stall_retains_task_in_registry(test_env: dict):
@@ -1845,7 +2007,9 @@ def test_th_launch_and_watch_context_rollover_resume_and_status(test_env: dict):
     # Check th-status shows active context tag on running row in default view and full line in -a
     status_active = subprocess.run(
         [str(SCRIPTS_DIR / "th-status.sh")],
-        env={**env, "COLUMNS": "120"},
+        # Relaunch STATUS now records worker/model/effort; reserve enough
+        # terminal width to exercise the context tag rather than truncating it.
+        env={**env, "COLUMNS": "180"},
         capture_output=True,
         text=True,
     )
@@ -2001,7 +2165,7 @@ def test_th_watch_long_running_wait_detection_and_job_preservation(test_env: dic
         assert worker_proc.poll() is not None, "worker process must be terminated"
         assert job_proc.poll() is None, "detached job.pid must remain alive"
 
-        # 5. When job.pid finishes, th-watch reports job completion without fabricating DONE
+        # 5. A dead detached job with no terminal marker is a suspected failure.
         job_proc.terminate()
         job_proc.wait(timeout=5)
         watch_job_done = subprocess.run(
@@ -2011,7 +2175,7 @@ def test_th_watch_long_running_wait_detection_and_job_preservation(test_env: dic
             text=True,
         )
         assert watch_job_done.returncode == 0
-        assert "잡 완료" in watch_job_done.stdout
+        assert "실패 의심" in watch_job_done.stdout
         assert not (task_dir / "DONE").exists()
         assert (task_dir / ".th_job_completed").is_file()
 

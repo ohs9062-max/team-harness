@@ -640,23 +640,22 @@ def main(task: Path) -> None:
                     event_out = "long_running_wait"
                     detail_out = f"긴 실행 대기 — job.pid({job_pid}) 생존 중 sleep·폴링 대기 연속 감지, 종료 요청(context_exit_requested.json)"
 
-    # Check detached long job completion when neither worker nor job is alive.
-    if event_out == "none" and not worker_alive and not job_alive:
-        was_detached_job = seen_job_file.is_file() or (
-            has_distinct_job
-            and (
-                (task / "context_exit_requested.json").is_file()
-                or (task / "WORKLOG.md").is_file()
-                or (task / "WORKLOG.minimal.md").is_file()
-                or (task / "job.done").is_file()
-                or (task / "job.exit").is_file()
+    # A distinct job.pid is the task's explicit declaration of a detached job.
+    # Report its completion even if it exited before the watcher first observed
+    # it alive; otherwise a silent job exit degrades to an ordinary dead worker.
+    if (
+        event_out == "none"
+        and has_distinct_job
+        and not job_alive
+        and not (task / "DONE").is_file()
+        and not (task / "FAILED").is_file()
+    ):
+        if worker_alive:
+            event_out = "job_completed"
+            detail_out = (
+                f"잡 완료 — 분리 실행 job.pid({job_pid}) 종료, worker 인계 대기 중"
             )
-        )
-        if (
-            was_detached_job
-            and not (task / "DONE").is_file()
-            and not (task / "FAILED").is_file()
-        ):
+        else:
             (task / ".th_job_completed").write_text(
                 utc_timestamp() + "\n", encoding="utf-8"
             )

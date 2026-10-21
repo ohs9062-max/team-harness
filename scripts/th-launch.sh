@@ -490,6 +490,10 @@ rm -f "$task_dir"/DONE "$task_dir"/FAILED "$task_dir"/FAILED.* "$task_dir"/.th_*
 if [[ $preserve_job_pid != 1 ]]; then
   rm -f "$task_dir/job.pid"
 fi
+# A relaunch is a new attempt.  Make it the latest STATUS entry so a prior
+# attempt's STATUS-only FAILED/DONE result cannot be mistaken for this one.
+printf '%s LAUNCH worker=%s model=%s effort=%s\n' \
+  "$(date '+%F %T')" "$worker_type" "$model" "$effort" >> "$task_dir/STATUS"
 # 이 작업을 띄운 작업 공간. th-watch는 소유자 작업만 알린다(다른 코디네이터 사건을 가로채지 않게).
 project_owner "$journal_workspace" > "$task_dir/.th_owner"
 printf '%s\n' "$worktree" > "$task_dir/.th_worktree"
