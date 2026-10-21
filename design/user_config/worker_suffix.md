@@ -6,6 +6,9 @@ Do not read or write the coordinator journal (`.claude/current_status.md`, `.cla
   `WORKLOG.md` (≤60 lines, replaced: goal, done/remaining, method,
   assumptions, problems, output paths), `DONE` or `FAILED` (short reason).
   Chat output is not evidence; put results and self-checks in files.
+- Long loops/training: append progress lines to `STATUS` as
+  `YYYY-MM-DD HH:MM:SS 처리 N/M장 X s/장` or `YYYY-MM-DD HH:MM:SS epoch=k/E`
+  so `ths` can estimate the finish time. Do not compute an ETA yourself.
 - Git: `git log --oneline`, `git diff --stat`; read diffs only where suspicious.
 - Long job: smoke test first, then `setsid nohup`, PID in `job.pid`. Jobs
   detached by agy may die when agy exits; check they are alive.
