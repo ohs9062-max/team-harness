@@ -1111,10 +1111,10 @@ for task in valid_tasks:
     v_status = get_verify_status(task)
     prog = get_progress(task)
     ctx_line, ctx_info = inspect_task_context(task, prog)
+    eta = estimate_eta(task, state, now_ts)
 
     if all_mode:
         title = get_task_title(task)
-        eta = estimate_eta(task, state, now_ts)
         rows.append([task_name, title, state, v_status, age_str, eta, prog, latest_ts, ctx_line])
     else:
         is_stalled = (
@@ -1131,6 +1131,7 @@ for task in valid_tasks:
             "is_quota_err": is_quota_err,
             "is_stalled": is_stalled,
             "latest_ts": latest_ts,
+            "eta": eta,
             "prog": prog,
             "ctx_info": ctx_info,
         })
@@ -1192,6 +1193,7 @@ if not all_mode:
         wm = get_worker_and_model(rec["path"], rec["ctx_info"])
         updated = format_rel_time(rec["latest_ts"], now_ts, include_ago=True)
         stage = get_stage_summary(rec["path"], rec["state"])
+        eta = rec["eta"] if section_kind == "running" else "-"
 
         if section_kind == "running":
             start_ts = get_task_start_ts(rec["path"]) or rec["latest_ts"]
@@ -1219,6 +1221,7 @@ if not all_mode:
             "wm": wm,
             "elapsed": elapsed,
             "updated": updated,
+            "eta": eta,
             "stage": stage,
         }
 
@@ -1233,53 +1236,58 @@ if not all_mode:
     w_wm = min(max([str_width("워커/모델"), 10] + [str_width(r["wm"]) for r in all_disp]), 16)
     w_elap = min(max([str_width("경과"), 4] + [str_width(r["elapsed"]) for r in all_disp]), 8)
     w_upd = min(max([str_width("갱신"), 6] + [str_width(r["updated"]) for r in all_disp]), 8)
+    w_eta = min(max([str_width("예정")] + [str_width(r["eta"]) for r in run_rows]), 12)
 
     if show_worker_col:
-        prefix_w = 2 + w_proj + 2 + w_task + 2 + w_wm + 2 + w_elap + 2 + w_upd + 2
+        prefix_w = 2 + w_proj + 2 + w_task + 2 + w_wm + 2 + w_elap + 2 + w_upd + 2 + w_eta + 2
     else:
-        prefix_w = 2 + w_proj + 2 + w_task + 2 + w_elap + 2 + w_upd + 2
+        prefix_w = 2 + w_proj + 2 + w_task + 2 + w_elap + 2 + w_upd + 2 + w_eta + 2
     w_stage = max(14, term_cols - prefix_w)
 
-    def format_section_header():
+    def format_section_header(section_kind):
         if show_worker_col:
-            return (
+            header = (
                 "  "
                 + fit_width("프로젝트", w_proj) + "  "
                 + fit_width("작업", w_task) + "  "
                 + fit_width("워커/모델", w_wm) + "  "
                 + fit_width("경과", w_elap) + "  "
                 + fit_width("갱신", w_upd) + "  "
-                + "단계"
             )
-        return (
-            "  "
-            + fit_width("프로젝트", w_proj) + "  "
-            + fit_width("작업", w_task) + "  "
-            + fit_width("경과", w_elap) + "  "
-            + fit_width("갱신", w_upd) + "  "
-            + "단계"
-        )
+        else:
+            header = (
+                "  "
+                + fit_width("프로젝트", w_proj) + "  "
+                + fit_width("작업", w_task) + "  "
+                + fit_width("경과", w_elap) + "  "
+                + fit_width("갱신", w_upd) + "  "
+            )
+        if section_kind == "running":
+            header += fit_width("예정", w_eta) + "  "
+        return header + "단계"
 
-    def format_section_row(drow):
+    def format_section_row(drow, section_kind):
         st = fit_width(drow["stage"], w_stage).rstrip()
         if show_worker_col:
-            return (
+            row = (
                 "  "
                 + fit_width(drow["proj"], w_proj) + "  "
                 + fit_width(drow["task"], w_task) + "  "
                 + fit_width(drow["wm"], w_wm) + "  "
                 + fit_width(drow["elapsed"], w_elap) + "  "
                 + fit_width(drow["updated"], w_upd) + "  "
-                + st
             )
-        return (
-            "  "
-            + fit_width(drow["proj"], w_proj) + "  "
-            + fit_width(drow["task"], w_task) + "  "
-            + fit_width(drow["elapsed"], w_elap) + "  "
-            + fit_width(drow["updated"], w_upd) + "  "
-            + st
-        )
+        else:
+            row = (
+                "  "
+                + fit_width(drow["proj"], w_proj) + "  "
+                + fit_width(drow["task"], w_task) + "  "
+                + fit_width(drow["elapsed"], w_elap) + "  "
+                + fit_width(drow["updated"], w_upd) + "  "
+            )
+        if section_kind == "running":
+            row += fit_width(drow["eta"], w_eta) + "  "
+        return row + st
 
     print(
         f"작업 현황 {now_hm}  "
@@ -1288,21 +1296,21 @@ if not all_mode:
     )
 
     sections = [
-        ("▶ 실행 중", "32", run_rows, True),
-        ("⚠ 주의 필요", "33", att_rows, False),
-        ("✓ 최근 끝남 (24h)", "90", done_rows, False),
+        ("▶ 실행 중", "32", run_rows, True, "running"),
+        ("⚠ 주의 필요", "33", att_rows, False, "attention"),
+        ("✓ 최근 끝남 (24h)", "90", done_rows, False, "done"),
     ]
     printed_header = False
-    for title_txt, color_code, srows, show_cols in sections:
+    for title_txt, color_code, srows, show_cols, section_kind in sections:
         if not srows:
             continue
         print()
         print(colorize(title_txt, color_code))
         if show_cols or not printed_header:
-            print(format_section_header())
+            print(format_section_header(section_kind))
             printed_header = True
         for drow in srows:
-            print(format_section_row(drow))
+            print(format_section_row(drow, section_kind))
 
     print()
     print(get_footer_line(watch_dir))

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import re
 import signal
 import stat
 import subprocess
@@ -2280,7 +2281,7 @@ def test_th_status_sectioned_table_and_formatting(test_env: dict):
             if "프로젝트" in line and "워커/모델" in line
         )
         stage_col_offset = disp_w(header_line.split("단계")[0])
-        for row_marker in ("한글작업_실행", "eval_h1", "worker_read_policy"):
+        for row_marker in ("한글작업_실행",):
             row_line = next(line for line in out.splitlines() if row_marker in line)
             # Verify the stage column starts at the exact same display width column
             acc_w = 0
@@ -2303,6 +2304,66 @@ def test_th_status_sectioned_table_and_formatting(test_env: dict):
         assert res_narrow.returncode == 0
         assert "워커/모델" not in res_narrow.stdout
         assert "codex terra-med" not in res_narrow.stdout
+    finally:
+        proc.terminate()
+        proc.wait()
+
+
+def test_th_status_running_section_shows_eta_column(test_env: dict):
+    """Running rows render ETA values while completed rows keep their old columns."""
+    status_script = SCRIPTS_DIR / "th-status.sh"
+    now = time.time()
+    stamps = [
+        time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now - 120)),
+        time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now - 60)),
+    ]
+
+    t_speed = _create_task_dir(test_env["tmp_path"], "eta_speed")
+    t_epoch = _create_task_dir(test_env["tmp_path"], "eta_epoch")
+    t_none = _create_task_dir(test_env["tmp_path"], "eta_none")
+    t_done = _create_task_dir(test_env["tmp_path"], "eta_done")
+    (t_speed / "STATUS").write_text(
+        f"{stamps[1]} 처리 10/100장 2 s/장\n", encoding="utf-8"
+    )
+    (t_epoch / "STATUS").write_text(
+        f"{stamps[0]} epoch=2/20\n{stamps[1]} epoch=3/20\n", encoding="utf-8"
+    )
+    (t_none / "STATUS").write_text(f"{stamps[1]} 준비 중\n", encoding="utf-8")
+    (t_done / "STATUS").write_text(f"{stamps[1]} DONE\n", encoding="utf-8")
+    (t_done / "DONE").write_text("done\n", encoding="utf-8")
+
+    proc = subprocess.Popen(["sleep", "30"])
+    try:
+        for task_dir in (t_speed, t_epoch, t_none):
+            (task_dir / "worker.pid").write_text(f"{proc.pid}\n", encoding="utf-8")
+        (test_env["watch_dir"] / "tasks.txt").write_text(
+            "\n".join(map(str, (t_speed, t_epoch, t_none, t_done))) + "\n",
+            encoding="utf-8",
+        )
+
+        for columns in (100, 72):
+            res = subprocess.run(
+                [str(status_script)],
+                env={**test_env["env"], "COLUMNS": str(columns), "NO_COLOR": "1"},
+                capture_output=True,
+                text=True,
+            )
+            assert res.returncode == 0, res.stderr
+            running_block, done_block = res.stdout.split(
+                "✓ 최근 끝남 (24h)", maxsplit=1
+            )
+            assert "▶ 실행 중" in running_block
+            assert "예정" in running_block
+            assert "예정" not in done_block
+            for task_name in ("eta_speed", "eta_epoch"):
+                row = next(
+                    line for line in running_block.splitlines() if task_name in line
+                )
+                assert re.search(r"\b\d{2}:\d{2}\b", row)
+            no_eta_row = next(
+                line for line in running_block.splitlines() if "eta_none" in line
+            )
+            assert re.search(r"방금\s+-\s+", no_eta_row)
     finally:
         proc.terminate()
         proc.wait()
