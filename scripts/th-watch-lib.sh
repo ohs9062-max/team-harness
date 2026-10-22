@@ -217,7 +217,10 @@ inspect_task_event() {
   # Failures take precedence over a stale DONE marker.
   # 1. 완료 판정 (단, 분리된 긴 job.pid가 아직 실행 중이면 인계만으로 최종 DONE 처리하지 않음)
   if [[ $terminal == DONE && $distinct_job_alive != 1 ]]; then
-    if [[ ! -f $marker.done || $task/DONE -nt $marker.done ]]; then
+    # A worker may rewrite DONE while finishing its report.  Its presence,
+    # rather than its mtime, defines this attempt's completion event; th-launch
+    # removes .th_* markers before a genuinely new attempt.
+    if [[ ! -f $marker.done ]]; then
       rm -f "$marker.failed"
       touch "$marker.done"
       local v_res
@@ -233,6 +236,8 @@ inspect_task_event() {
 
   # 2. 실패 판정
   if [[ $terminal == FAILED ]]; then
+    # Keep the STATUS-only → concrete FAILED-file escalation: it supplies a
+    # real failure reason after an earlier provisional status notice.
     if [[ ! -f $marker.failed || $failed_file -nt $marker.failed ]]; then
       rm -f "$marker.done"
       touch "$marker.failed"

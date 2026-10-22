@@ -685,3 +685,19 @@ if [[ ${TH_NO_DAEMON:-0} != 1 && -x "$script_dir/th-watchd.sh" ]]; then
 fi
 
 printf 'launched [%s] pid %s → %s\n' "$worker_type" "$(<"$task_dir/worker.pid")" "$task_dir"
+
+inbox_owner=$(project_owner "$journal_workspace")
+inbox_pid_file="$inbox_owner/.claude/.inbox_wait.pid"
+inbox_wait_pid=""
+if [[ -r $inbox_pid_file ]]; then
+  inbox_wait_pid=$(<"$inbox_pid_file")
+fi
+inbox_wait_cmd=""
+if [[ $inbox_wait_pid =~ ^[1-9][0-9]*$ && -r /proc/$inbox_wait_pid/cmdline ]]; then
+  inbox_wait_cmd=$(tr '\0' ' ' < "/proc/$inbox_wait_pid/cmdline" 2>/dev/null || true)
+fi
+if [[ $inbox_wait_cmd == *th-inbox-wait.sh* ]] && kill -0 "$inbox_wait_pid" 2>/dev/null; then
+  printf '[th-launch] th-inbox-wait 실행 중(pid %s)\n' "$inbox_wait_pid"
+else
+  printf '[th-launch] 코디네이터: th-inbox-wait.sh가 백그라운드로 떠 있지 않으면 지금 run_in_background로 실행\n'
+fi

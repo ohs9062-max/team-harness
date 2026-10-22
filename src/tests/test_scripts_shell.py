@@ -1513,6 +1513,133 @@ def test_th_watchd_notifies_inbox_and_events_log(test_env: dict):
     assert len(lines) == 1, "Same event must be recorded only once"
 
 
+def test_th_inbox_wait_reads_only_new_complete_lines_and_handles_rotation(
+    test_env: dict,
+):
+    """Inbox waiter initializes at EOF, emits each new line once, and resets after shrink."""
+    owner = test_env["tmp_path"] / "inbox-owner"
+    inbox_dir = owner / ".claude"
+    inbox_dir.mkdir(parents=True)
+    inbox = inbox_dir / "inbox.md"
+    inbox.write_text("old event\n", encoding="utf-8")
+    script = SCRIPTS_DIR / "th-inbox-wait.sh"
+    env = {**test_env["env"], "TH_INBOX_OWNER": str(owner), "TH_POLL_SEC": "1"}
+
+    initial = subprocess.run(
+        [str(script), "0"], env=env, capture_output=True, text=True
+    )
+    assert initial.returncode == 0
+    assert initial.stdout == ""
+    cursor = inbox_dir / ".inbox_cursor"
+    assert cursor.read_text(encoding="utf-8").strip() == str(len(inbox.read_bytes()))
+
+    inbox.write_text("old event\nnew one\nnew two\n", encoding="utf-8")
+    woke = subprocess.run([str(script), "0"], env=env, capture_output=True, text=True)
+    assert woke.returncode == 0
+    assert "[th-inbox-wait] 새 사건 2건" in woke.stdout
+    assert woke.stdout.splitlines()[-2:] == ["new one", "new two"]
+    assert cursor.read_text(encoding="utf-8").strip() == str(len(inbox.read_bytes()))
+
+    repeated = subprocess.run(
+        [str(script), "0"], env=env, capture_output=True, text=True
+    )
+    assert repeated.returncode == 0
+    assert repeated.stdout == ""
+
+    inbox.write_text("rotated event\n", encoding="utf-8")
+    rotated = subprocess.run(
+        [str(script), "0"], env=env, capture_output=True, text=True
+    )
+    assert rotated.returncode == 0
+    assert rotated.stdout.splitlines()[-1] == "rotated event"
+    assert cursor.read_text(encoding="utf-8").strip() == str(len(inbox.read_bytes()))
+
+
+def test_th_inbox_wait_newer_instance_stops_previous(test_env: dict):
+    """Only the newest waiter remains for one owner, preventing duplicate wakes."""
+    owner = test_env["tmp_path"] / "one-waiter-owner"
+    (owner / ".claude").mkdir(parents=True)
+    script = SCRIPTS_DIR / "th-inbox-wait.sh"
+    env = {**test_env["env"], "TH_INBOX_OWNER": str(owner), "TH_POLL_SEC": "1"}
+
+    first = subprocess.Popen(
+        [str(script), "30"], env=env, stdout=subprocess.PIPE, text=True
+    )
+    try:
+        time.sleep(0.1)
+        second = subprocess.Popen(
+            [str(script), "1"], env=env, stdout=subprocess.PIPE, text=True
+        )
+        assert first.wait(timeout=3) == 0
+        assert second.wait(timeout=3) == 0
+    finally:
+        for proc in (first, locals().get("second")):
+            if proc is not None and proc.poll() is None:
+                proc.terminate()
+                proc.wait(timeout=3)
+
+
+def test_th_launch_prints_inbox_wait_guidance(test_env: dict):
+    """Registration ends with the coordinator wakeup instruction when no waiter exists."""
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_launch_inbox_wait")
+    codex_stub = test_env["bin_dir"] / "codex"
+    codex_stub.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    codex_stub.chmod(0o755)
+    owner = test_env["tmp_path"] / "launch-owner"
+    owner.mkdir()
+
+    result = subprocess.run(
+        [str(SCRIPTS_DIR / "th-launch.sh"), str(task_dir)],
+        env={**test_env["env"], "TH_INBOX_OWNER": str(owner)},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines()[-1] == (
+        "[th-launch] 코디네이터: th-inbox-wait.sh가 백그라운드로 떠 있지 않으면 "
+        "지금 run_in_background로 실행"
+    )
+
+
+def test_th_watchd_does_not_renotify_rewritten_done_in_same_attempt(test_env: dict):
+    """A DONE report rewrite is still the same launch attempt and emits once."""
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_done_rewritten")
+    (task_dir / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
+    done = task_dir / "DONE"
+    done.write_text("initial completion\n", encoding="utf-8")
+    (test_env["watch_dir"] / "tasks.txt").write_text(f"{task_dir}\n", encoding="utf-8")
+    env = {**test_env["env"], "TH_ONCE": "1"}
+    watchd = SCRIPTS_DIR / "th-watchd.sh"
+
+    for contents in (
+        "initial completion\n",
+        "final report rewrite\n",
+        "final digest rewrite\n",
+    ):
+        if contents != "initial completion\n":
+            time.sleep(0.02)
+            done.write_text(contents, encoding="utf-8")
+        result = subprocess.run([str(watchd)], env=env, capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+
+    inbox_lines = (
+        (test_env["workspace"] / ".claude" / "inbox.md")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    )
+    event_lines = (
+        (test_env["watch_dir"] / "events.log").read_text(encoding="utf-8").splitlines()
+    )
+    assert (
+        sum("task_done_rewritten" in line and "완료" in line for line in inbox_lines)
+        == 1
+    )
+    assert (
+        sum("task_done_rewritten" in line and "[완료]" in line for line in event_lines)
+        == 1
+    )
+
+
 def test_th_watchd_normalizes_legacy_worktree_owner(test_env: dict):
     main = test_env["tmp_path"] / "owner-main"
     subprocess.run(["git", "init", str(main)], check=True, capture_output=True)
