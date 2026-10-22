@@ -1529,7 +1529,9 @@ def test_th_inbox_wait_reads_only_new_complete_lines_and_handles_rotation(
         [str(script), "0"], env=env, capture_output=True, text=True
     )
     assert initial.returncode == 0
-    assert initial.stdout == ""
+    assert initial.stdout == (
+        "[th-inbox-wait] 대기 시간 만료(사건 없음) — 다시 백그라운드로 실행할 것\n"
+    )
     cursor = inbox_dir / ".inbox_cursor"
     assert cursor.read_text(encoding="utf-8").strip() == str(len(inbox.read_bytes()))
 
@@ -1544,7 +1546,9 @@ def test_th_inbox_wait_reads_only_new_complete_lines_and_handles_rotation(
         [str(script), "0"], env=env, capture_output=True, text=True
     )
     assert repeated.returncode == 0
-    assert repeated.stdout == ""
+    assert repeated.stdout == (
+        "[th-inbox-wait] 대기 시간 만료(사건 없음) — 다시 백그라운드로 실행할 것\n"
+    )
 
     inbox.write_text("rotated event\n", encoding="utf-8")
     rotated = subprocess.run(
@@ -1553,6 +1557,50 @@ def test_th_inbox_wait_reads_only_new_complete_lines_and_handles_rotation(
     assert rotated.returncode == 0
     assert rotated.stdout.splitlines()[-1] == "rotated event"
     assert cursor.read_text(encoding="utf-8").strip() == str(len(inbox.read_bytes()))
+
+
+def test_th_inbox_wait_resolves_script_dir_through_symlink(test_env: dict):
+    owner = test_env["tmp_path"] / "symlink-inbox-owner"
+    inbox_dir = owner / ".claude"
+    inbox_dir.mkdir(parents=True)
+    inbox = inbox_dir / "inbox.md"
+    inbox.write_text("old event\n", encoding="utf-8")
+    linked_script = test_env["tmp_path"] / "bin" / "th-inbox-wait.sh"
+    linked_script.parent.mkdir(exist_ok=True)
+    linked_script.symlink_to(SCRIPTS_DIR / "th-inbox-wait.sh")
+    env = {**test_env["env"], "TH_INBOX_OWNER": str(owner), "TH_POLL_SEC": "1"}
+
+    initial = subprocess.run(
+        [str(linked_script), "0"], env=env, capture_output=True, text=True
+    )
+    assert initial.returncode == 0, initial.stderr
+    inbox.write_text("old event\nnew event\n", encoding="utf-8")
+
+    woke = subprocess.run(
+        [str(linked_script), "0"], env=env, capture_output=True, text=True
+    )
+    assert woke.returncode == 0, woke.stderr
+    assert woke.stdout.splitlines()[-1] == "new event"
+
+
+def test_th_inbox_wait_rejects_unresolved_owner(test_env: dict):
+    script = SCRIPTS_DIR / "th-inbox-wait.sh"
+    script_text = script.read_text(encoding="utf-8")
+    injected = script_text.replace(
+        "max_wait=${1:-21600}", "project_owner() { return 1; }\n\nmax_wait=${1:-21600}"
+    )
+    isolated = test_env["tmp_path"] / "isolated-inbox-wait.sh"
+    isolated.write_text(injected, encoding="utf-8")
+    isolated.chmod(0o755)
+    (test_env["tmp_path"] / "th-watch-lib.sh").symlink_to(
+        SCRIPTS_DIR / "th-watch-lib.sh"
+    )
+
+    failed = subprocess.run(
+        [str(isolated), "0"], env=test_env["env"], capture_output=True, text=True
+    )
+    assert failed.returncode == 2
+    assert "inbox owner를 해석할 수 없습니다" in failed.stderr
 
 
 def test_th_inbox_wait_newer_instance_stops_previous(test_env: dict):

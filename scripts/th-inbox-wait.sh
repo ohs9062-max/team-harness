@@ -3,9 +3,19 @@
 # 사용: th-inbox-wait.sh [max-wait-sec]
 set -u
 
-script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+script_path=$(readlink -f "${BASH_SOURCE[0]}") || {
+  echo "[th-inbox-wait] 스크립트 경로를 해석할 수 없습니다." >&2
+  exit 2
+}
+script_dir=$(cd "$(dirname "$script_path")" && pwd) || {
+  echo "[th-inbox-wait] 스크립트 디렉터리를 해석할 수 없습니다." >&2
+  exit 2
+}
 # shellcheck source=scripts/th-watch-lib.sh
-source "$script_dir/th-watch-lib.sh"
+if ! source "$script_dir/th-watch-lib.sh"; then
+  echo "[th-inbox-wait] th-watch-lib.sh를 로드할 수 없습니다." >&2
+  exit 2
+fi
 
 max_wait=${1:-21600}
 poll_sec=${TH_POLL_SEC:-15}
@@ -13,8 +23,14 @@ case "$max_wait" in (*[!0-9]*|'') max_wait=21600 ;; esac
 case "$poll_sec" in (*[!0-9]*|'') poll_sec=15 ;; esac
 (( poll_sec < 1 )) && poll_sec=1
 
-owner=$(project_owner "$PWD")
-owner=$(realpath -m "$owner")
+if ! owner=$(project_owner "$PWD") || [[ -z $owner ]]; then
+  echo "[th-inbox-wait] inbox owner를 해석할 수 없습니다." >&2
+  exit 2
+fi
+if ! owner=$(realpath -m "$owner") || [[ -z $owner || $owner == / ]]; then
+  echo "[th-inbox-wait] 안전한 inbox owner를 해석할 수 없습니다." >&2
+  exit 2
+fi
 inbox_dir="$owner/.claude"
 inbox_file="$inbox_dir/inbox.md"
 cursor_file="$inbox_dir/.inbox_cursor"
@@ -90,5 +106,8 @@ while (( $(date +%s) < deadline )); do
 done
 
 # Also inspect once for max-wait=0 and for an event arriving at the deadline.
-check_inbox || true
+if check_inbox; then
+  exit 0
+fi
+echo '[th-inbox-wait] 대기 시간 만료(사건 없음) — 다시 백그라운드로 실행할 것'
 exit 0
