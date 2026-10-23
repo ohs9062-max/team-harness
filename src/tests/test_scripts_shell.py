@@ -204,13 +204,13 @@ def test_watch_keeps_existing_dead_reason_without_step_records(test_env: dict):
     (test_env["watch_dir"] / "tasks.txt").write_text(f"{task_dir}\n", encoding="utf-8")
     result = subprocess.run(
         [str(SCRIPTS_DIR / "th-watch.sh"), "2"],
-        env={**test_env["env"], "TH_POLL_SEC": "1"},
+        env={**test_env["env"], "TH_POLL_SEC": "1", "TH_HANDOFF_STALL_MIN": "0"},
         capture_output=True,
         text=True,
     )
     assert result.returncode == 0
     assert (
-        "실패 의심 — job.pid(999998) 종료, DONE/FAILED 없음; STATUS: 없음"
+        "워커 중단(인계 없음) — job.pid(999998) 종료, DONE/FAILED 없음; STATUS: 없음"
         in result.stdout
     )
     assert "중단 단계=" not in result.stdout
