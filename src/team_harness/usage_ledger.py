@@ -12,6 +12,7 @@ from dataclasses import asdict
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
+from datetime import tzinfo
 from datetime import UTC
 import importlib.util
 import json
@@ -19,10 +20,12 @@ import os
 from pathlib import Path
 import re
 import shutil
+import subprocess
 import sys
 from typing import Any
 from typing import Iterable
 import unicodedata
+from zoneinfo import ZoneInfo
 
 # Load this standard-library sibling by path so ``python3 usage_ledger.py``
 # never imports the package's optional runtime dependencies.
@@ -41,15 +44,18 @@ JOURNAL_RE = re.compile(
     r"(?P<task>.+?) \| worker=(?P<worker>[^ ]+) model=(?P<model>.+?) "
     r"task\.md=(?P<task_md>.+?) \| (?P<owner>[^|]+?)(?: \| (?P<override>.*))?$"
 )
-STATUS_TIME_RE = re.compile(r"^\[?(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?)")
+STATUS_TIME_RE = re.compile(
+    r"^\[?(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})?)"
+)
 TOKEN_RE = re.compile(r"tokens used\s*\n\s*([\d,]+)", re.IGNORECASE)
+LOCAL_JOURNAL_TZ = ZoneInfo("Asia/Seoul")
 
 
 def iso_now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def parse_time(value: str | None) -> datetime | None:
+def parse_time(value: str | None, *, naive_tz: tzinfo = UTC) -> datetime | None:
     if not value:
         return None
     try:
@@ -63,7 +69,7 @@ def parse_time(value: str | None) -> datetime | None:
                 continue
         else:
             return None
-    return parsed.replace(tzinfo=parsed.tzinfo or UTC).astimezone(UTC)
+    return parsed.replace(tzinfo=parsed.tzinfo or naive_tz).astimezone(UTC)
 
 
 def format_time(value: datetime | None) -> str | None:
@@ -72,6 +78,15 @@ def format_time(value: datetime | None) -> str | None:
 
 def project_name(owner: str | None, task: Path) -> str:
     raw = owner or ""
+    # Orca names worktrees ``~/orca/workspaces/<project>/<worktree>``.  Group
+    # all sibling worktrees under their shared project rather than the leaf.
+    for candidate in (Path(raw).expanduser(), task):
+        try:
+            index = candidate.parts.index("workspaces")
+        except ValueError:
+            continue
+        if len(candidate.parts) > index + 1:
+            return candidate.parts[index + 1]
     if raw:
         return Path(raw).name or raw
     for part in reversed(task.parts):
@@ -98,7 +113,7 @@ def status_times(task: Path) -> tuple[datetime | None, datetime | None, str]:
     values = []
     for line in read_text(task / "STATUS").splitlines():
         match = STATUS_TIME_RE.match(line.strip())
-        if match and (value := parse_time(match.group(1))):
+        if match and (value := parse_time(match.group(1), naive_tz=LOCAL_JOURNAL_TZ)):
             values.append(value)
     if values:
         return values[0], values[-1], "STATUS"
@@ -170,40 +185,87 @@ def load_jsonl(path: Path) -> list[dict[str, Any]]:
     return output
 
 
+def worktree_roots(workspace: Path) -> set[Path]:
+    """Return worktrees registered with the current repository, if available."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(workspace), "worktree", "list", "--porcelain"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return set()
+    return {
+        Path(line.removeprefix("worktree ")).expanduser().resolve()
+        for line in result.stdout.splitlines()
+        if line.startswith("worktree ")
+    }
+
+
+def orca_workspace_roots(home: Path) -> set[Path]:
+    return {
+        path.resolve()
+        for path in (home / "orca" / "workspaces").glob("*/*")
+        if path.is_dir()
+    }
+
+
+def journal_paths(workspace: Path, home: Path | None = None) -> list[Path]:
+    roots = {workspace.resolve(), *worktree_roots(workspace)}
+    roots.update(orca_workspace_roots(home or Path.home()))
+    return sorted(
+        {
+            journal.resolve()
+            for root in roots
+            for journal in (root / ".claude").glob("work_log*.md")
+        }
+    )
+
+
+def journal_items(workspace: Path) -> list[dict[str, str | None]]:
+    """Read instruction records once, resolving relative task paths per journal."""
+    records = []
+    seen = set()
+    for journal in journal_paths(workspace):
+        journal_workspace = journal.parent.parent
+        for line in read_text(journal).splitlines():
+            found = JOURNAL_RE.match(line)
+            if not found:
+                continue
+            item = found.groupdict()
+            task = Path(str(item["task"])).expanduser()
+            item["task"] = str(
+                (task if task.is_absolute() else journal_workspace / task).resolve()
+            )
+            stamp = parse_time(item["at"], naive_tz=LOCAL_JOURNAL_TZ)
+            key = (item["task"], format_time(stamp) if stamp else item["at"])
+            if key not in seen:
+                seen.add(key)
+                records.append(item)
+    return records
+
+
 def task_dirs(watch_dir: Path, workspace: Path) -> set[Path]:
     output = {
         Path(line).expanduser().resolve()
         for line in read_text(watch_dir / "tasks.txt").splitlines()
         if line.strip()
     }
-    # The active project's historical log can reference tasks that are no longer registered.
-    for journal in (workspace / ".claude").glob("work_log*.md"):
-        for line in read_text(journal).splitlines():
-            found = JOURNAL_RE.match(line)
-            if found:
-                output.add(Path(found.group("task")).expanduser().resolve())
+    # Journals preserve tasks removed from the current registry.
+    output.update(
+        Path(task) for item in journal_items(workspace) if (task := item.get("task"))
+    )
     return output
 
 
 def journal_records(
     task_paths: Iterable[Path], workspace: Path
 ) -> list[dict[str, Any]]:
-    owners = {workspace.resolve()}
-    for task in task_paths:
-        owner = read_text(task / ".th_owner").strip()
-        if owner:
-            owners.add(Path(owner).expanduser().resolve())
-    records = []
-    for owner in owners:
-        for journal in (owner / ".claude").glob("work_log*.md"):
-            for line in read_text(journal).splitlines():
-                found = JOURNAL_RE.match(line)
-                if not found:
-                    continue
-                item = found.groupdict()
-                item["task"] = str(Path(item["task"]).expanduser().resolve())
-                records.append(item)
-    return records
+    del (
+        task_paths
+    )  # Discovery is journal-based so deleted registry entries remain visible.
+    return journal_items(workspace)
 
 
 def build_attempts(watch_dir: Path, workspace: Path) -> list[Attempt]:
@@ -220,13 +282,15 @@ def build_attempts(watch_dir: Path, workspace: Path) -> list[Attempt]:
     # Historical entries fill gaps only; matching task/worker/model is one attempt.
     for record in journals:
         existing = by_task[record["task"]]
-        journal_at = parse_time(record["at"])
+        journal_at = parse_time(record["at"], naive_tz=LOCAL_JOURNAL_TZ)
         if any(
             e.get("worker") == record["worker"]
             and e.get("model") == record["model"]
-            and parse_time(str(e.get("at", "")))
+            and parse_time(str(e.get("at", "")), naive_tz=LOCAL_JOURNAL_TZ)
             and journal_at
-            and parse_time(str(e.get("at", ""))).replace(second=0, microsecond=0)
+            and parse_time(str(e.get("at", "")), naive_tz=LOCAL_JOURNAL_TZ).replace(
+                second=0, microsecond=0
+            )
             == journal_at.replace(second=0, microsecond=0)
             for e in existing
         ):
@@ -241,7 +305,10 @@ def build_attempts(watch_dir: Path, workspace: Path) -> list[Attempt]:
         first, last, time_source = status_times(task)
         for index, record in enumerate(records, 1):
             attempt = int(record.get("attempt") or index)
-            started = parse_time(str(record.get("at", ""))) or first
+            started = (
+                parse_time(str(record.get("at", "")), naive_tz=LOCAL_JOURNAL_TZ)
+                or first
+            )
             # Only the current attempt has an observable final status; archived attempts are interrupted unless logs say otherwise.
             current = attempt == max(
                 int(x.get("attempt") or pos + 1) for pos, x in enumerate(records)
@@ -249,14 +316,17 @@ def build_attempts(watch_dir: Path, workspace: Path) -> list[Attempt]:
             ended = (
                 last
                 if current
-                else parse_time(str(records[index].get("at", "")))
+                else parse_time(
+                    str(records[index].get("at", "")), naive_tz=LOCAL_JOURNAL_TZ
+                )
                 if index < len(records)
                 else None
             )
             result = task_result(task) if current else "interrupted"
+            invalid_duration = bool(started and ended and ended < started)
             wall = (
                 round((ended - started).total_seconds() / 60, 1)
-                if started and ended
+                if started and ended and not invalid_duration
                 else None
             )
             output.append(
@@ -279,7 +349,14 @@ def build_attempts(watch_dir: Path, workspace: Path) -> list[Attempt]:
                     if record.get("worker") == "codex"
                     else None,
                     result=result,
-                    source=f"{record.get('source', 'usage')}+{time_source}",
+                    source=(
+                        f"{record.get('source', 'usage')}+{time_source}"
+                        + (
+                            "+duration_invalid(ended_before_started)"
+                            if invalid_duration
+                            else ""
+                        )
+                    ),
                     owner=record.get("owner"),
                     override=record.get("override"),
                 )
@@ -290,6 +367,7 @@ def build_attempts(watch_dir: Path, workspace: Path) -> list[Attempt]:
         if str(task) in known:
             continue
         start, end, source = status_times(task)
+        invalid_duration = bool(start and end and end < start)
         output.append(
             Attempt(
                 project_name(read_text(task / ".th_owner").strip(), task),
@@ -300,10 +378,17 @@ def build_attempts(watch_dir: Path, workspace: Path) -> list[Attempt]:
                 None,
                 format_time(start),
                 format_time(end),
-                round((end - start).total_seconds() / 60, 1) if start and end else None,
+                round((end - start).total_seconds() / 60, 1)
+                if start and end and not invalid_duration
+                else None,
                 None,
                 task_result(task),
-                f"registry+{source}",
+                f"registry+{source}"
+                + (
+                    "+duration_invalid(ended_before_started)"
+                    if invalid_duration
+                    else ""
+                ),
             )
         )
     return sorted(
@@ -560,7 +645,7 @@ def main(argv: list[str] | None = None) -> int:
                     "평균 분",
                     "검수 통과",
                 ],
-                summary or [["없음"] * 9],
+                summary or [["(해당 없음)"] + [""] * 8],
             )
         )
         top = sorted(
@@ -583,7 +668,7 @@ def main(argv: list[str] | None = None) -> int:
                     ]
                     for r in top
                 ]
-                or [["없음"] * 6],
+                or [["(해당 없음)"] + [""] * 5],
             )
         )
     print(
