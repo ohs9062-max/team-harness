@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
 from datetime import UTC
-from importlib import import_module
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -24,11 +24,16 @@ from typing import Any
 from typing import Iterable
 import unicodedata
 
-# Permit direct system-Python execution from the installed shell wrapper while
-# retaining a package-qualified import for static analysis and normal module use.
-if not __package__:
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-terminal_status = import_module("team_harness.worker_digest").terminal_status
+# Load this standard-library sibling by path so ``python3 usage_ledger.py``
+# never imports the package's optional runtime dependencies.
+_digest_spec = importlib.util.spec_from_file_location(
+    "usage_ledger_worker_digest", Path(__file__).with_name("worker_digest.py")
+)
+if _digest_spec is None or _digest_spec.loader is None:  # pragma: no cover
+    raise RuntimeError("worker_digest.py를 불러올 수 없습니다")
+_digest = importlib.util.module_from_spec(_digest_spec)
+_digest_spec.loader.exec_module(_digest)
+terminal_status = _digest.terminal_status
 
 
 JOURNAL_RE = re.compile(
