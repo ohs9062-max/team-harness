@@ -118,6 +118,103 @@ def _create_task_dir(
     return task_dir
 
 
+def test_th_launch_appends_deterministic_step_recovery_summary(test_env: dict):
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_step_recovery")
+    (task_dir / "STATUS").write_text(
+        "\n".join(
+            (
+                "2026-10-23 10:00:00 START step=prepare replay=safe",
+                "2026-10-23 10:01:00 END step=prepare rc=0 out=out/prepare",
+                "2026-10-23 10:02:00 START step=eval replay=safe",
+                "2026-10-23 10:03:00 START step=push replay=never",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    prompt_fifo = task_dir / "prompt.fifo"
+    os.mkfifo(prompt_fifo)
+    test_env["bin_dir"].joinpath("codex").write_text(
+        f"#!/usr/bin/env bash\nprintf '%s\\n' \"$@\" > {prompt_fifo}\n",
+        encoding="utf-8",
+    )
+    test_env["bin_dir"].joinpath("codex").chmod(0o755)
+
+    result = subprocess.run(
+        [str(SCRIPTS_DIR / "th-launch.sh"), str(task_dir)],
+        env=test_env["env"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    recovery = (task_dir / "RECOVERY.md").read_text(encoding="utf-8")
+    assert "prepare(out=out/prepare)" in recovery
+    assert "중단 replay=safe" in recovery and "eval" in recovery
+    assert "중단 replay=never/inspect" in recovery and "push(replay=never)" in recovery
+    assert len(recovery.splitlines()) <= 20
+    assert recovery in prompt_fifo.read_text(encoding="utf-8")
+
+    no_steps = _create_task_dir(test_env["tmp_path"], "task_no_step_recovery")
+    result = subprocess.run(
+        [str(SCRIPTS_DIR / "th-launch.sh"), str(no_steps)],
+        env=test_env["env"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert not (no_steps / "RECOVERY.md").exists()
+    assert "이전 시도 복구 요약" not in (no_steps / "codex.log").read_text(
+        encoding="utf-8"
+    )
+
+
+@pytest.mark.parametrize(
+    ("replay", "expected"),
+    (("never", "증거 확인 필요, 자동 재실행 금지"), ("safe", "다시 실행 가능")),
+)
+def test_watch_reports_open_step_replay_policy(
+    test_env: dict, replay: str, expected: str
+):
+    task_dir = _create_task_dir(test_env["tmp_path"], f"task_open_{replay}")
+    (task_dir / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
+    (task_dir / "STATUS").write_text(
+        f"2026-10-23 10:00:00 START step=publish replay={replay}\n", encoding="utf-8"
+    )
+    (task_dir / "worker.pid").write_text("999999\n", encoding="utf-8")
+    (task_dir / "job.pid").write_text("999998\n", encoding="utf-8")
+    (test_env["watch_dir"] / "tasks.txt").write_text(f"{task_dir}\n", encoding="utf-8")
+    result = subprocess.run(
+        [str(SCRIPTS_DIR / "th-watch.sh"), "2"],
+        env={**test_env["env"], "TH_POLL_SEC": "1"},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0
+    assert "중단 단계=publish" in result.stdout
+    assert f"replay={replay}" in result.stdout
+    assert expected in result.stdout
+
+
+def test_watch_keeps_existing_dead_reason_without_step_records(test_env: dict):
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_no_open_step")
+    (task_dir / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
+    (task_dir / "worker.pid").write_text("999999\n", encoding="utf-8")
+    (task_dir / "job.pid").write_text("999998\n", encoding="utf-8")
+    (test_env["watch_dir"] / "tasks.txt").write_text(f"{task_dir}\n", encoding="utf-8")
+    result = subprocess.run(
+        [str(SCRIPTS_DIR / "th-watch.sh"), "2"],
+        env={**test_env["env"], "TH_POLL_SEC": "1"},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0
+    assert (
+        "실패 의심 — job.pid(999998) 종료, DONE/FAILED 없음; STATUS: 없음"
+        in result.stdout
+    )
+    assert "중단 단계=" not in result.stdout
+
+
 def test_th_launch_retains_th_owner(test_env: dict):
     """ops-07: Verify th-launch leaves .th_owner in task directory pointing to TH_WORKSPACE."""
     task_dir = _create_task_dir(test_env["tmp_path"], "task_launch")

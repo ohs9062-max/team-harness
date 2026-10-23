@@ -543,6 +543,18 @@ if [[ -n $handoff_prompt ]]; then
 $handoff_prompt"
 fi
 
+# STATUS is the durable step record.  Preserve all earlier attempts (including
+# before the most recent LAUNCH) and give a fresh worker only its small,
+# deterministic recovery note.
+recovery_summary=$(PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" python3 -m team_harness.step_records summary "$task_dir")
+if [[ -n $recovery_summary ]]; then
+  printf '%s' "$recovery_summary" > "$task_dir/RECOVERY.md"
+  task_body="$task_body
+
+---
+$recovery_summary"
+fi
+
 worker_header='너는 team-harness 워커다(TH_ROLE=worker). 코디네이터가 아니다. 이 지시서의 작업만 하고 결과는 결과 폴더에만 남긴다.'
 prompt="$worker_header
 

@@ -52,6 +52,22 @@ worker_digest_program() {
   printf '%s/../src/team_harness/worker_digest.py\n' "$lib_dir"
 }
 
+open_step_detail() {
+  local task=$1 program step replay at out action
+  program=$(worker_digest_program)
+  IFS=$'\t' read -r step replay at out < <(
+    PYTHONPATH="$(dirname "$program")/..${PYTHONPATH:+:$PYTHONPATH}" \
+      python3 -m team_harness.step_records open-steps "$task" | tail -n 1
+  ) || true
+  [[ -n ${step:-} ]] || return 0
+  if [[ $replay == safe ]]; then
+    action='다시 실행 가능'
+  else
+    action='증거 확인 필요, 자동 재실행 금지'
+  fi
+  printf ' 중단 단계=%s replay=%s → %s' "$step" "$replay" "$action"
+}
+
 project_owner() {
   # Worktrees share the main repository's common .git directory, so use its
   # parent as the one coordinator inbox for the whole project.
@@ -275,7 +291,7 @@ inspect_task_event() {
       else
         job_pid=$(cat "$task/job.pid" 2>/dev/null || true)
         status_detail=$(status_failure_reason "$task/STATUS")
-        "$callback_fn" "$task" "실패 의심" "실패 의심 — job.pid(${job_pid:-?}) 종료, DONE/FAILED 없음; STATUS: ${status_detail:-없음}" "-" "$owner"
+        "$callback_fn" "$task" "실패 의심" "실패 의심 — job.pid(${job_pid:-?}) 종료, DONE/FAILED 없음; STATUS: ${status_detail:-없음}$(open_step_detail "$task")" "-" "$owner"
       fi
     fi
     return 0
@@ -321,7 +337,7 @@ inspect_task_event() {
     fi
     if [[ ! -f $marker.dead ]]; then
       touch "$marker.dead"
-      "$callback_fn" "$task" "중단" "중단 — 실행 중인 프로세스 없음, DONE/FAILED 없음" "-" "$owner"
+      "$callback_fn" "$task" "중단" "중단 — 실행 중인 프로세스 없음, DONE/FAILED 없음$(open_step_detail "$task")" "-" "$owner"
     fi
     return 0
   fi

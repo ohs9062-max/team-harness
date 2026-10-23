@@ -495,3 +495,14 @@ manifest·정상 반환 의미를 보존하고 별도 context 상태를 추가�
 WIP 커밋 없이 인계한다. TH-D28 digest와 ths에 한 줄만 더하며 새 감시 LLM은 만들지 않는다.
 구현은 2단계(측정·판정·등록부·CLI), 3단계(세 경로 연결·문서)로 나누고 일부 경로만
 바꿔 재실행하지 않는다. 이 커밋은 설계만 추가하며 실행 동작이나 설정은 변경하지 않는다.
+
+## TH-D35. STATUS 단계 기록과 replay 정책으로 재시작을 요약한다
+
+**결정.** STATUS에 `START step=… replay=safe|never|inspect`와 `END step=… rc=… out=…`를
+append-only로 기록하고, relaunch 때 완료·실패·열린 단계를 결정적으로 요약한다.
+
+**이유.** FAILED 없이 죽은 작업과 재시도로 인한 토큰·GPU 중복 소비를 구분한다.
+
+**하지 않는 것.** 세션 복원, 자동 재실행, 별도 장부 파일은 추가하지 않는다.
+
+**출처.** vercel-labs/durable-harness의 intent/outcome·replay 아이디어만 참고했고 코드는 복사하지 않았다.

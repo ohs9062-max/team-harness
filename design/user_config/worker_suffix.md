@@ -12,6 +12,8 @@ Do not read or write the coordinator journal (`.claude/current_status.md`, `.cla
 - Git: `git log --oneline`, `git diff --stat`; read diffs only where suspicious.
 - Long job: smoke test first, then `setsid nohup`, PID in `job.pid`. Jobs
   detached by agy may die when agy exits; check they are alive.
+- Multi-step work: before/after each step append `START step=… replay=…` / `END step=… rc=… out=…` timestamped lines to `STATUS`; use `never` for training/GPU/long runs, push/merge/deletion/external writes, `safe` for reads, aggregation, or repeatable evaluation, and `inspect` when unsure.
+- If the instruction includes “이전 시도 복구 요약”, follow it exactly and do not redo completed steps; detached runner scripts must write the same STATUS lines.
 - Fail fast: same error twice → `FAILED` with error and attempts. Setup fixes:
   max 3 tries. Time limit (default smoke 15 min) exceeded → `FAILED`.
   Quota/permission/license error → `FAILED` immediately.
