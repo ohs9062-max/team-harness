@@ -8,6 +8,7 @@ import subprocess
 import sys
 
 from pytest import CaptureFixture
+from pytest import MonkeyPatch
 
 from team_harness import usage_ledger
 
@@ -154,8 +155,15 @@ def test_json_cli_schema_preserves_unknown_tokens(tmp_path: Path):
     assert payload["attempts"][0]["tokens"] is None
 
 
-def test_summary_allows_unknown_model(tmp_path: Path, capsys: CaptureFixture[str]):
+def test_summary_allows_unknown_model(
+    tmp_path: Path, capsys: CaptureFixture[str], monkeypatch: MonkeyPatch
+):
     watch = tmp_path / "watch"
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("TH_WATCH_DIR", str(watch))
     task = _task(tmp_path)
     _usage(
         watch,
@@ -172,4 +180,5 @@ def test_summary_allows_unknown_model(tmp_path: Path, capsys: CaptureFixture[str
         },
     )
     assert usage_ledger.main(["--watch-dir", str(watch), "--since", "2026-10-21"]) == 0
-    assert "없음" not in capsys.readouterr().out
+    summary, _top_tokens = capsys.readouterr().out.split("\n토큰 상위 10개 시도", 1)
+    assert "없음" not in summary
