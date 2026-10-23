@@ -6,6 +6,7 @@ and mocked worker CLI binaries (codex, agy, claude) on PATH.
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import re
@@ -158,6 +159,12 @@ def test_th_launch_retains_th_owner(test_env: dict):
     assert worker_pid_file.is_file(), "worker.pid must exist"
     tasks_txt = test_env["watch_dir"] / "tasks.txt"
     assert str(task_dir) in tasks_txt.read_text(encoding="utf-8")
+    launch = json.loads(
+        (test_env["watch_dir"] / "usage.jsonl").read_text(encoding="utf-8")
+    )
+    assert launch["task"] == str(task_dir)
+    assert launch["attempt"] == 1
+    assert launch["worker"] == "codex"
 
 
 def test_th_launch_appends_launch_status_and_avoids_prior_status_failure(

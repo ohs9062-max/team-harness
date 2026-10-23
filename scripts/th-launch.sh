@@ -484,6 +484,23 @@ PYEOF
 
 journal_append
 mkdir -p "$watch_dir"; touch "$watch_dir/tasks.txt"
+usage_record() {
+  local usage_file="$watch_dir/usage.jsonl" attempt at owner_json override_json
+  at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+  attempt=$(awk -v task="$task_dir" 'BEGIN { n=0 } $0 ~ /"task"/ && index($0, "\"task\":\"" task "\"") { n++ } END { print n + 1 }' "$usage_file" 2>/dev/null || printf '1')
+  owner_json=$(printf '%s' "$journal_workspace" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')
+  override_json=$(printf '%s' "${policy_override:-}" | python3 -c 'import json,sys; x=sys.stdin.read(); print(json.dumps(x if x else None))')
+  if ! (
+    flock -x 200
+    printf '{"v":1,"at":"%s","task":%s,"attempt":%s,"worker":%s,"model":%s,"effort":%s,"owner":%s,"override":%s}\n' \
+      "$at" "$(printf '%s' "$task_dir" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" "$attempt" \
+      "$(printf '%s' "$worker_type" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" "$(printf '%s' "$model" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" \
+      "$(printf '%s' "$effort" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" "$owner_json" "$override_json" >> "$usage_file"
+  ) 200>>"$usage_file"; then
+    printf 'warning: usage ledger append failed; launch continues\n' >&2
+  fi
+}
+usage_record
 rm -f "$task_dir"/DONE "$task_dir"/FAILED "$task_dir"/FAILED.* "$task_dir"/.th_* \
   "$task_dir"/VERIFIED "$task_dir"/VERIFY_FAILED "$task_dir"/verify_result.json \
   "$task_dir"/verify_result.txt "$task_dir"/digest.md "$task_dir"/context_exit_requested.json
