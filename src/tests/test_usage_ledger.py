@@ -7,6 +7,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+from pytest import CaptureFixture
+
 from team_harness import usage_ledger
 
 
@@ -150,3 +152,24 @@ def test_json_cli_schema_preserves_unknown_tokens(tmp_path: Path):
     payload = json.loads(result.stdout)
     assert set(payload) == {"since", "attempts", "claude"}
     assert payload["attempts"][0]["tokens"] is None
+
+
+def test_summary_allows_unknown_model(tmp_path: Path, capsys: CaptureFixture[str]):
+    watch = tmp_path / "watch"
+    task = _task(tmp_path)
+    _usage(
+        watch,
+        {
+            "v": 1,
+            "at": "2026-10-22T10:00:00Z",
+            "task": str(task),
+            "attempt": 1,
+            "worker": "agy",
+            "model": None,
+            "effort": None,
+            "owner": str(tmp_path),
+            "override": None,
+        },
+    )
+    assert usage_ledger.main(["--watch-dir", str(watch), "--since", "2026-10-21"]) == 0
+    assert "없음" not in capsys.readouterr().out

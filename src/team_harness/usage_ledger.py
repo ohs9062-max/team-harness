@@ -526,7 +526,9 @@ def main(argv: list[str] | None = None) -> int:
         for row in rows:
             groups[(row.project, row.model)].append(row)
         summary = []
-        for (project, model), values in sorted(groups.items()):
+        for (project, model), values in sorted(
+            groups.items(), key=lambda item: (item[0][0], item[0][1] or "")
+        ):
             known = [v.tokens for v in values if v.tokens is not None]
             walls = [v.wall_min for v in values if v.wall_min is not None]
             verified = [v for v in values if v.result in {"verified", "verify_failed"}]
