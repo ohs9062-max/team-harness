@@ -518,3 +518,16 @@ append-only로 기록하고, relaunch 때 완료·실패·열린 단계를 결�
 
 **하지 않는 것.** FAILED, `never`/`inspect`, 단계 기록 없음은 자동 재시도하지 않으며, 모델·추론
 노력을 올리거나 다른 모델로 바꾸지 않는다.
+
+## TH-D37. 분리 job 인계 대기를 거르고, 인계 없는 워커 중단만 알린다
+
+**결정.** `job_completed`는 inbox 대신 events.log에만 기록한다. worker와 job이 모두 죽고
+DONE/FAILED가 없으면 pid별 마커로 `TH_HANDOFF_STALL_MIN`(기본 5분)을 기다린 뒤에만
+`워커 중단(인계 없음)`을 한 번 알리며 STATUS 마지막 줄과 열린 단계를 포함한다. 분리 실행은
+단일 `setsid nohup` runner가 train→evaluate→plots→report→DONE/FAILED를 끝까지 기록한다.
+
+**이유.** 2026-10-23 robot_vision3_autolabel에서 정상 인계와 실제 종료가 같은 알림으로 네 번
+반복되어 코디네이터 토큰을 소비하고 실제 중단은 19분 늦었다.
+
+**하지 않는 것.** LLM 폴링이나 기존 DONE/FAILED·쿼터·프로세스 소실·10분 멈춤 알림을 제거하지
+않는다. TH-D36 safe 단계 자동 재시도는 인계 없음 통지보다 먼저 유지한다.

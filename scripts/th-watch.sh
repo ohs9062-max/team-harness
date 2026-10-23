@@ -106,7 +106,7 @@ task_processes_dead() {
 notify() {
   local task=$1 message=$2
   local kind='실패'
-  [[ $message == 완료* || $message == "잡 완료"* ]] && kind='완료'
+  [[ $message == 완료* ]] && kind='완료'
   mkdir -p "$(dirname "$journal_log")"
   rotate_journal_if_needed
   touch "$journal_log"
@@ -129,15 +129,13 @@ handle_watch_event() {
   # cleanup.  Keep it registered until both the worker and any detached job
   # are gone.  Non-terminal notices (such as quota) never unregister it.
   case "$event_type" in
-    완료|'잡 완료'|실패|'실패 의심'|중단)
+    완료|실패|중단|'워커 중단(인계 없음)')
       task_processes_dead "$task" && remove_task "$task"
       ;;
   esac
   if [[ $event_type == "완료" ]]; then
     notify "$name" "완료 (검수 $v_res)"
-  elif [[ $event_type == "잡 완료" ]]; then
-    notify "$name" "$summary"
-  elif [[ $event_type == "실패" || $event_type == "실패 의심" || $event_type == "중단" ]]; then
+  elif [[ $event_type == "실패" || $event_type == "실패 의심" || $event_type == "중단" || $event_type == "워커 중단(인계 없음)" ]]; then
     notify "$name" "$summary"
   elif [[ $event_type == "워커 오류(쿼터·용량)" ]]; then
     # A quota lock prevents new launches, but this worker can still finish and
@@ -155,7 +153,7 @@ while (( $(date +%s) < deadline )); do
     # Once an already-notified terminal task has fully exited, reap it without
     # emitting a duplicate notice.  Do not mutate another coordinator's task
     # merely because this watcher skipped its owner-filtered event.
-    if [[ -f $task/.th_notified.done || -f $task/.th_notified.failed || -f $task/.th_notified.job_done || -f $task/.th_notified.dead ]] && task_processes_dead "$task"; then
+    if [[ -f $task/.th_notified.done || -f $task/.th_notified.failed || -f $task/.th_notified.dead || -n $(compgen -G "$task/.th_notified.handoff_stall.*") ]] && task_processes_dead "$task"; then
       remove_task "$task"
     fi
   done < "$registry"

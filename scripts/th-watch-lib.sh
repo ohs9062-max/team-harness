@@ -166,6 +166,22 @@ print(line[:200], end="")
 PY
 }
 
+status_last_start_epoch() {
+  # A later START is evidence that a worker already handed work to its next
+  # step.  Treat unparseable or legacy STATUS lines as no evidence.
+  local status_file=$1 line timestamp
+  [[ -f $status_file ]] || return 0
+  line=$(grep 'START step=' "$status_file" 2>/dev/null | tail -n 1) || return 0
+  [[ $line =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2}[[:space:]T][0-9]{2}:[0-9]{2}(:[0-9]{2})?([[:space:]Z]|[+-][0-9]{2}:[0-9]{2})?) ]] || return 0
+  timestamp=${BASH_REMATCH[1]}
+  date -d "$timestamp" +%s 2>/dev/null || true
+}
+
+watch_event_log() {
+  local watch_dir=$1 task=$2 detail=$3
+  printf '%s [인계 대기] %s: %s\n' "$(date '+%F %T')" "$task" "$detail" >> "$watch_dir/events.log"
+}
+
 safe_step_auto_retry() {
   # The interactive watcher only reports.  The daemon alone may relaunch a
   # bounded, explicitly safe step, and never changes its worker settings.
@@ -326,6 +342,19 @@ inspect_task_event() {
     IFS=$'\t' read -r ctx_event distinct_job_alive ctx_detail <<< "$ctx_line"
   fi
 
+  # A resumed worker or replacement detached job cancels any earlier handoff
+  # wait.  Do this before event routing because a live replacement does not
+  # itself emit job_completed.
+  local current_worker_pid current_job_pid current_worker_alive=0
+  current_worker_pid=$(cat "$task/worker.pid" 2>/dev/null || true)
+  current_job_pid=$(cat "$task/job.pid" 2>/dev/null || true)
+  if [[ $current_worker_pid =~ ^[1-9][0-9]*$ ]] && kill -0 "$current_worker_pid" 2>/dev/null; then
+    current_worker_alive=1
+  fi
+  if (( current_worker_alive )) || [[ $distinct_job_alive == 1 ]]; then
+    rm -f "$marker".handoff_wait.*
+  fi
+
   local terminal failed_file program
   program=$(worker_digest_program)
   terminal=$(python3 "$program" terminal "$task")
@@ -353,6 +382,7 @@ inspect_task_event() {
       fi
       "$callback_fn" "$task" "완료" "완료" "$v_res" "$owner"
     fi
+    rm -f "$marker".handoff_wait.*
     return 0
   fi
 
@@ -371,6 +401,7 @@ inspect_task_event() {
       fi
       "$callback_fn" "$task" "실패" "실패 — $reason" "-" "$owner"
     fi
+    rm -f "$marker".handoff_wait.*
     return 0
   fi
 
@@ -385,20 +416,63 @@ inspect_task_event() {
     touch "$marker.worker_terminated"
     "$callback_fn" "$task" "긴 실행 대기" "$ctx_detail" "-" "$owner"
   elif [[ $ctx_event == "job_completed" ]]; then
-    if [[ ! -f $marker.job_done ]]; then
-      touch "$marker.job_done"
-      local worker_pid worker_alive=0 job_pid status_detail
-      worker_pid=$(cat "$task/worker.pid" 2>/dev/null || true)
-      if [[ $worker_pid =~ ^[1-9][0-9]*$ ]] && kill -0 "$worker_pid" 2>/dev/null; then
-        worker_alive=1
-      fi
-      if (( worker_alive )); then
-        "$callback_fn" "$task" "잡 완료" "$ctx_detail" "-" "$owner"
-      else
-        job_pid=$(cat "$task/job.pid" 2>/dev/null || true)
-        status_detail=$(status_failure_reason "$task/STATUS")
-        "$callback_fn" "$task" "실패 의심" "실패 의심 — job.pid(${job_pid:-?}) 종료, DONE/FAILED 없음; STATUS: ${status_detail:-없음}$(open_step_detail "$task")" "-" "$owner"
-      fi
+    # A detached job ending is normally a handoff, not an actionable event.
+    # Only wake the coordinator when no worker has resumed it for the full
+    # grace period.  Markers are keyed by pid so a replacement job is fresh.
+    local worker_pid worker_alive=0 job_pid now_epoch wait_marker wait_since
+    worker_pid=$(cat "$task/worker.pid" 2>/dev/null || true)
+    job_pid=$(cat "$task/job.pid" 2>/dev/null || true)
+    if [[ $worker_pid =~ ^[1-9][0-9]*$ ]] && kill -0 "$worker_pid" 2>/dev/null; then
+      worker_alive=1
+    fi
+    if (( worker_alive )); then
+      rm -f "$marker.handoff_wait.${job_pid:-unknown}"
+      watch_event_log "$watch_dir" "$task" "job.pid(${job_pid:-?}) 종료, worker 생존 — 인계 진행 중"
+      return 0
+    fi
+
+    # Preserve TH-D36: the daemon gets the first chance to relaunch an open
+    # safe step; a successful retry must never also produce a handoff alert.
+    if [[ $marker_prefix == .th_daemon ]] && safe_step_auto_retry "$task" "$watch_dir" "$marker" "$callback_fn" "$owner"; then
+      rm -f "$marker.handoff_wait.${job_pid:-unknown}"
+      watch_event_log "$watch_dir" "$task" "job.pid(${job_pid:-?}) 종료, safe 단계 자동 재시도"
+      return 0
+    fi
+
+    now_epoch=$(date +%s)
+    wait_marker="$marker.handoff_wait.${job_pid:-unknown}"
+    if [[ -f $wait_marker ]]; then
+      wait_since=$(<"$wait_marker")
+    else
+      wait_since=$now_epoch
+      printf '%s\n' "$wait_since" > "$wait_marker"
+    fi
+    if [[ ! $wait_since =~ ^[0-9]+$ ]]; then
+      wait_since=$now_epoch
+      printf '%s\n' "$wait_since" > "$wait_marker"
+    fi
+    local last_start
+    last_start=$(status_last_start_epoch "$task/STATUS")
+    if [[ $last_start =~ ^[0-9]+$ ]] && (( last_start > wait_since )); then
+      rm -f "$wait_marker"
+      watch_event_log "$watch_dir" "$task" "job.pid(${job_pid:-?}) 종료 뒤 새 START 확인 — 인계 완료"
+      return 0
+    fi
+    local handoff_min=${TH_HANDOFF_STALL_MIN:-5}
+    case "$handoff_min" in (*[!0-9]*|'') handoff_min=5 ;; esac
+    local handoff_sec=$(( handoff_min * 60 ))
+    if (( now_epoch - wait_since < handoff_sec )); then
+      watch_event_log "$watch_dir" "$task" "job.pid(${job_pid:-?}) 종료, worker 없음 — 인계 대기 $(( now_epoch - wait_since ))/${handoff_sec}s"
+      return 0
+    fi
+    local handoff_marker="$marker.handoff_stall.${job_pid:-unknown}"
+    if [[ ! -f $handoff_marker ]]; then
+      touch "$handoff_marker"
+      local status_detail
+      status_detail=$(status_failure_reason "$task/STATUS")
+      "$callback_fn" "$task" "워커 중단(인계 없음)" "워커 중단(인계 없음) — job.pid(${job_pid:-?}) 종료, DONE/FAILED 없음; STATUS: ${status_detail:-없음}$(open_step_detail "$task")" "-" "$owner"
+    else
+      watch_event_log "$watch_dir" "$task" "job.pid(${job_pid:-?}) 인계 없음 사건은 이미 통지됨"
     fi
     return 0
   fi

@@ -185,11 +185,12 @@ def test_watch_reports_open_step_replay_policy(
     (test_env["watch_dir"] / "tasks.txt").write_text(f"{task_dir}\n", encoding="utf-8")
     result = subprocess.run(
         [str(SCRIPTS_DIR / "th-watch.sh"), "2"],
-        env={**test_env["env"], "TH_POLL_SEC": "1"},
+        env={**test_env["env"], "TH_POLL_SEC": "1", "TH_HANDOFF_STALL_MIN": "0"},
         capture_output=True,
         text=True,
     )
     assert result.returncode == 0
+    assert "워커 중단(인계 없음)" in result.stdout
     assert "중단 단계=publish" in result.stdout
     assert f"replay={replay}" in result.stdout
     assert expected in result.stdout
@@ -898,8 +899,10 @@ def test_th_watch_status_failure_keeps_live_task_and_reports_later_failed_file(
         worker.wait(timeout=5)
 
 
-def test_watchers_flag_dead_detached_job_as_suspected_failure(test_env: dict):
-    """Both watcher front ends classify a silent dead job as a suspected failure."""
+def test_watchers_filter_completed_job_handoffs_and_report_unhanded_worker(
+    test_env: dict,
+):
+    """A completed job is quiet unless its dead worker fails to hand off."""
     task_dir = _create_task_dir(test_env["tmp_path"], "task_silent_job_watch")
     (task_dir / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
     (task_dir / "STATUS").write_text(
@@ -911,12 +914,12 @@ def test_watchers_flag_dead_detached_job_as_suspected_failure(test_env: dict):
 
     watched = subprocess.run(
         [str(SCRIPTS_DIR / "th-watch.sh"), "1"],
-        env={**test_env["env"], "TH_POLL_SEC": "1"},
+        env={**test_env["env"], "TH_POLL_SEC": "1", "TH_HANDOFF_STALL_MIN": "0"},
         capture_output=True,
         text=True,
     )
     assert watched.returncode == 0
-    assert "실패 의심" in watched.stdout
+    assert "워커 중단(인계 없음)" in watched.stdout
     assert "job.pid(999998) 종료, DONE/FAILED 없음" in watched.stdout
     assert "STATUS: processing" in watched.stdout
 
@@ -940,7 +943,10 @@ def test_watchers_flag_dead_detached_job_as_suspected_failure(test_env: dict):
             text=True,
         )
         assert handoff.returncode == 0
-        assert "잡 완료" in handoff.stdout
+        assert handoff.stdout == ""
+        assert "worker 생존" in (test_env["watch_dir"] / "events.log").read_text(
+            encoding="utf-8"
+        )
         assert str(handoff_task) in (test_env["watch_dir"] / "tasks.txt").read_text(
             encoding="utf-8"
         )
@@ -960,13 +966,100 @@ def test_watchers_flag_dead_detached_job_as_suspected_failure(test_env: dict):
     )
     daemon = subprocess.run(
         [str(SCRIPTS_DIR / "th-watchd.sh")],
-        env={**test_env["env"], "TH_ONCE": "1"},
+        env={**test_env["env"], "TH_ONCE": "1", "TH_HANDOFF_STALL_MIN": "0"},
         capture_output=True,
         text=True,
     )
     assert daemon.returncode == 0, daemon.stderr
     inbox = (test_env["workspace"] / ".claude" / "inbox.md").read_text(encoding="utf-8")
-    assert "실패 의심" in inbox
+    assert "워커 중단(인계 없음)" in inbox
+
+
+def test_watchd_handoff_stall_grace_dedup_and_terminal_markers(test_env: dict):
+    """Handoff waits stay out of inbox, then notify once; DONE/FAILED stay terminal."""
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_handoff_grace")
+    (task_dir / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
+    (task_dir / "STATUS").write_text(
+        "2026-10-23 10:00:00 START step=report replay=inspect\n", encoding="utf-8"
+    )
+    (task_dir / "worker.pid").write_text("999997\n", encoding="utf-8")
+    (task_dir / "job.pid").write_text("999996\n", encoding="utf-8")
+    (test_env["watch_dir"] / "tasks.txt").write_text(f"{task_dir}\n", encoding="utf-8")
+    env = {**test_env["env"], "TH_ONCE": "1", "TH_HANDOFF_STALL_MIN": "5"}
+
+    before = subprocess.run(
+        [str(SCRIPTS_DIR / "th-watchd.sh")], env=env, capture_output=True, text=True
+    )
+    assert before.returncode == 0, before.stderr
+    inbox_file = test_env["workspace"] / ".claude" / "inbox.md"
+    assert (
+        not inbox_file.exists()
+        or "워커 중단(인계 없음)" not in inbox_file.read_text(encoding="utf-8")
+    )
+    wait_marker = task_dir / ".th_daemon.handoff_wait.999996"
+    assert wait_marker.is_file()
+    wait_marker.write_text(f"{int(time.time()) - 301}\n", encoding="utf-8")
+    for _ in range(2):
+        after = subprocess.run(
+            [str(SCRIPTS_DIR / "th-watchd.sh")], env=env, capture_output=True, text=True
+        )
+        assert after.returncode == 0, after.stderr
+    assert inbox_file.read_text(encoding="utf-8").count("| 워커 중단(인계 없음) |") == 1
+    assert (task_dir / ".th_daemon.handoff_stall.999996").is_file()
+    status = subprocess.run(
+        [str(SCRIPTS_DIR / "th-status.sh"), "-a"],
+        env={**env, "COLUMNS": "100", "NO_COLOR": "1"},
+        capture_output=True,
+        text=True,
+    )
+    assert status.returncode == 0, status.stderr
+    assert "인계 없음" in status.stdout
+
+    # A replacement job is normal progress, even if the prior job has already
+    # exited; it must not wake the coordinator.
+    next_task = _create_task_dir(test_env["tmp_path"], "task_handoff_next_job")
+    (next_task / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
+    worker = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    next_job = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    try:
+        (next_task / "STATUS").write_text(
+            "2026-10-23 10:01:00 START step=evaluate replay=safe\n", encoding="utf-8"
+        )
+        (next_task / "worker.pid").write_text(f"{worker.pid}\n", encoding="utf-8")
+        (next_task / "job.pid").write_text(f"{next_job.pid}\n", encoding="utf-8")
+        (test_env["watch_dir"] / "tasks.txt").write_text(
+            f"{next_task}\n", encoding="utf-8"
+        )
+        progressing = subprocess.run(
+            [str(SCRIPTS_DIR / "th-watchd.sh")], env=env, capture_output=True, text=True
+        )
+        assert progressing.returncode == 0, progressing.stderr
+        assert (
+            inbox_file.read_text(encoding="utf-8").count("| 워커 중단(인계 없음) |")
+            == 1
+        )
+    finally:
+        worker.terminate()
+        next_job.terminate()
+        worker.wait(timeout=5)
+        next_job.wait(timeout=5)
+
+    for marker, event in (("DONE", "완료"), ("FAILED", "실패")):
+        terminal = _create_task_dir(test_env["tmp_path"], f"task_terminal_{marker}")
+        (terminal / ".th_owner").write_text(
+            str(test_env["workspace"]), encoding="utf-8"
+        )
+        (terminal / marker).write_text("runner terminal state\n", encoding="utf-8")
+        (terminal / "worker.pid").write_text("999995\n", encoding="utf-8")
+        (terminal / "job.pid").write_text("999994\n", encoding="utf-8")
+        (test_env["watch_dir"] / "tasks.txt").write_text(
+            f"{terminal}\n", encoding="utf-8"
+        )
+        result = subprocess.run(
+            [str(SCRIPTS_DIR / "th-watchd.sh")], env=env, capture_output=True, text=True
+        )
+        assert result.returncode == 0, result.stderr
+        assert inbox_file.read_text(encoding="utf-8").count(f"| {event} |") == 1
 
 
 def test_th_watch_stall_retains_task_in_registry(test_env: dict):
@@ -2512,7 +2605,7 @@ def test_th_watch_long_running_wait_detection_and_job_preservation(test_env: dic
         )
         subprocess.run(
             [str(SCRIPTS_DIR / "th-watch.sh"), "1"],
-            env=env,
+            env={**env, "TH_HANDOFF_STALL_MIN": "0"},
             capture_output=True,
             text=True,
         )
@@ -2568,12 +2661,12 @@ def test_th_watch_long_running_wait_detection_and_job_preservation(test_env: dic
         job_proc.wait(timeout=5)
         watch_job_done = subprocess.run(
             [str(SCRIPTS_DIR / "th-watch.sh"), "2"],
-            env=env,
+            env={**env, "TH_HANDOFF_STALL_MIN": "0"},
             capture_output=True,
             text=True,
         )
         assert watch_job_done.returncode == 0
-        assert "실패 의심" in watch_job_done.stdout
+        assert "워커 중단(인계 없음)" in watch_job_done.stdout
         assert not (task_dir / "DONE").exists()
         assert (task_dir / ".th_job_completed").is_file()
 

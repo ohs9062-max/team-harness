@@ -11,8 +11,11 @@ Do not read or write the coordinator journal (`.claude/current_status.md`, `.cla
   `YYYY-MM-DD HH:MM:SS 처리 N/M장 X s/장` or `YYYY-MM-DD HH:MM:SS epoch=k/E`
   so `ths` can estimate the finish time. Do not compute an ETA yourself.
 - Git: `git log --oneline`, `git diff --stat`; read diffs only where suspicious.
-- Long job: smoke test first, then `setsid nohup`, PID in `job.pid`. Jobs
-  detached by agy may die when agy exits; check they are alive.
+- Long job: smoke test first, then one `setsid nohup` runner, PID in `job.pid`.
+  The runner chains train → evaluate → plots → report → `DONE`/`FAILED`; on a
+  failed step it writes `FAILED` with the step name and rc, even after worker exit.
+- Never hand remaining steps to the coordinator. If stopping yourself, write
+  `FAILED` with `INCOMPLETE: remaining steps …`.
 - Multi-step work: before/after each step append `START step=… replay=…` / `END step=… rc=… out=…` timestamped lines to `STATUS`; use `never` for training/GPU/long runs, push/merge/deletion/external writes, `safe` for reads, aggregation, or repeatable evaluation, and `inspect` when unsure.
 - If the instruction includes “이전 시도 복구 요약”, follow it exactly and do not redo completed steps; detached runner scripts must write the same STATUS lines.
 - Fail fast: same error twice → `FAILED` with error and attempts. Setup fixes:

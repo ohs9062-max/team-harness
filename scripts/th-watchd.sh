@@ -67,8 +67,8 @@ handle_daemon_event() {
 
   local digest_event
   case "$event_type" in
-    완료|'잡 완료') digest_event=done ;;
-    실패|'실패 의심') digest_event=failed ;;
+    완료) digest_event=done ;;
+    실패|'실패 의심'|'워커 중단(인계 없음)') digest_event=failed ;;
     '워커 오류(쿼터·용량)') digest_event=quota ;;
     중단) digest_event=dead ;;
     멈춤|'긴 실행 대기') digest_event=stall ;;

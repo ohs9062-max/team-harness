@@ -1093,6 +1093,10 @@ for task in valid_tasks:
     is_alive = bool(pids)
     terminal = observer.terminal_status(tpath)
     is_quota_err = False
+    has_handoff_stall = bool(
+        list(tpath.glob(".th_daemon.handoff_stall.*"))
+        or list(tpath.glob(".th_notified.handoff_stall.*"))
+    )
 
     if terminal == 'DONE':
         state = '완료'
@@ -1102,6 +1106,8 @@ for task in valid_tasks:
         is_quota_err = check_task_quota_error(task)
         if is_quota_err:
             state = '워커 오류(쿼터·용량)'
+        elif has_handoff_stall:
+            state = '인계 없음'
         elif not is_alive:
             state = '중단?'
         else:
@@ -1136,6 +1142,7 @@ for task in valid_tasks:
             "state": state,
             "v_status": v_status,
             "is_quota_err": is_quota_err,
+            "has_handoff_stall": has_handoff_stall,
             "is_stalled": is_stalled,
             "latest_ts": latest_ts,
             "eta": eta,
@@ -1155,14 +1162,14 @@ if not all_mode:
         is_vfail = rec["v_status"] in ("실패", "VERIFY_FAILED")
 
         if rec["is_alive"]:
-            if rec["terminal"] == "FAILED" or rec["is_quota_err"] or is_vfail or rec["is_stalled"]:
+            if rec["terminal"] == "FAILED" or rec["is_quota_err"] or is_vfail or rec["is_stalled"] or rec["has_handoff_stall"]:
                 attention_recs.append(rec)
             else:
                 running_recs.append(rec)
         else:
             if not is_recent:
                 old_uncleaned_count += 1
-            elif rec["terminal"] == "FAILED" or rec["is_quota_err"] or is_vfail or rec["is_stalled"] or rec["terminal"] != "DONE":
+            elif rec["terminal"] == "FAILED" or rec["is_quota_err"] or is_vfail or rec["is_stalled"] or rec["has_handoff_stall"] or rec["terminal"] != "DONE":
                 attention_recs.append(rec)
             else:
                 done_recs.append(rec)
@@ -1211,6 +1218,8 @@ if not all_mode:
         elif section_kind == "attention":
             if rec["is_quota_err"]:
                 elapsed = "쿼터오류"
+            elif rec["has_handoff_stall"]:
+                elapsed = "인계 없음"
             elif rec["terminal"] == "FAILED":
                 elapsed = "실패"
             elif rec["v_status"] in ("실패", "VERIFY_FAILED"):
@@ -1241,7 +1250,7 @@ if not all_mode:
     w_proj = min(max([str_width("프로젝트")] + [str_width(r["proj"]) for r in all_disp]), 8)
     w_task = min(max([str_width("작업"), 14] + [str_width(r["task"]) for r in all_disp]), task_cap)
     w_wm = min(max([str_width("워커/모델"), 10] + [str_width(r["wm"]) for r in all_disp]), 16)
-    w_elap = min(max([str_width("경과"), 4] + [str_width(r["elapsed"]) for r in all_disp]), 8)
+    w_elap = min(max([str_width("경과"), 4] + [str_width(r["elapsed"]) for r in all_disp]), 10)
     w_upd = min(max([str_width("갱신"), 6] + [str_width(r["updated"]) for r in all_disp]), 8)
     w_eta = min(max([str_width("예정")] + [str_width(r["eta"]) for r in run_rows]), 12)
 
@@ -1327,7 +1336,7 @@ if not all_mode:
 raw_w = [max(str_width(headers[i]), max((str_width(r[i]) for r in rows), default=0)) for i in range(7)]
 
 w0 = min(max(raw_w[0], str_width(headers[0])), 24)
-w2 = min(max(raw_w[2], str_width(headers[2])), 8)
+w2 = min(max(raw_w[2], str_width(headers[2])), 10)
 w3 = max(raw_w[3], str_width(headers[3]))
 w4 = min(max(raw_w[4], str_width(headers[4])), 11)
 w5 = min(max(raw_w[5], str_width(headers[5])), 15)
