@@ -43,6 +43,7 @@ spec.loader.exec_module(observer)
 all_mode = len(sys.argv) > 2 and sys.argv[2] == "1"
 watch_mode = len(sys.argv) > 3 and sys.argv[3] == "1"
 NOTICE = "[ths] 사용자 확인용 화면 — 에이전트는 이 표를 다시 출력·요약하지 말 것(이상 있을 때만 한 줄)."
+LOCAL_TZ = datetime.now().astimezone().tzinfo
 
 def print_notice():
     if not watch_mode:
@@ -130,7 +131,9 @@ def get_task_start_ts(task_dir):
                         ts_s = m.group(1).replace("T", " ")
                         fmt = "%Y-%m-%d %H:%M:%S" if len(ts_s) == 19 else "%Y-%m-%d %H:%M"
                         try:
-                            return datetime.strptime(ts_s, fmt).timestamp()
+                            stamp = datetime.strptime(ts_s, fmt).replace(tzinfo=LOCAL_TZ).timestamp()
+                            if stamp <= time.time():
+                                return stamp
                         except ValueError:
                             pass
                     break
@@ -301,7 +304,9 @@ def estimate_eta(task_dir, state, now_ts):
         ts_str = m.group(1).replace('T', ' ').split('.')[0]
         try:
             dt = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
-            t = dt.timestamp()
+            t = dt.replace(tzinfo=LOCAL_TZ).timestamp()
+            if t > now_ts:
+                return None, line
             rest = line[m.end():].lstrip(': \t')
             return t, rest
         except Exception:
@@ -355,7 +360,9 @@ def estimate_eta(task_dir, state, now_ts):
         return m
 
     last_line = lines[-1]
-    _, last_text = parse_ts_and_text(last_line)
+    last_stamp, last_text = parse_ts_and_text(last_line)
+    if last_stamp is None:
+        return "-"
     
     eta_ts = None
 

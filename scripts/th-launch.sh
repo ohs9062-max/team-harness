@@ -572,7 +572,20 @@ image_env=("TH_ALLOW_IMAGES=0")
 if [[ ${TH_ALLOW_IMAGES:-0} == 1 ]]; then
   image_env=("TH_ALLOW_IMAGES=1")
 fi
-worker_env=("TH_ROLE=worker" "TH_WORKSPACE=$journal_workspace" "TH_WORKER_OUTPUT_DIR=$task_dir" "TH_WORKER_ALLOW_PATHS=$worker_allow_paths" "TH_HARNESS_SRC=$py_src" "${image_env[@]}")
+timezone_env=()
+if [[ ${TZ+x} ]]; then
+  timezone_env=("TZ=$TZ")
+else
+  worker_tz=""
+  if [[ -r /etc/timezone ]]; then
+    worker_tz=$(tr -d '[:space:]' < /etc/timezone)
+  fi
+  if [[ -z $worker_tz ]] && command -v timedatectl >/dev/null 2>&1; then
+    worker_tz=$(timedatectl show --property=Timezone --value 2>/dev/null || true)
+  fi
+  [[ -n $worker_tz ]] && timezone_env=("TZ=$worker_tz")
+fi
+worker_env=("TH_ROLE=worker" "TH_WORKSPACE=$journal_workspace" "TH_WORKER_OUTPUT_DIR=$task_dir" "TH_WORKER_ALLOW_PATHS=$worker_allow_paths" "TH_HARNESS_SRC=$py_src" "${image_env[@]}" "${timezone_env[@]}")
 
 if [[ "$worker_type" == "codex" ]]; then
   project_doc_args=("-c" "project_doc_max_bytes=0")

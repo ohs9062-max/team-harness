@@ -55,7 +55,9 @@ def iso_now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def parse_time(value: str | None, *, naive_tz: tzinfo = UTC) -> datetime | None:
+def parse_time(
+    value: str | None, *, naive_tz: tzinfo = LOCAL_JOURNAL_TZ
+) -> datetime | None:
     if not value:
         return None
     try:
@@ -76,23 +78,52 @@ def format_time(value: datetime | None) -> str | None:
     return value.isoformat(timespec="seconds").replace("+00:00", "Z") if value else None
 
 
+def _main_checkout(candidate: Path) -> Path | None:
+    """Resolve a path to its main checkout, sharing project_owner's rule."""
+
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(candidate),
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-common-dir",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    common = Path(result.stdout.strip())
+    if not common.name:
+        return None
+    return common.parent if common.name == ".git" else None
+
+
 def project_name(owner: str | None, task: Path) -> str:
-    raw = owner or ""
-    # Orca names worktrees ``~/orca/workspaces/<project>/<worktree>``.  Group
-    # all sibling worktrees under their shared project rather than the leaf.
-    for candidate in (Path(raw).expanduser(), task):
-        try:
-            index = candidate.parts.index("workspaces")
-        except ValueError:
-            continue
-        if len(candidate.parts) > index + 1:
-            return candidate.parts[index + 1]
-    if raw:
-        return Path(raw).name or raw
-    for part in reversed(task.parts):
-        if part not in {"_outputs", "outputs", "runs", "tasks"}:
-            return part
-    return "unknown"
+    """Identify the git project without mistaking a task leaf for one."""
+
+    candidates: list[Path] = []
+    for raw in (
+        read_text(task / ".th_owner").strip(),
+        read_text(task / ".th_worktree").strip(),
+        owner,
+        str(task),
+    ):
+        if raw:
+            candidate = Path(raw).expanduser()
+            if candidate not in candidates:
+                candidates.append(candidate)
+    for candidate in candidates:
+        project = _main_checkout(candidate)
+        if project is not None and project.name:
+            return project.name
+    return "(unknown)"
 
 
 def read_text(path: Path) -> str:
@@ -299,6 +330,7 @@ def build_attempts(watch_dir: Path, workspace: Path) -> list[Attempt]:
         tasks.add(Path(record["task"]))
 
     output = []
+    now = datetime.now(UTC)
     for task_s, records in by_task.items():
         task = Path(task_s)
         records.sort(key=lambda value: str(value.get("at", "")))
@@ -323,7 +355,9 @@ def build_attempts(watch_dir: Path, workspace: Path) -> list[Attempt]:
                 else None
             )
             result = task_result(task) if current else "interrupted"
-            invalid_duration = bool(started and ended and ended < started)
+            invalid_duration = bool(
+                ended and (ended > now or (started is not None and ended < started))
+            )
             wall = (
                 round((ended - started).total_seconds() / 60, 1)
                 if started and ended and not invalid_duration
@@ -367,7 +401,9 @@ def build_attempts(watch_dir: Path, workspace: Path) -> list[Attempt]:
         if str(task) in known:
             continue
         start, end, source = status_times(task)
-        invalid_duration = bool(start and end and end < start)
+        invalid_duration = bool(
+            end and (end > now or (start is not None and end < start))
+        )
         output.append(
             Attempt(
                 project_name(read_text(task / ".th_owner").strip(), task),

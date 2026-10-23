@@ -1871,6 +1871,125 @@ def test_th_watchd_ignores_quota_log_older_than_worker_pid(test_env: dict):
     assert not (test_env["watch_dir"] / "quota_lock.agy").exists()
 
 
+def test_th_watchd_relaunches_only_a_dead_safe_open_step(test_env: dict):
+    task_dir = _create_task_dir(test_env["tmp_path"], "task_safe_auto_retry")
+    (task_dir / "STATUS").write_text(
+        "2026-10-23 10:00:00 START step=collect replay=safe\n", encoding="utf-8"
+    )
+    invocations = test_env["tmp_path"] / "codex_invocations.txt"
+    test_env["bin_dir"].joinpath("codex").write_text(
+        f'#!/usr/bin/env bash\nprintf "%s|%s\\n" "$TZ" "$*" >> "{invocations}"\n',
+        encoding="utf-8",
+    )
+    test_env["bin_dir"].joinpath("codex").chmod(0o755)
+    launch = subprocess.run(
+        [
+            str(SCRIPTS_DIR / "th-launch.sh"),
+            str(task_dir),
+            "codex",
+            "gpt-5.6-terra",
+            "medium",
+            str(task_dir),
+        ],
+        env={**test_env["env"], "TZ": "Asia/Seoul"},
+        capture_output=True,
+        text=True,
+    )
+    assert launch.returncode == 0, launch.stderr
+    time.sleep(0.05)
+
+    watched = subprocess.run(
+        [str(SCRIPTS_DIR / "th-watchd.sh")],
+        env={**test_env["env"], "TH_ONCE": "1", "TZ": "Asia/Seoul"},
+        capture_output=True,
+        text=True,
+    )
+
+    assert watched.returncode == 0, watched.stderr
+    ledger = [
+        json.loads(line)
+        for line in (test_env["watch_dir"] / "usage.jsonl").read_text().splitlines()
+    ]
+    assert len(ledger) == 2
+    assert ledger[-1]["worker"] == "codex"
+    assert ledger[-1]["model"] == "gpt-5.6-terra"
+    assert "TH_AUTO_RETRY" not in (task_dir / "codex.log").read_text(encoding="utf-8")
+    calls = [
+        line
+        for line in invocations.read_text(encoding="utf-8").splitlines()
+        if line.startswith("Asia/Seoul|")
+    ]
+    assert len(calls) == 2
+    inbox = (test_env["workspace"] / ".claude/inbox.md").read_text(encoding="utf-8")
+    assert "자동 재시도 1/2 — 단계=collect" in inbox
+
+
+@pytest.mark.parametrize(
+    "condition",
+    ("failed", "never", "inspect", "no_steps", "quota", "cap", "recent", "disabled"),
+)
+def test_th_watchd_does_not_auto_retry_unsafe_or_limited_cases(
+    test_env: dict, condition: str
+):
+    task_dir = _create_task_dir(test_env["tmp_path"], f"no_auto_{condition}")
+    status = "2026-10-23 10:00:00 START step=collect replay=safe\n"
+    if condition == "never":
+        status = status.replace("safe", "never")
+    elif condition == "inspect":
+        status = status.replace("safe", "inspect")
+    elif condition == "no_steps":
+        status = "2026-10-23 10:00:00 running\n"
+    (task_dir / "STATUS").write_text(status, encoding="utf-8")
+    if condition == "failed":
+        (task_dir / "FAILED").write_text("failed\n", encoding="utf-8")
+    (task_dir / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
+    (task_dir / ".th_worktree").write_text(str(task_dir), encoding="utf-8")
+    (task_dir / "worker.pid").write_text("999999\n", encoding="utf-8")
+    (test_env["watch_dir"] / "tasks.txt").write_text(f"{task_dir}\n", encoding="utf-8")
+    count = 3 if condition == "cap" else 1
+    rows = [
+        {
+            "v": 1,
+            "at": f"2026-10-23T00:0{index}:00Z",
+            "task": str(task_dir),
+            "attempt": index + 1,
+            "worker": "codex",
+            "model": "gpt-5.6-terra",
+            "effort": "medium",
+            "owner": str(test_env["workspace"]),
+            "override": None,
+        }
+        for index in range(count)
+    ]
+    (test_env["watch_dir"] / "usage.jsonl").write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+    if condition == "quota":
+        (test_env["watch_dir"] / "quota_lock.codex").write_text("locked\n")
+    if condition == "recent":
+        (test_env["watch_dir"] / "auto_retries.tsv").write_text(
+            f"{int(time.time())}\t{task_dir}\tcollect\n", encoding="utf-8"
+        )
+    marker = test_env["tmp_path"] / "unexpected_launch"
+    test_env["bin_dir"].joinpath("codex").write_text(
+        f'#!/usr/bin/env bash\ntouch "{marker}"\n', encoding="utf-8"
+    )
+    test_env["bin_dir"].joinpath("codex").chmod(0o755)
+    env = {**test_env["env"], "TH_ONCE": "1"}
+    if condition == "disabled":
+        env["TH_AUTO_RETRY"] = "0"
+
+    watched = subprocess.run(
+        [str(SCRIPTS_DIR / "th-watchd.sh")], env=env, capture_output=True, text=True
+    )
+
+    assert watched.returncode == 0, watched.stderr
+    assert not marker.exists()
+    assert (
+        len((test_env["watch_dir"] / "usage.jsonl").read_text().splitlines()) == count
+    )
+
+
 def test_th_launch_expired_capacity_lock_does_not_block_but_quota_does(test_env: dict):
     task_dir = _create_task_dir(test_env["tmp_path"], "task_expired_capacity")
     lock = test_env["watch_dir"] / "quota_lock.codex"
@@ -2807,6 +2926,28 @@ def test_th_status_running_section_shows_eta_column(test_env: dict):
                 line for line in running_block.splitlines() if "eta_none" in line
             )
             assert re.search(r"방금\s+-\s+", no_eta_row)
+    finally:
+        proc.terminate()
+        proc.wait()
+
+
+def test_th_status_ignores_future_status_timestamp_for_eta(test_env: dict):
+    task = _create_task_dir(test_env["tmp_path"], "eta_future")
+    future = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() + 3600))
+    (task / "STATUS").write_text(f"{future} 처리 10/100장 2 s/장\n", encoding="utf-8")
+    proc = subprocess.Popen(["sleep", "30"])
+    try:
+        (task / "worker.pid").write_text(f"{proc.pid}\n", encoding="utf-8")
+        (test_env["watch_dir"] / "tasks.txt").write_text(f"{task}\n", encoding="utf-8")
+        result = subprocess.run(
+            [str(SCRIPTS_DIR / "th-status.sh")],
+            env={**test_env["env"], "COLUMNS": "100", "NO_COLOR": "1"},
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        row = next(line for line in result.stdout.splitlines() if "eta_future" in line)
+        assert re.search(r"방금\s+-\s+", row)
     finally:
         proc.terminate()
         proc.wait()

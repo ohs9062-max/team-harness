@@ -120,6 +120,74 @@ def _active_workers(task_dir: Path, worker_type: str, watch_dir: Path) -> list[s
     return active
 
 
+def retry_attempts(task_dir: Path, watch_dir: Path) -> int:
+    """Count durable launch attempts, preferring the shared usage ledger."""
+
+    try:
+        target = task_dir.resolve()
+    except OSError:
+        target = task_dir
+    ledger = watch_dir / "usage.jsonl"
+    if ledger.is_file():
+        attempts = 0
+        try:
+            for line in ledger.read_text(
+                encoding="utf-8", errors="replace"
+            ).splitlines():
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(record, dict) or record.get("v") != 1:
+                    continue
+                value = record.get("task")
+                if not isinstance(value, str):
+                    continue
+                try:
+                    matches = Path(value).expanduser().resolve() == target
+                except OSError:
+                    matches = Path(value).expanduser() == target
+                attempts += int(matches)
+        except OSError:
+            attempts = 0
+        # A ledger exists only after the first launch.  A malformed/empty one
+        # must not hide a pre-ledger STATUS history.
+        if attempts:
+            return attempts
+    try:
+        return sum(
+            " LAUNCH " in f" {line.strip()} "
+            for line in (task_dir / "STATUS")
+            .read_text(encoding="utf-8", errors="replace")
+            .splitlines()
+        )
+    except OSError:
+        return 0
+
+
+def last_failure_reason(task_dir: Path) -> str:
+    """Return one bounded failure line for the retry-cap diagnostic."""
+
+    for path in (task_dir / "FAILED", task_dir / "STATUS"):
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        for line in reversed(lines):
+            text = line.strip()
+            if text and (
+                path.name == "FAILED"
+                or "fail" in text.lower()
+                or ("rc=" in text and "rc=0" not in text)
+            ):
+                return text[:200]
+    return "기록된 실패 사유 없음"
+
+
+def _retry_limit(env: Mapping[str, str]) -> int:
+    return _parse_int(env.get("TH_MAX_RETRIES"), 2)
+
+
 def _read_task_kind(task_md: Path) -> str | None:
     try:
         metadata = parse_task_metadata(task_md)
@@ -278,6 +346,20 @@ def check(
     wdir = Path(watch_dir)
     violations: list[Violation] = []
 
+    attempts = retry_attempts(tdir, wdir)
+    max_retries = _retry_limit(actual_env)
+    total_allowed = max_retries + 1
+    retry_reason = actual_env.get("TH_RETRY_REASON", "").strip()
+    if attempts >= total_allowed and not retry_reason:
+        violations.append(
+            Violation(
+                "retry_cap",
+                f"[th-launch] 재시도 상한 도달(시도 {attempts}/{total_allowed}) — "
+                "원인을 바꾼 지시서로 새 작업 폴더를 쓰거나 "
+                f'TH_RETRY_REASON="<사유>". 마지막 실패: {last_failure_reason(tdir)}',
+            )
+        )
+
     limit = _parallel_limit(worker_type, actual_env)
     if limit is not None:
         active = _active_workers(tdir, worker_type, wdir)
@@ -381,6 +463,9 @@ def collect_overrides(env: Mapping[str, str] | None = None) -> list[str]:
     codex_reason = actual_env.get("TH_CODEX_REASON", "").strip()
     if codex_reason:
         overrides.append(f"TH_CODEX_REASON={codex_reason}")
+    retry_reason = actual_env.get("TH_RETRY_REASON", "").strip()
+    if retry_reason:
+        overrides.append(f"TH_RETRY_REASON={retry_reason}")
     if actual_env.get("TH_IGNORE_BUDGET", "").strip() == "1":
         overrides.append("TH_IGNORE_BUDGET=1")
     return overrides
@@ -402,7 +487,7 @@ def main(
     if violations:
         for violation in violations:
             print(violation.message, file=sys.stderr)
-        return 4
+        return 3 if any(item.code == "retry_cap" for item in violations) else 4
     for warning in check_warnings(worker_type, actual_env):
         print(warning, file=sys.stderr)
     for override in collect_overrides(actual_env):

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 import re
 
@@ -22,6 +23,14 @@ END_RE = re.compile(
     rf"^{TIMESTAMP} END step=(?P<step>{STEP_NAME}) rc=(?P<rc>-?\d+)"
     r"(?: out=(?P<out>\S+))?\s*$"
 )
+
+
+def _local_status_time(value: str) -> datetime:
+    """Interpret offset-less STATUS timestamps in the host's local timezone."""
+
+    return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(
+        tzinfo=datetime.now().astimezone().tzinfo
+    )
 
 
 @dataclass(frozen=True)
@@ -47,11 +56,14 @@ def parse_status_text(text: str) -> dict[str, StepRecord]:
     """
 
     records: dict[str, StepRecord] = {}
+    now = datetime.now().astimezone()
     for line in text.splitlines():
         start = START_RE.match(line)
         if start:
             name = start["step"]
             at = start["at"]
+            if _local_status_time(at) > now:
+                continue
             records[name] = StepRecord(
                 name=name,
                 state="open",
@@ -67,15 +79,21 @@ def parse_status_text(text: str) -> dict[str, StepRecord]:
         name = end["step"]
         rc = int(end["rc"])
         previous = records.get(name)
+        ended_at = end["at"]
+        if _local_status_time(ended_at) > now:
+            continue
+        if previous and previous.started_at:
+            if _local_status_time(ended_at) < _local_status_time(previous.started_at):
+                continue
         records[name] = StepRecord(
             name=name,
             state="completed" if rc == 0 else "failed",
             replay=previous.replay if previous else "inspect",
-            at=end["at"],
+            at=ended_at,
             rc=rc,
             out=end["out"],
             started_at=previous.started_at if previous else None,
-            ended_at=end["at"],
+            ended_at=ended_at,
         )
     return records
 

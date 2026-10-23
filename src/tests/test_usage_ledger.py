@@ -258,6 +258,63 @@ def test_empty_top_token_table_uses_single_not_applicable_row(
     assert "없음 | 없음" not in top
 
 
-def test_orca_worktree_paths_group_under_the_project_name():
-    task = Path("/home/example/orca/workspaces/team-harness/worker/_outputs/task")
-    assert usage_ledger.project_name(str(task.parent), task) == "team-harness"
+def test_registered_task_without_launch_owner_uses_ancestor_git_project(tmp_path: Path):
+    repo = tmp_path / "robot_vision3_autolabel"
+    subprocess.run(["git", "init", str(repo)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.email", "test@example.com"], check=True
+    )
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "Test"], check=True)
+    (repo / "README").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "README"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-m", "base"], check=True)
+    task = repo / "outputs/runs/student_deploy_20261019/v12_seg_20261023"
+    task.mkdir(parents=True)
+    (task / "task.md").write_text("# task\n", encoding="utf-8")
+    watch = tmp_path / "watch"
+    watch.mkdir()
+    (watch / "tasks.txt").write_text(f"{task}\n", encoding="utf-8")
+
+    row = usage_ledger.build_attempts(watch, repo)[0]
+
+    assert row.project == "robot_vision3_autolabel"
+
+
+def test_offsetless_status_uses_local_time_and_invalid_end_has_no_duration(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+):
+    task = _task(tmp_path)
+    (task / "STATUS").write_text(
+        "2026-10-23 00:05:00 LAUNCH\n2026-10-23 00:06:00 DONE\n", encoding="utf-8"
+    )
+    watch = tmp_path / "watch"
+    _usage(
+        watch,
+        {
+            "v": 1,
+            "at": "2026-10-23T01:00:00Z",
+            "task": str(task),
+            "attempt": 1,
+            "worker": "agy",
+            "model": "m",
+            "effort": None,
+            "owner": str(tmp_path),
+            "override": None,
+        },
+    )
+    monkeypatch.setattr(usage_ledger, "orca_workspace_roots", lambda _home: set())
+
+    row = usage_ledger.build_attempts(watch, tmp_path)[0]
+
+    assert (
+        usage_ledger.parse_time("2026-10-23 10:00:00").isoformat()
+        == "2026-10-23T01:00:00+00:00"
+    )
+    assert row.wall_min is None
+    assert "duration_invalid(ended_before_started)" in row.source
+
+
+def test_project_name_without_a_git_ancestor_is_unknown(tmp_path: Path):
+    task = tmp_path / "outputs/task"
+    task.mkdir(parents=True)
+    assert usage_ledger.project_name(None, task) == "(unknown)"

@@ -166,6 +166,112 @@ print(line[:200], end="")
 PY
 }
 
+safe_step_auto_retry() {
+  # The interactive watcher only reports.  The daemon alone may relaunch a
+  # bounded, explicitly safe step, and never changes its worker settings.
+  local task=$1 watch_dir=$2 marker=$3 callback_fn=$4 owner=$5
+  [[ ${TH_AUTO_RETRY:-1} != 0 ]] || return 1
+
+  local program py_src
+  program=$(worker_digest_program)
+  py_src=$(cd "$(dirname "$program")/.." && pwd)
+  local -a open_steps=()
+  mapfile -t open_steps < <(
+    PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" \
+      python3 -m team_harness.step_records open-steps "$task"
+  )
+  (( ${#open_steps[@]} > 0 )) || return 1
+
+  local open step replay at out
+  for open in "${open_steps[@]}"; do
+    IFS=$'\t' read -r step replay at out <<< "$open"
+    [[ $replay == safe ]] || return 1
+  done
+  IFS=$'\t' read -r step replay at out <<< "${open_steps[-1]}"
+
+  local usage="$watch_dir/usage.jsonl" launch_meta
+  [[ -f $usage && -f $task/.th_worktree ]] || return 1
+  launch_meta=$(python3 - "$usage" "$task" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+ledger, task = map(Path, sys.argv[1:])
+target = task.resolve()
+records = []
+for line in ledger.read_text(encoding="utf-8", errors="replace").splitlines():
+    try:
+        row = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    if not isinstance(row, dict) or row.get("v") != 1:
+        continue
+    try:
+        matched = Path(str(row.get("task", ""))).expanduser().resolve() == target
+    except OSError:
+        matched = False
+    if matched:
+        records.append(row)
+if records:
+    row = records[-1]
+    values = (row.get("worker"), row.get("model"), row.get("effort"))
+    if all(isinstance(value, str) and value for value in values):
+        print("\t".join(values))
+PY
+)
+  [[ -n $launch_meta ]] || return 1
+
+  local worker model effort
+  IFS=$'\t' read -r worker model effort <<< "$launch_meta"
+  [[ -f $watch_dir/quota_lock.$worker ]] && return 1
+
+  local max_retries=${TH_MAX_RETRIES:-2}
+  [[ $max_retries =~ ^[0-9]+$ ]] || max_retries=2
+  local attempts
+  attempts=$(python3 - "$usage" "$task" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+ledger, task = map(Path, sys.argv[1:])
+target = task.resolve()
+count = 0
+for line in ledger.read_text(encoding="utf-8", errors="replace").splitlines():
+    try:
+        row = json.loads(line)
+        if isinstance(row, dict) and row.get("v") == 1 and Path(str(row.get("task", ""))).expanduser().resolve() == target:
+            count += 1
+    except (OSError, json.JSONDecodeError):
+        continue
+print(count)
+PY
+)
+  [[ $attempts =~ ^[0-9]+$ ]] || return 1
+  (( attempts < max_retries + 1 )) || return 1
+
+  local auto_log="$watch_dir/auto_retries.tsv" last_auto now_epoch
+  last_auto=$(awk -F $'\t' -v task="$task" '$2 == task { value=$1 } END { print value }' "$auto_log" 2>/dev/null || true)
+  now_epoch=$(date +%s)
+  if [[ $last_auto =~ ^[0-9]+$ ]] && (( now_epoch - last_auto < 600 )); then
+    return 1
+  fi
+
+  local worktree launch_script retry_no retry_output rc
+  worktree=$(<"$task/.th_worktree")
+  [[ -n $worktree ]] || return 1
+  launch_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/th-launch.sh"
+  retry_no=$attempts
+  retry_output=$(TH_NO_DAEMON=1 "$launch_script" "$task" "$worker" "$model" "$effort" "$worktree" 2>&1) || rc=$?
+  if [[ ${rc:-0} -eq 0 ]]; then
+    printf '%s\t%s\t%s\n' "$now_epoch" "$task" "$step" >> "$auto_log"
+    touch "$marker.dead"
+    "$callback_fn" "$task" "자동 재시도" "자동 재시도 $retry_no/$max_retries — 단계=$step" "-" "$owner"
+    return 0
+  fi
+  "$callback_fn" "$task" "자동 재시도 실패" "자동 재시도 실패 — ${retry_output:0:200}" "-" "$owner"
+  return 0
+}
+
 inspect_task_event() {
   local task=$1 watch_dir=$2 marker_prefix=$3 stall_sec=$4 target_workspace=$5 callback_fn=$6
   [[ -n $task && -d $task ]] || return 0
@@ -333,6 +439,9 @@ inspect_task_event() {
 
   if (( ${#alive_pids[@]} == 0 )); then
     if [[ -f $task/DONE || -f $task/FAILED || -f $task/.th_job_completed ]]; then
+      return 0
+    fi
+    if [[ $marker_prefix == .th_daemon ]] && safe_step_auto_retry "$task" "$watch_dir" "$marker" "$callback_fn" "$owner"; then
       return 0
     fi
     if [[ ! -f $marker.dead ]]; then

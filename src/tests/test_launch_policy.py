@@ -13,6 +13,7 @@ import pytest
 
 from team_harness.launch_policy import check
 from team_harness.launch_policy import check_warnings
+from team_harness.launch_policy import collect_overrides
 from team_harness.launch_policy import main
 from team_harness.launch_policy import sum_recent_codex_tokens
 from team_harness.launch_policy import Violation
@@ -88,6 +89,58 @@ def _base_env(tmp_path: Path, **extra: str) -> dict[str, str]:
     sessions_dir = tmp_path / "sessions"
     sessions_dir.mkdir(parents=True, exist_ok=True)
     return {"TH_CODEX_SESSIONS_DIR": str(sessions_dir), **extra}
+
+
+def _launch_records(watch_dir: Path, task: Path, count: int) -> None:
+    watch_dir.mkdir(exist_ok=True)
+    rows = [
+        {
+            "v": 1,
+            "at": f"2026-10-23T00:0{index}:00Z",
+            "task": str(task),
+            "attempt": index + 1,
+            "worker": "codex",
+            "model": "gpt-5.6-terra",
+            "effort": "medium",
+            "owner": str(task.parent),
+            "override": None,
+        }
+        for index in range(count)
+    ]
+    (watch_dir / "usage.jsonl").write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+
+
+@pytest.mark.parametrize(("max_retries", "allowed"), (("2", 3), ("1", 2)))
+def test_retry_cap_allows_total_attempts_then_rejects_next(
+    tmp_path: Path, max_retries: str, allowed: int
+) -> None:
+    watch_dir = tmp_path / "watch"
+    task = _make_task(tmp_path, "retry_cap")
+    env = _base_env(tmp_path, TH_MAX_RETRIES=max_retries)
+    _launch_records(watch_dir, task, allowed - 1)
+    assert check(task, "codex", "gpt-5.6-terra", "medium", watch_dir, env) == []
+    _launch_records(watch_dir, task, allowed)
+    violations = check(task, "codex", "gpt-5.6-terra", "medium", watch_dir, env)
+    assert [item.code for item in violations] == ["retry_cap"]
+    assert f"시도 {allowed}/{allowed}" in violations[0].message
+    assert (
+        main(
+            ["check", str(task), "codex", "gpt-5.6-terra", "medium", str(watch_dir)],
+            env=env,
+        )
+        == 3
+    )
+
+
+def test_retry_reason_overrides_cap_and_is_audited(tmp_path: Path) -> None:
+    watch_dir = tmp_path / "watch"
+    task = _make_task(tmp_path, "retry_reason")
+    _launch_records(watch_dir, task, 3)
+    env = _base_env(tmp_path, TH_RETRY_REASON="새 스텁으로 원인 분리")
+    assert check(task, "codex", "gpt-5.6-terra", "medium", watch_dir, env) == []
+    assert collect_overrides(env) == ["TH_RETRY_REASON=새 스텁으로 원인 분리"]
 
 
 def test_parallel_pass_when_below_limit_and_dead_pids_ignored(tmp_path: Path) -> None:

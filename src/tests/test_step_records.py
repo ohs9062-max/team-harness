@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+from datetime import timedelta
 import os
 from pathlib import Path
 import subprocess
@@ -76,3 +78,21 @@ def test_step_records_parse_final_status_and_cli_with_system_python(tmp_path: Pa
         "eval\tinspect\t2026-10-23 10:05:00\t",
         "prepare\tinspect\t2026-10-23 10:06:00\t",
     ]
+
+
+def test_step_records_ignores_future_and_earlier_end_timestamps():
+    now = datetime.now().astimezone().replace(microsecond=0)
+    started = now - timedelta(minutes=2)
+    earlier = now - timedelta(minutes=3)
+    future = now + timedelta(minutes=2)
+    records = parse_status_text(
+        "\n".join(
+            (
+                f"{started:%F %T} START step=collect replay=safe",
+                f"{earlier:%F %T} END step=collect rc=0",
+                f"{future:%F %T} END step=collect rc=0",
+            )
+        )
+    )
+
+    assert records["collect"].state == "open"

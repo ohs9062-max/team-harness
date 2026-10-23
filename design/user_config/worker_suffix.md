@@ -6,6 +6,7 @@ Do not read or write the coordinator journal (`.claude/current_status.md`, `.cla
   `WORKLOG.md` (≤60 lines, replaced: goal, done/remaining, method,
   assumptions, problems, output paths), `DONE` or `FAILED` (short reason).
   Chat output is not evidence; put results and self-checks in files.
+- STATUS 시각은 반드시 `date '+%F %T'` 출력으로 쓴다.
 - Long loops/training: append progress lines to `STATUS` as
   `YYYY-MM-DD HH:MM:SS 처리 N/M장 X s/장` or `YYYY-MM-DD HH:MM:SS epoch=k/E`
   so `ths` can estimate the finish time. Do not compute an ETA yourself.
