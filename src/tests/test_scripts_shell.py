@@ -306,7 +306,7 @@ def test_th_launch_appends_launch_status_and_avoids_prior_status_failure(
             pass
 
 
-def test_th_launch_uses_main_checkout_as_worktree_owner(test_env: dict):
+def test_th_launch_uses_explicit_worktree_as_owner(test_env: dict):
     main = test_env["tmp_path"] / "main"
     subprocess.run(["git", "init", str(main)], check=True, capture_output=True)
     subprocess.run(
@@ -341,7 +341,7 @@ def test_th_launch_uses_main_checkout_as_worktree_owner(test_env: dict):
         text=True,
     )
     assert result.returncode == 0, result.stderr
-    assert (task_dir / ".th_owner").read_text(encoding="utf-8").strip() == str(main)
+    assert (task_dir / ".th_owner").read_text(encoding="utf-8").strip() == str(worktree)
 
 
 @pytest.mark.parametrize(
@@ -1800,8 +1800,8 @@ def test_th_inbox_wait_rejects_unresolved_owner(test_env: dict):
     assert "inbox owner를 해석할 수 없습니다" in failed.stderr
 
 
-def test_th_inbox_wait_newer_instance_stops_previous(test_env: dict):
-    """Only the newest waiter remains for one owner, preventing duplicate wakes."""
+def test_th_inbox_wait_instances_coexist(test_env: dict):
+    """Concurrent waiters retain independent registrations for one owner."""
     owner = test_env["tmp_path"] / "one-waiter-owner"
     (owner / ".claude").mkdir(parents=True)
     script = SCRIPTS_DIR / "th-inbox-wait.sh"
@@ -1815,8 +1815,9 @@ def test_th_inbox_wait_newer_instance_stops_previous(test_env: dict):
         second = subprocess.Popen(
             [str(script), "1"], env=env, stdout=subprocess.PIPE, text=True
         )
-        assert first.wait(timeout=3) == 0
         assert second.wait(timeout=3) == 0
+        assert first.poll() is None
+        assert (owner / ".claude" / ".inbox_wait.d" / str(first.pid)).is_file()
     finally:
         for proc in (first, locals().get("second")):
             if proc is not None and proc.poll() is None:
@@ -1824,8 +1825,8 @@ def test_th_inbox_wait_newer_instance_stops_previous(test_env: dict):
                 proc.wait(timeout=3)
 
 
-def test_th_launch_prints_inbox_wait_guidance(test_env: dict):
-    """Registration ends with the coordinator wakeup instruction when no waiter exists."""
+def test_th_launch_warns_when_no_inbox_waiter_exists(test_env: dict):
+    """Registration warns on stderr when the owner has no inbox waiter."""
     task_dir = _create_task_dir(test_env["tmp_path"], "task_launch_inbox_wait")
     codex_stub = test_env["bin_dir"] / "codex"
     codex_stub.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
@@ -1840,10 +1841,7 @@ def test_th_launch_prints_inbox_wait_guidance(test_env: dict):
         text=True,
     )
     assert result.returncode == 0, result.stderr
-    assert result.stdout.splitlines()[-1] == (
-        "[th-launch] 코디네이터: th-inbox-wait.sh가 백그라운드로 떠 있지 않으면 "
-        "지금 run_in_background로 실행"
-    )
+    assert "코디네이터 inbox 대기 없음" in result.stderr
 
 
 def test_th_watchd_does_not_renotify_rewritten_done_in_same_attempt(test_env: dict):

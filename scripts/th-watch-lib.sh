@@ -87,6 +87,60 @@ project_owner() {
   fi
 }
 
+# Launch ownership follows the task rather than the shell that happened to
+# invoke th-launch.  Keep this separate from project_owner(): the latter folds
+# linked worktrees into their shared coordinator inbox after ownership has been
+# chosen.
+resolve_launch_owner() {
+  local task_dir=$1 worktree=$2 fallback=${3:-$PWD} candidate top
+  for candidate in "$task_dir" "$worktree"; do
+    [[ -n $candidate && -d $candidate ]] || continue
+    top=$(git -C "$candidate" rev-parse --show-toplevel 2>/dev/null) || continue
+    realpath "$top"
+    return 0
+  done
+  realpath "$fallback"
+}
+
+warn_launch_owner_mismatch() {
+  local owner=$1 pwd_owner=$2
+  [[ -n $pwd_owner && $owner != "$pwd_owner" ]] || return 0
+  printf '[th-launch] 경고: owner=%s (PWD 저장소 %s와 다름)\n' "$owner" "$pwd_owner" >&2
+}
+
+is_inbox_wait_pid() {
+  local pid=$1 cmdline
+  [[ $pid =~ ^[1-9][0-9]*$ && -r /proc/$pid/cmdline ]] || return 1
+  cmdline=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)
+  [[ $cmdline == *th-inbox-wait.sh* ]] && kill -0 "$pid" 2>/dev/null
+}
+
+cleanup_inbox_waiter_registry() {
+  local owner=$1 registry entry pid
+  registry="$owner/.claude/.inbox_wait.d"
+  [[ -d $registry ]] || return 0
+  for entry in "$registry"/*; do
+    [[ -f $entry ]] || continue
+    pid=$(basename "$entry")
+    is_inbox_wait_pid "$pid" || rm -f "$entry"
+  done
+}
+
+inbox_waiter_registered() {
+  local owner=$1 registry entry pid legacy
+  registry="$owner/.claude/.inbox_wait.d"
+  cleanup_inbox_waiter_registry "$owner"
+  for entry in "$registry"/*; do
+    [[ -f $entry ]] || continue
+    pid=$(basename "$entry")
+    is_inbox_wait_pid "$pid" && return 0
+  done
+  legacy="$owner/.claude/.inbox_wait.pid"
+  [[ -r $legacy ]] || return 1
+  pid=$(<"$legacy")
+  is_inbox_wait_pid "$pid"
+}
+
 log_is_from_current_worker() {
   local task=$1 log=$2 pid_file="$task/worker.pid"
   [[ ! -f $pid_file || ! $log -ot $pid_file ]]

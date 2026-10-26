@@ -8,6 +8,7 @@ watch_dir=${TH_WATCH_DIR:-"$HOME/.team-harness/watch"}
 registry="$watch_dir/tasks.txt"
 stall_sec=${TH_STALL_SEC:-600}
 poll_sec=${TH_POLL_SEC:-10}
+inbox_unread_sec=${TH_INBOX_UNREAD_SEC:-600}
 
 mkdir -p "$watch_dir"
 touch "$registry"
@@ -16,6 +17,8 @@ case "$poll_sec" in (*[!0-9]*|'') poll_sec=10 ;; esac
 (( poll_sec < 1 )) && poll_sec=1
 case "$stall_sec" in (*[!0-9]*|'') stall_sec=600 ;; esac
 (( stall_sec < 1 )) && stall_sec=1
+case "$inbox_unread_sec" in (*[!0-9]*|'') inbox_unread_sec=600 ;; esac
+(( inbox_unread_sec < 1 )) && inbox_unread_sec=600
 
 # 단일 인스턴스 보장 (flock)
 lock_file="$watch_dir/watchd.lock"
@@ -57,6 +60,47 @@ stop_digest_jobs() {
 trap 'stop_digest_jobs; exit 0' TERM INT
 trap stop_digest_jobs EXIT
 
+inbox_unread_file() {
+  local owner=$1 key
+  key=$(printf '%s' "$owner" | sha256sum | awk '{print $1}')
+  printf '%s/inbox_unread/%s.tsv\n' "$watch_dir" "$key"
+}
+
+record_inbox_append() {
+  local owner=$1 inbox_size=$2 now_epoch=$3 state
+  state=$(inbox_unread_file "$owner")
+  mkdir -p "$(dirname "$state")"
+  printf '%s\t%s\t0\t%s\n' "$now_epoch" "$inbox_size" "$owner" >> "$state"
+}
+
+realert_unread_inboxes() {
+  local state now_epoch cursor_file cursor line_epoch line_size line_alerted owner
+  now_epoch=$(date +%s)
+  for state in "$watch_dir"/inbox_unread/*.tsv; do
+    [[ -f $state ]] || continue
+    local tmp="$state.tmp.$$"
+    : > "$tmp"
+    while IFS=$'\t' read -r line_epoch line_size line_alerted owner || [[ -n ${line_epoch:-} ]]; do
+      if [[ ! $line_epoch =~ ^[0-9]+$ || ! $line_size =~ ^[0-9]+$ || -z ${owner:-} ]]; then
+        continue
+      fi
+      cursor_file="$owner/.claude/.inbox_cursor"
+      cursor=0
+      [[ -r $cursor_file ]] && cursor=$(<"$cursor_file")
+      [[ $cursor =~ ^[0-9]+$ ]] || cursor=0
+      if (( cursor < line_size && now_epoch - line_epoch >= inbox_unread_sec && line_alerted != 1 )); then
+        if command -v notify-send >/dev/null 2>&1; then
+          notify-send -u critical "team-harness: inbox 미수신" "$owner: inbox 사건이 ${inbox_unread_sec}s 동안 확인되지 않음" 2>/dev/null || true
+        fi
+        printf '%s [inbox 미수신] %s: cursor=%s < size=%s\n' "$(date '+%F %T')" "$owner" "$cursor" "$line_size" >> "$watch_dir/events.log"
+        line_alerted=1
+      fi
+      printf '%s\t%s\t%s\t%s\n' "$line_epoch" "$line_size" "$line_alerted" "$owner" >> "$tmp"
+    done < "$state"
+    mv "$tmp" "$state"
+  done
+}
+
 handle_daemon_event() {
   local task=$1 event_type=$2 summary=$3 v_res=$4 owner=$5
   local name=${task#"$HOME"/}
@@ -79,9 +123,14 @@ handle_daemon_event() {
   # 1. 소유 작업 공간의 .claude/inbox.md에 한 줄 append
   if [[ -n $owner && -d $owner ]]; then
     local inbox_file="$owner/.claude/inbox.md"
+    local inbox_size now_epoch
     mkdir -p "$owner/.claude"
+    cleanup_inbox_waiter_registry "$owner"
     touch "$inbox_file"
     printf '%s | %s | %s | %s | %s\n' "$now_time" "$name" "$event_type" "$summary" "$v_res" >> "$inbox_file"
+    inbox_size=$(wc -c < "$inbox_file")
+    now_epoch=$(date +%s)
+    record_inbox_append "$owner" "$inbox_size" "$now_epoch"
   fi
 
   # 2. notify-send 데스크톱 알림 (있으면 실행, 없으면 건너뜀)
@@ -115,6 +164,8 @@ while true; do
       inspect_task_event "$task" "$watch_dir" ".th_daemon" "$stall_sec" "" handle_daemon_event
     done < "$registry"
   fi
+
+  realert_unread_inboxes
 
   if [[ ${TH_ONCE:-0} == 1 ]]; then
     # Test/one-shot mode owns its children and returns with no background jobs.

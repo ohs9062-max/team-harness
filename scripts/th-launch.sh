@@ -14,12 +14,6 @@ script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=scripts/th-watch-lib.sh
 source "$script_dir/th-watch-lib.sh"
 
-journal_workspace=${TH_WORKSPACE:-}
-if [[ -z $journal_workspace ]]; then
-  journal_workspace=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null || printf '%s' "$PWD")
-fi
-journal_workspace=$(realpath "$journal_workspace")
-journal_log="$journal_workspace/.claude/work_log.md"
 rotate_journal_if_needed() {
   [[ -f $journal_log ]] || return 0
   local modified today archive
@@ -91,6 +85,17 @@ elif [[ "$worker_type" == "claude" ]]; then
   if [[ -z "$model" || "$model" == "-" || "$model" == "default" ]]; then
     model="claude-sonnet-5"
   fi
+fi
+
+pwd_workspace=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null || true)
+journal_workspace=${TH_WORKSPACE:-}
+if [[ -z $journal_workspace ]]; then
+  journal_workspace=$(resolve_launch_owner "$task_dir" "$worktree" "$PWD")
+fi
+journal_workspace=$(realpath "$journal_workspace")
+journal_log="$journal_workspace/.claude/work_log.md"
+if [[ -n $pwd_workspace ]] && pwd_workspace=$(realpath "$pwd_workspace"); then
+  warn_launch_owner_mismatch "$journal_workspace" "$pwd_workspace"
 fi
 
 watch_dir=${TH_WATCH_DIR:-"$HOME/.team-harness/watch"}
@@ -483,6 +488,10 @@ PYEOF
 )
 
 journal_append
+if ! inbox_waiter_registered "$journal_workspace"; then
+  printf '[th-launch] 경고: %s 코디네이터 inbox 대기 없음 — 사건이 전달되지 않을 수 있음\n' "$journal_workspace" >&2
+  printf '%s | 경고 | inbox-wait 없음 | %s\n' "$(date '+%F %R')" "$task_dir" >> "$journal_log"
+fi
 mkdir -p "$watch_dir"; touch "$watch_dir/tasks.txt"
 usage_record() {
   local usage_file="$watch_dir/usage.jsonl" attempt at owner_json override_json
@@ -512,7 +521,7 @@ fi
 printf '%s LAUNCH worker=%s model=%s effort=%s\n' \
   "$(date '+%F %T')" "$worker_type" "$model" "$effort" >> "$task_dir/STATUS"
 # 이 작업을 띄운 작업 공간. th-watch는 소유자 작업만 알린다(다른 코디네이터 사건을 가로채지 않게).
-project_owner "$journal_workspace" > "$task_dir/.th_owner"
+printf '%s\n' "$journal_workspace" > "$task_dir/.th_owner"
 printf '%s\n' "$worktree" > "$task_dir/.th_worktree"
 if [[ -n ${TH_WORKERS_FILE:-} ]]; then
   printf '%s\n' "$TH_WORKERS_FILE" > "$task_dir/.th_workers_file"
@@ -728,18 +737,7 @@ fi
 
 printf 'launched [%s] pid %s → %s\n' "$worker_type" "$(<"$task_dir/worker.pid")" "$task_dir"
 
-inbox_owner=$(project_owner "$journal_workspace")
-inbox_pid_file="$inbox_owner/.claude/.inbox_wait.pid"
-inbox_wait_pid=""
-if [[ -r $inbox_pid_file ]]; then
-  inbox_wait_pid=$(<"$inbox_pid_file")
-fi
-inbox_wait_cmd=""
-if [[ $inbox_wait_pid =~ ^[1-9][0-9]*$ && -r /proc/$inbox_wait_pid/cmdline ]]; then
-  inbox_wait_cmd=$(tr '\0' ' ' < "/proc/$inbox_wait_pid/cmdline" 2>/dev/null || true)
-fi
-if [[ $inbox_wait_cmd == *th-inbox-wait.sh* ]] && kill -0 "$inbox_wait_pid" 2>/dev/null; then
-  printf '[th-launch] th-inbox-wait 실행 중(pid %s)\n' "$inbox_wait_pid"
-else
-  printf '[th-launch] 코디네이터: th-inbox-wait.sh가 백그라운드로 떠 있지 않으면 지금 run_in_background로 실행\n'
+inbox_owner="$journal_workspace"
+if inbox_waiter_registered "$inbox_owner"; then
+  printf '[th-launch] th-inbox-wait 실행 중\n'
 fi

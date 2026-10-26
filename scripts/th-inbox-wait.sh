@@ -35,38 +35,21 @@ inbox_dir="$owner/.claude"
 inbox_file="$inbox_dir/inbox.md"
 cursor_file="$inbox_dir/.inbox_cursor"
 cursor_lock="$inbox_dir/.inbox_cursor.lock"
-pid_file="$inbox_dir/.inbox_wait.pid"
-pid_lock="$inbox_dir/.inbox_wait.pid.lock"
+wait_registry="$inbox_dir/.inbox_wait.d"
+wait_registration="$wait_registry/$$"
 mkdir -p "$inbox_dir"
+mkdir -p "$wait_registry"
 touch "$inbox_file"
 
-is_inbox_wait_pid() {
-  local pid=$1 cmdline
-  [[ $pid =~ ^[1-9][0-9]*$ && -r /proc/$pid/cmdline ]] || return 1
-  cmdline=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)
-  [[ $cmdline == *th-inbox-wait.sh* ]] && kill -0 "$pid" 2>/dev/null
-}
-
 cleanup_pid() {
-  local recorded
-  recorded=""
-  [[ -r $pid_file ]] && recorded=$(<"$pid_file")
-  [[ $recorded == "$$" ]] && rm -f "$pid_file"
+  rm -f "$wait_registration"
 }
 trap 'cleanup_pid; exit 0' TERM INT HUP
 trap cleanup_pid EXIT
 
-# A later waiter supersedes an earlier one for this owner.  Check its cmdline
-# before signalling so an unrelated recycled PID is never killed.
-(
-  flock -x 201
-  previous=""
-  [[ -r $pid_file ]] && previous=$(<"$pid_file")
-  if is_inbox_wait_pid "$previous"; then
-    kill -TERM "$previous" 2>/dev/null || true
-  fi
-  printf '%s\n' "$$" > "$pid_file"
-) 201>"$pid_lock"
+# Each waiter has a separate registration.  Cursor locking below still ensures
+# that exactly one waiter prints and advances a given inbox event.
+printf '%s\n' "$$" > "$wait_registration"
 
 check_inbox() {
   (

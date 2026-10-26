@@ -496,6 +496,55 @@ now_dt = datetime.now()
 now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
 now_hm = now_dt.strftime("%H:%M")
 
+def get_unread_inbox_alerts(w_dir):
+    """Return pending watcher inbox events grouped by owner for the summary."""
+    state_dir = os.path.join(w_dir, "inbox_unread")
+    grouped = {}
+    if not os.path.isdir(state_dir):
+        return []
+    try:
+        state_files = sorted(Path(state_dir).glob("*.tsv"))
+    except OSError:
+        return []
+    for state_file in state_files:
+        try:
+            lines = state_file.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            parts = line.split("\t", 3)
+            if len(parts) != 4:
+                continue
+            stamp, size_text, _alerted, owner = parts
+            try:
+                size = int(size_text)
+                stamp_epoch = int(stamp)
+            except ValueError:
+                continue
+            cursor = 0
+            try:
+                cursor_text = Path(owner, ".claude", ".inbox_cursor").read_text(
+                    encoding="utf-8"
+                ).strip()
+                cursor = int(cursor_text)
+            except (OSError, ValueError):
+                pass
+            if cursor < size:
+                count, oldest = grouped.get(owner, (0, stamp_epoch))
+                grouped[owner] = (count + 1, min(oldest, stamp_epoch))
+    return [(owner, count, oldest) for owner, (count, oldest) in sorted(grouped.items())]
+
+unread_inbox_alerts = get_unread_inbox_alerts(watch_dir)
+
+def unread_inbox_line():
+    if not unread_inbox_alerts:
+        return ""
+    unread_text = "; ".join(
+        f"{owner} 미확인 {count}건 (가장 오래된 {datetime.fromtimestamp(oldest).strftime('%H:%M')})"
+        for owner, count, oldest in unread_inbox_alerts
+    )
+    return f"⚠ 알림 미수신: {unread_text}"
+
 def get_footer_line(w_dir):
     # 1. Quota locks
     quota_parts = []
@@ -596,6 +645,8 @@ if not os.path.isfile(registry):
         print("등록 작업 없음")
     else:
         print(f"작업 현황 {now_hm}  실행 0 · 주의 0 · 끝남 0 · 오래된 미정리 0 (숨김)")
+        if unread_inbox_line():
+            print(unread_inbox_line())
         print()
         print(get_footer_line(watch_dir))
     print_notice()
@@ -614,6 +665,8 @@ if not valid_tasks:
         print("등록 작업 없음")
     else:
         print(f"작업 현황 {now_hm}  실행 0 · 주의 0 · 끝남 0 · 오래된 미정리 0 (숨김)")
+        if unread_inbox_line():
+            print(unread_inbox_line())
         print()
         print(get_footer_line(watch_dir))
     print_notice()
@@ -1310,6 +1363,8 @@ if not all_mode:
         f"실행 {len(run_rows)} · 주의 {len(att_rows)} · 끝남 {len(done_rows)} · "
         f"오래된 미정리 {old_uncleaned_count} (숨김)"
     )
+    if unread_inbox_line():
+        print(unread_inbox_line())
 
     sections = [
         ("▶ 실행 중", "32", run_rows, True, "running"),
@@ -1334,6 +1389,9 @@ if not all_mode:
     sys.exit(0)
 
 raw_w = [max(str_width(headers[i]), max((str_width(r[i]) for r in rows), default=0)) for i in range(7)]
+
+if unread_inbox_line():
+    print(unread_inbox_line())
 
 w0 = min(max(raw_w[0], str_width(headers[0])), 24)
 w2 = min(max(raw_w[2], str_width(headers[2])), 10)
