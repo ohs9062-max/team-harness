@@ -60,6 +60,7 @@ touch "$inbox_dir/inbox.md"
 trap 'rm -f "$wait_registration"' EXIT
 trap 'exit 0' TERM INT HUP
 printf '%s\n%s\n' "$$" "$session" > "$wait_registration"
+# Session cursors are .claude/.inbox_cursor.d/<session>; the reader manages them.
 check_inbox() {
   python3 "$script_dir/th-inbox-read.py" "$owner" 1 wait
 }
