@@ -1139,7 +1139,7 @@ for task in valid_tasks:
     tpath = Path(task)
     pids, inferred = fast_live_pids(task)
     is_alive = bool(pids)
-    terminal = observer.terminal_status(tpath)
+    terminal = liveness.effective_terminal(tpath, observer.terminal_status(tpath), pids)
     is_quota_err = False
     has_handoff_stall = bool(
         list(tpath.glob(".th_daemon.handoff_stall.*"))
@@ -1173,6 +1173,8 @@ for task in valid_tasks:
 
     task_name = get_task_name(task)
     v_status = get_verify_status(task)
+    if is_alive and "VERIFY_FAILED" not in liveness.current_markers(tpath, pids) and v_status in ("실패", "VERIFY_FAILED"):
+        v_status = "-"
     prog = (tpath / "STATUS").read_text(errors="replace").splitlines()[-1] if inferred and (tpath / "STATUS").is_file() and (tpath / "STATUS").stat().st_size else get_progress(task)
     ctx_line, ctx_info = inspect_task_context(task, prog)
     eta = estimate_eta(task, state, now_ts)

@@ -52,6 +52,53 @@ def live_processes(task):
     return sorted(guessed), bool(guessed)
 
 
+def current_markers(task, pids):
+    """Return marker names belonging to the current live attempt."""
+    task = Path(task)
+    markers = [task / "DONE", task / "FAILED", task / "VERIFY_FAILED"]
+    markers.extend(task.glob("FAILED.*"))
+    markers = [path for path in markers if path.is_file()]
+    if not pids:
+        return {path.name for path in markers}
+    starts = []
+    try:
+        btime = next(int(line.split()[1]) for line in Path("/proc/stat").read_text().splitlines() if line.startswith("btime "))
+        ticks = os.sysconf("SC_CLK_TCK")
+        for pid in pids:
+            try:
+                fields = Path(f"/proc/{pid}/stat").read_text().rsplit(") ", 1)[1].split()
+                starts.append(btime + int(fields[19]) / ticks)
+            except (OSError, ValueError, IndexError):
+                continue
+    except (OSError, StopIteration, ValueError):
+        pass
+    if starts:
+        started = min(starts)
+    else:
+        try:
+            started = (task / "job.pid").stat().st_mtime
+        except OSError:
+            return {path.name for path in markers}
+    return {path.name for path in markers if path.stat().st_mtime >= started}
+
+
+def effective_terminal(task, terminal, pids):
+    if not pids or not terminal:
+        return terminal
+    task = Path(task)
+    names = current_markers(task, pids)
+    failures = [p for p in [task / "FAILED", *task.glob("FAILED.*")] if p.is_file()]
+    if terminal == "FAILED" and failures and not any(p.name in names for p in failures):
+        return "DONE" if "DONE" in names else ""
+    if terminal == "DONE" and (task / "DONE").is_file() and "DONE" not in names:
+        return ""
+    return terminal
+
+
 if __name__ == "__main__":
-    pids, _ = live_processes(sys.argv[1])
-    print(*pids, sep="\n")
+    if sys.argv[1] == "terminal":
+        pids, _ = live_processes(sys.argv[2])
+        print(effective_terminal(sys.argv[2], sys.argv[3], pids))
+    else:
+        pids, _ = live_processes(sys.argv[1])
+        print(*pids, sep="\n")

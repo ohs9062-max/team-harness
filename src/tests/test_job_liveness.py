@@ -86,3 +86,77 @@ def test_tag_and_session_fallback(tmp_path: Path) -> None:
         leader.terminate()
         leader.wait()
     assert not found(task)
+
+
+def test_live_attempt_ignores_only_older_markers(tmp_path: Path) -> None:
+    task = tmp_path / "attempt"
+    task.mkdir()
+    watch = tmp_path / "watch"
+    watch.mkdir()
+    (watch / "tasks.txt").write_text(f"{task}\n")
+    (task / "STATUS").write_text("working\n")
+    env = os.environ.copy()
+    env["TH_WATCH_DIR"] = str(watch)
+    env["TH_JOB_TASK"] = str(task)
+    proc = subprocess.Popen(["sleep", "30"], env=env)
+    try:
+        (task / "job.pid").write_text(f"{proc.pid}\n")
+        old = task / "VERIFY_FAILED"
+        old.write_text("previous attempt")
+        os.utime(old, (1, 1))
+        failed = task / "FAILED"
+        failed.write_text("previous attempt")
+        os.utime(failed, (1, 1))
+        result = subprocess.run(
+            [str(SCRIPTS / "th-status.sh")],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert "실행 1 · 주의 0" in result.stdout
+        command = 'source "$1"; cb() { printf "%s\\n" "$2"; }; inspect_task_event "$2" "$3" .th_test 999999 "" cb'
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                command,
+                "bash",
+                str(SCRIPTS / "th-watch-lib.sh"),
+                str(task),
+                str(watch),
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert "실패" not in result.stdout
+        os.utime(failed, None)
+        result = subprocess.run(
+            [str(SCRIPTS / "th-status.sh")],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert "실행 0 · 주의 1" in result.stdout
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                command,
+                "bash",
+                str(SCRIPTS / "th-watch-lib.sh"),
+                str(task),
+                str(watch),
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert "실패" in result.stdout
+    finally:
+        proc.terminate()
+        proc.wait()

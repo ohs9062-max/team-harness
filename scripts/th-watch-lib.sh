@@ -421,6 +421,7 @@ inspect_task_event() {
   local terminal failed_file program
   program=$(worker_digest_program)
   terminal=$(python3 "$program" terminal "$task")
+  terminal=$(python3 "$(dirname "${BASH_SOURCE[0]}")/th-job-liveness.py" terminal "$task" "$terminal")
   failed_file="$task/FAILED"
   if [[ ! -f $failed_file ]]; then
     for cand in "$task"/FAILED.*; do
