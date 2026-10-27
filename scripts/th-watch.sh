@@ -146,7 +146,10 @@ handle_watch_event() {
   fi
 }
 
-while (( $(date +%s) < deadline )); do
+# Even a short timeout must inspect once when startup crosses a second boundary.
+first_pass=1
+while (( max_wait > 0 )) && { (( first_pass )) || (( $(date +%s) < deadline )); }; do
+  first_pass=0
   while IFS= read -r task || [[ -n $task ]]; do
     [[ -n $task && -d $task ]] || continue
     inspect_task_event "$task" "$watch_dir" ".th_notified" "$stall_sec" "$journal_workspace" handle_watch_event

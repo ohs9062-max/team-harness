@@ -67,35 +67,71 @@ inbox_unread_file() {
 }
 
 record_inbox_append() {
-  local owner=$1 inbox_size=$2 now_epoch=$3 state
+  local owner=$1 inbox_size=$2 now_epoch=$3 route=$4 state
   state=$(inbox_unread_file "$owner")
   mkdir -p "$(dirname "$state")"
-  printf '%s\t%s\t0\t%s\n' "$now_epoch" "$inbox_size" "$owner" >> "$state"
+  printf '%s\t%s\t0\t%s\t%s\n' "$now_epoch" "$inbox_size" "$owner" "$route" >> "$state"
 }
 
 realert_unread_inboxes() {
-  local state now_epoch cursor_file cursor line_epoch line_size line_alerted owner
+  local state now_epoch cursor line_epoch line_size line_alerted owner route entry pid key file active
   now_epoch=$(date +%s)
   for state in "$watch_dir"/inbox_unread/*.tsv; do
     [[ -f $state ]] || continue
     local tmp="$state.tmp.$$"
     : > "$tmp"
-    while IFS=$'\t' read -r line_epoch line_size line_alerted owner || [[ -n ${line_epoch:-} ]]; do
-      if [[ ! $line_epoch =~ ^[0-9]+$ || ! $line_size =~ ^[0-9]+$ || -z ${owner:-} ]]; then
-        continue
-      fi
-      cursor_file="$owner/.claude/.inbox_cursor"
+    while IFS=$'\t' read -r line_epoch line_size line_alerted owner route || [[ -n ${line_epoch:-} ]]; do
+      [[ $line_epoch =~ ^[0-9]+$ && $line_size =~ ^[0-9]+$ && -n ${owner:-} ]] || continue
+      route=${route:-*}
       cursor=0
-      [[ -r $cursor_file ]] && cursor=$(<"$cursor_file")
-      [[ $cursor =~ ^[0-9]+$ ]] || cursor=0
-      if (( cursor < line_size && now_epoch - line_epoch >= inbox_unread_sec && line_alerted != 1 )); then
+      active=0
+      if [[ $route == '*' ]]; then
+        for entry in "$owner"/.claude/.inbox_wait.d/*; do
+          [[ -f $entry ]] || continue
+          pid=${entry##*/}
+          is_inbox_wait_pid "$pid" || continue
+          active=1
+          key=$(sed -n '2p' "$entry")
+          file="$owner/.claude/.inbox_cursor"
+          [[ -z $key ]] || file="$owner/.claude/.inbox_cursor.d/$key"
+          if [[ -r $file ]]; then
+            key=$(<"$file")
+            [[ $key =~ ^[0-9]+$ ]] && (( key > cursor )) && cursor=$key
+          fi
+        done
+        # Waiters exit after output, so their durable cursors remain evidence
+        # that a broadcast was delivered after their registrations disappear.
+        for file in "$owner"/.claude/.inbox_cursor.d/*; do
+          [[ -f $file && -r $file ]] || continue
+          key=$(<"$file")
+          [[ $key =~ ^[0-9]+$ ]] && (( key > cursor )) && cursor=$key
+        done
+        # Preserve the legacy shared cursor for old registrations and readers.
+        file="$owner/.claude/.inbox_cursor"
+        if [[ -r $file ]]; then
+          key=$(<"$file")
+          [[ $key =~ ^[0-9]+$ ]] && (( key > cursor )) && cursor=$key
+        fi
+      else
+        file="$owner/.claude/.inbox_cursor.d/$route"
+        [[ -r $file ]] && cursor=$(<"$file")
+        [[ $cursor =~ ^[0-9]+$ ]] || cursor=0
+        for entry in "$owner"/.claude/.inbox_wait.d/*; do
+          [[ -f $entry ]] || continue
+          pid=${entry##*/}
+          is_inbox_wait_pid "$pid" || continue
+          key=$(sed -n '2p' "$entry")
+          [[ $key == "$route" ]] && active=1
+        done
+      fi
+      if (( cursor < line_size && line_alerted != 1 )) && { (( active == 0 )) || (( now_epoch - line_epoch >= inbox_unread_sec )); }; then
         if command -v notify-send >/dev/null 2>&1; then
-          notify-send -u critical "team-harness: inbox 미수신" "$owner: inbox 사건이 ${inbox_unread_sec}s 동안 확인되지 않음" 2>/dev/null || true
+          notify-send -u critical "team-harness: inbox 미수신" "$owner: 세션 ${route:0:8} waiter 없음 또는 미확인" 2>/dev/null || true
         fi
         printf '%s [inbox 미수신] %s: cursor=%s < size=%s\n' "$(date '+%F %T')" "$owner" "$cursor" "$line_size" >> "$watch_dir/events.log"
         line_alerted=1
       fi
-      printf '%s\t%s\t%s\t%s\n' "$line_epoch" "$line_size" "$line_alerted" "$owner" >> "$tmp"
+      printf '%s\t%s\t%s\t%s\t%s\n' "$line_epoch" "$line_size" "$line_alerted" "$owner" "$route" >> "$tmp"
     done < "$state"
     mv "$tmp" "$state"
   done
@@ -129,14 +165,21 @@ handle_daemon_event() {
   # 1. 소유 작업 공간의 .claude/inbox.md에 한 줄 append
   if [[ -n $owner && -d $owner ]]; then
     local inbox_file="$owner/.claude/inbox.md"
-    local inbox_size now_epoch
+    local inbox_size now_epoch route inbox_offset
+    route=$(cat "$task/.th_session" 2>/dev/null || true)
+    [[ -n $route && $route != */* && $route != . && $route != .. && $route != '*' && $route != *$'\t'* && $route != *$'\n'* ]] || route='*'
     mkdir -p "$owner/.claude"
     cleanup_inbox_waiter_registry "$owner"
     touch "$inbox_file"
-    printf '%s | %s | %s | %s | %s%s\n' "$now_time" "$name" "$event_type" "$summary" "$v_res" "$jev_suffix" >> "$inbox_file"
-    inbox_size=$(wc -c < "$inbox_file")
-    now_epoch=$(date +%s)
-    record_inbox_append "$owner" "$inbox_size" "$now_epoch"
+    (
+      flock -x 202
+      inbox_offset=$(wc -c < "$inbox_file")
+      printf '%s\t%s\n' "$inbox_offset" "$route" >> "$owner/.claude/inbox.routes"
+      printf '%s | %s | %s | %s | %s%s\n' "$now_time" "$name" "$event_type" "$summary" "$v_res" "$jev_suffix" >> "$inbox_file"
+      inbox_size=$(wc -c < "$inbox_file")
+      now_epoch=$(date +%s)
+      record_inbox_append "$owner" "$inbox_size" "$now_epoch" "$route"
+    ) 202>"$owner/.claude/.inbox_cursor.lock"
   fi
 
   # 2. notify-send 데스크톱 알림 (있으면 실행, 없으면 건너뜀)

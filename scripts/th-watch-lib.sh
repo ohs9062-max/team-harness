@@ -161,14 +161,19 @@ cleanup_inbox_waiter_registry() {
 }
 
 inbox_waiter_registered() {
-  local owner=$1 registry entry pid legacy
+  local owner=$1 registry entry pid legacy key session
+  session=$(th_session_key)
   registry="$owner/.claude/.inbox_wait.d"
   cleanup_inbox_waiter_registry "$owner"
   for entry in "$registry"/*; do
     [[ -f $entry ]] || continue
     pid=$(basename "$entry")
-    is_inbox_wait_pid "$pid" && return 0
+    if is_inbox_wait_pid "$pid"; then
+      key=$(sed -n '2p' "$entry")
+      [[ $key == "$session" ]] && return 0
+    fi
   done
+  [[ -z $session ]] || return 1
   legacy="$owner/.claude/.inbox_wait.pid"
   [[ -r $legacy ]] || return 1
   pid=$(<"$legacy")
@@ -644,4 +649,9 @@ inspect_task_event() {
       "$callback_fn" "$task" "멈춤" "멈춤 — CPU·산출물 $(( now - since ))s 변화 없음(프로세스는 살아 있음)" "-" "$owner"
     fi
   fi
+}
+
+# Coordinator identity is inherited by the launcher and inbox tools.
+th_session_key() {
+  printf '%s' "${ORCA_PANE_KEY:-${CLAUDE_CODE_SESSION_ID:-${TH_SESSION_KEY:-}}}"
 }

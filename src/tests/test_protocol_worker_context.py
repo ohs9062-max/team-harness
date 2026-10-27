@@ -180,6 +180,7 @@ async def test_protocol_stage_rollover_resumes_and_records_events(tmp_path: Path
     )
 
     assert result.success is True
+    assert not (worktree / ".th_session").exists()
     assert "IMPLEMENT" in state.worker_context
     ctx_info = state.worker_context["IMPLEMENT"]
     assert ctx_info["action"] == "continue"

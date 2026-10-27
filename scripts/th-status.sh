@@ -499,53 +499,65 @@ now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
 now_hm = now_dt.strftime("%H:%M")
 
 def get_unread_inbox_alerts(w_dir):
-    """Return pending watcher inbox events grouped by owner for the summary."""
-    state_dir = os.path.join(w_dir, "inbox_unread")
+    """Return unread inbox entries, using the event's target session cursor."""
     grouped = {}
-    if not os.path.isdir(state_dir):
-        return []
-    try:
-        state_files = sorted(Path(state_dir).glob("*.tsv"))
-    except OSError:
-        return []
-    for state_file in state_files:
+    for state_file in Path(w_dir, "inbox_unread").glob("*.tsv"):
         try:
             lines = state_file.read_text(encoding="utf-8", errors="replace").splitlines()
         except OSError:
             continue
         for line in lines:
-            parts = line.split("\t", 3)
-            if len(parts) != 4:
+            parts = line.split("\t")
+            if len(parts) < 4:
                 continue
-            stamp, size_text, _alerted, owner = parts
+            stamp, size_text, _alerted, owner = parts[:4]
+            route = parts[4] if len(parts) > 4 else "*"
             try:
-                size = int(size_text)
-                stamp_epoch = int(stamp)
+                size, stamp_epoch = int(size_text), int(stamp)
             except ValueError:
                 continue
+            root = Path(owner, ".claude")
+            active = []
+            for entry in (root / ".inbox_wait.d").glob("*"):
+                try:
+                    pid = int(entry.name)
+                    cmd = Path(f"/proc/{pid}/cmdline").read_bytes()
+                    lines_reg = entry.read_text().splitlines()
+                    key = lines_reg[1] if len(lines_reg) > 1 else ""
+                    if b"th-inbox-wait.sh" in cmd:
+                        active.append(key)
+                except (OSError, ValueError):
+                    continue
+            keys = active if route == "*" else [route]
+            if route == "*":
+                keys = [*keys, ""]
+                keys.extend(entry.name for entry in (root / ".inbox_cursor.d").glob("*"))
             cursor = 0
-            try:
-                cursor_text = Path(owner, ".claude", ".inbox_cursor").read_text(
-                    encoding="utf-8"
-                ).strip()
-                cursor = int(cursor_text)
-            except (OSError, ValueError):
-                pass
+            for key in keys:
+                file = root / ".inbox_cursor.d" / key if key else root / ".inbox_cursor"
+                try:
+                    cursor = max(cursor, int(file.read_text().strip()))
+                except (OSError, ValueError):
+                    pass
             if cursor < size:
-                count, oldest = grouped.get(owner, (0, stamp_epoch))
-                grouped[owner] = (count + 1, min(oldest, stamp_epoch))
-    return [(owner, count, oldest) for owner, (count, oldest) in sorted(grouped.items())]
+                group = (owner, route, route != "*" and route not in active)
+                count, oldest = grouped.get(group, (0, stamp_epoch))
+                grouped[group] = (count + 1, min(oldest, stamp_epoch))
+    return [(owner, route, missing, count, oldest)
+            for (owner, route, missing), (count, oldest) in sorted(grouped.items())]
 
 unread_inbox_alerts = get_unread_inbox_alerts(watch_dir)
 
 def unread_inbox_line():
     if not unread_inbox_alerts:
         return ""
-    unread_text = "; ".join(
-        f"{owner} 미확인 {count}건 (가장 오래된 {datetime.fromtimestamp(oldest).strftime('%H:%M')})"
-        for owner, count, oldest in unread_inbox_alerts
-    )
-    return f"⚠ 알림 미수신: {unread_text}"
+    details = []
+    for owner, route, missing, count, oldest in unread_inbox_alerts:
+        if missing:
+            details.append(f"{owner} 세션 {route[:8]} waiter 없음")
+        else:
+            details.append(f"{owner} 미확인 {count}건 (가장 오래된 {datetime.fromtimestamp(oldest).strftime('%H:%M')})")
+    return "⚠ 알림 미수신: " + "; ".join(details)
 
 def get_footer_line(w_dir):
     # 1. Quota locks

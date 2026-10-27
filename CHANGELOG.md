@@ -309,3 +309,5 @@
 - OpenAI 호환 API 및 Codex 구독 백엔드 지원.
 - 대화형 REPL (`/compact`, `/clear`, `/agents`, `/log`, `/quit`).
 - 자동 압축, 세션 추적, 실행 로그, `th init` 지원.
+
+- inbox 사건을 코디네이터 세션별로 라우팅하고 Codex waiter를 차단한다 (TH-D41).

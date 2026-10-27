@@ -74,7 +74,13 @@ sleep 15 &
             stub_path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH
         )
 
-    env = dict(os.environ)
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("CODEX_")
+        and key not in ("ORCA_PANE_KEY", "CLAUDE_CODE_SESSION_ID", "TH_SESSION_KEY")
+    }
+    env["CLAUDECODE"] = "1"
     env["TH_WATCH_DIR"] = str(watch_dir)
     env["TH_WORKSPACE"] = str(workspace)
     env["TH_WORKER_SUFFIX"] = str(suffix_file)
@@ -238,7 +244,9 @@ def test_th_launch_retains_th_owner(test_env: dict):
         "medium",
         str(task_dir),
     ]
+    test_env["env"]["ORCA_PANE_KEY"] = "launch-session"
     res = subprocess.run(cmd, env=test_env["env"], capture_output=True, text=True)
+    assert (task_dir / ".th_session").read_text().strip() == "launch-session"
     assert res.returncode == 0, f"th-launch failed: {res.stderr}\n{res.stdout}"
 
     owner_file = task_dir / ".th_owner"
@@ -3187,3 +3195,24 @@ def test_jev_launch_disabled_has_no_audit(test_env: dict):
     assert result.returncode == 0, result.stderr
     assert "[jev]" not in result.stdout
     assert not (test_env["watch_dir"] / "jev_decisions.log").exists()
+
+
+def test_watchd_writes_session_route_for_event(test_env: dict) -> None:
+    task = _create_task_dir(test_env["tmp_path"], "session_event")
+    owner = test_env["workspace"]
+    subprocess.run(["git", "init", str(owner)], check=True, capture_output=True)
+    (task / ".th_owner").write_text(str(owner))
+    (task / ".th_session").write_text("pane-A\n")
+    (task / "FAILED").write_text("failure")
+    (test_env["watch_dir"] / "tasks.txt").write_text(str(task) + "\n")
+    env = {**test_env["env"], "TH_ONCE": "1", "TEAM_HARNESS_JEV": "0"}
+    result = subprocess.run(
+        [str(SCRIPTS_DIR / "th-watchd.sh")],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert result.returncode == 0, result.stderr
+    assert (owner / ".claude" / "inbox.routes").read_text() == "0\tpane-A\n"
+    assert "session_event" in (owner / ".claude" / "inbox.md").read_text()

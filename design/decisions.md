@@ -568,3 +568,17 @@ TEAM_HARNESS_JEV=0은 호출과 disabled 기록을 모두 생략한다.
 **결과.** JSON 감사 로그와 run.json decisions, 셸 권고 및 inbox 끝 컬럼으로 근거가 남는다.
 외부 TypeSafe 전송은 사용자 승인되었다. 1~2주 기록 후 인간 판단과의 일치율을 보고하고
 자동 적용 여부를 별도 결정한다. 기존 도구 선택 라우터와 실행 계약은 유지한다.
+
+## TH-D41. inbox 사건을 작업을 띄운 코디네이터 세션으로 라우팅한다
+
+**결정.** watchd는 기존 inbox 줄을 유지하면서 오프셋별 대상 세션을 사이드카에 기록한다.
+세션별 커서와 waiter 등록으로 대상 세션의 읽음 여부를 판정하고, 대상 waiter 부재는 즉시 알린다.
+Codex 코디네이터는 백그라운드 waiter 대신 사용자 요청 시 읽기 전용 peek를 사용한다.
+세션 없는 기존 작업은 전체 대상이며 공유 커서는 키 없는 세션에 남긴다.
+
+**맥락.** 9dab2b1의 공유 커서 설계는 여러 waiter 중 하나가 사건을 소비한다. 동일 inbox를 쓰는
+Claude와 Codex가 함께 실행될 때 Codex waiter가 Claude가 띄운 작업의 실패를 소비하고 깨우지 못해
+2026-10-27 사건 대응이 27분 지연되었다.
+
+**결과.** 작업을 띄운 세션이 사건을 받는다. watchd에 등록하지 않는 th run 및 protocol 경로는
+기존 run 상태로 진행·완료를 확인한다. 상세 계약과 적용 경로는 `design/designs/inbox-session-routing.md`에 둔다.

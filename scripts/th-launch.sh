@@ -525,6 +525,12 @@ printf '%s LAUNCH worker=%s model=%s effort=%s\n' \
   "$(date '+%F %T')" "$worker_type" "$model" "$effort" >> "$task_dir/STATUS"
 # 이 작업을 띄운 작업 공간. th-watch는 소유자 작업만 알린다(다른 코디네이터 사건을 가로채지 않게).
 printf '%s\n' "$journal_workspace" > "$task_dir/.th_owner"
+session_key=$(th_session_key)
+if [[ -n $session_key ]]; then
+  printf '%s\n' "$session_key" > "$task_dir/.th_session"
+else
+  rm -f "$task_dir/.th_session"
+fi
 printf '%s\n' "$worktree" > "$task_dir/.th_worktree"
 if [[ -n ${TH_WORKERS_FILE:-} ]]; then
   printf '%s\n' "$TH_WORKERS_FILE" > "$task_dir/.th_workers_file"
