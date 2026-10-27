@@ -781,17 +781,12 @@ for _entry in Path("/proc").glob("[0-9]*/cmdline"):
     except (OSError, ValueError):
         continue
 
+liveness_spec = importlib.util.spec_from_file_location("job_liveness", Path(sys.argv[1]).resolve().parents[2] / "scripts/th-job-liveness.py")
+liveness = importlib.util.module_from_spec(liveness_spec)
+liveness_spec.loader.exec_module(liveness)
+
 def fast_live_pids(task_dir):
-    pids = set()
-    tpath = Path(task_dir)
-    for name in ("job.pid", "worker.pid"):
-        val = observer.read(tpath / name).strip()
-        if val.isdigit() and observer.pid_alive(int(val)):
-            pids.add(int(val))
-    for apid in _AGY_PIDS_BY_TASK.get(str(tpath), ()):
-        if observer.pid_alive(apid):
-            pids.add(apid)
-    return sorted(pids)
+    return liveness.live_processes(task_dir)
 
 _REGISTRY_SESSIONS_CACHE = {}
 _SETTINGS_CACHE = {}
@@ -1142,7 +1137,7 @@ now_ts = time.time()
 
 for task in valid_tasks:
     tpath = Path(task)
-    pids = fast_live_pids(task)
+    pids, inferred = fast_live_pids(task)
     is_alive = bool(pids)
     terminal = observer.terminal_status(tpath)
     is_quota_err = False
@@ -1159,12 +1154,12 @@ for task in valid_tasks:
         is_quota_err = check_task_quota_error(task)
         if is_quota_err:
             state = '워커 오류(쿼터·용량)'
-        elif has_handoff_stall:
+        elif has_handoff_stall and not is_alive:
             state = '인계 없음'
         elif not is_alive:
             state = '중단?'
         else:
-            state = '진행'
+            state = '실행(추정)' if inferred else '진행'
 
     latest_ts = get_latest_output(task)
     if latest_ts is not None:
@@ -1175,7 +1170,7 @@ for task in valid_tasks:
 
     task_name = get_task_name(task)
     v_status = get_verify_status(task)
-    prog = get_progress(task)
+    prog = (tpath / "STATUS").read_text(errors="replace").splitlines()[-1] if inferred and (tpath / "STATUS").is_file() and (tpath / "STATUS").stat().st_size else get_progress(task)
     ctx_line, ctx_info = inspect_task_context(task, prog)
     eta = estimate_eta(task, state, now_ts)
 
@@ -1215,7 +1210,7 @@ if not all_mode:
         is_vfail = rec["v_status"] in ("실패", "VERIFY_FAILED")
 
         if rec["is_alive"]:
-            if rec["terminal"] == "FAILED" or rec["is_quota_err"] or is_vfail or rec["is_stalled"] or rec["has_handoff_stall"]:
+            if rec["terminal"] == "FAILED" or rec["is_quota_err"] or is_vfail or rec["is_stalled"] or (rec["has_handoff_stall"] and not rec["is_alive"]):
                 attention_recs.append(rec)
             else:
                 running_recs.append(rec)
@@ -1259,7 +1254,9 @@ if not all_mode:
         tname = rec["name"]
         wm = get_worker_and_model(rec["path"], rec["ctx_info"])
         updated = format_rel_time(rec["latest_ts"], now_ts, include_ago=True)
-        stage = get_stage_summary(rec["path"], rec["state"])
+        stage = rec["prog"] if rec["state"] == "실행(추정)" else get_stage_summary(rec["path"], rec["state"])
+        if rec["state"] == "실행(추정)":
+            stage = f"실행(추정) {stage}"
         eta = rec["eta"] if section_kind == "running" else "-"
 
         if section_kind == "running":

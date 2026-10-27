@@ -7,6 +7,8 @@
 
 ## [Unreleased]
 
+- 분리 작업의 실제 PID 기록과 환경 태그·세션 기반 생존 판정을 추가합니다.
+
 ### 변경됨 (Changed)
 
 - Codex 기본 워커 모델을 gpt-6.1-terra로 변경 (TH-D29 개정)

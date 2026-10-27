@@ -2,6 +2,12 @@
 # th-watch-lib.sh: th-watch 및 th-watchd 공통 감시·검수 함수 라이브러리
 # 중복 구현 금지 원칙에 따라 사건 판정 및 검수 로직을 단일 정본으로 유지한다.
 
+task_live_pids() {
+  local lib_dir
+  lib_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  python3 "$lib_dir/th-job-liveness.py" "$1"
+}
+
 cpu_ticks() {
   local pid=$1 proc total=0 ticks child index=0
   [[ $pid =~ ^[1-9][0-9]*$ ]] || { echo 0; return; }
@@ -405,6 +411,9 @@ inspect_task_event() {
   if [[ $current_worker_pid =~ ^[1-9][0-9]*$ ]] && kill -0 "$current_worker_pid" 2>/dev/null; then
     current_worker_alive=1
   fi
+  local discovered_pids
+  discovered_pids=$(task_live_pids "$task")
+  if [[ -n $(printf "%s\n" "$discovered_pids" | grep -v -x -F -- "$current_worker_pid") ]]; then distinct_job_alive=1; fi
   if (( current_worker_alive )) || [[ $distinct_job_alive == 1 ]]; then
     rm -f "$marker".handoff_wait.*
   fi
@@ -469,7 +478,7 @@ inspect_task_event() {
   elif [[ $ctx_event == "worker_terminated" && ! -f $marker.worker_terminated ]]; then
     touch "$marker.worker_terminated"
     "$callback_fn" "$task" "긴 실행 대기" "$ctx_detail" "-" "$owner"
-  elif [[ $ctx_event == "job_completed" ]]; then
+  elif [[ $ctx_event == "job_completed" ]] && { (( current_worker_alive )) || [[ -z $discovered_pids ]]; }; then
     # A detached job ending is normally a handoff, not an actionable event.
     # Only wake the coordinator when no worker has resumed it for the full
     # grace period.  Markers are keyed by pid so a replacement job is fresh.
@@ -563,7 +572,7 @@ inspect_task_event() {
 
   while IFS= read -r p; do
     [[ $p =~ ^[1-9][0-9]*$ ]] && alive_pids+=("$p")
-  done < <(python3 "$program" pids "$task")
+  done < <(printf "%s\n" "$discovered_pids")
 
   if (( ${#alive_pids[@]} == 0 )); then
     if [[ -f $task/DONE || -f $task/FAILED || -f $task/.th_job_completed ]]; then
@@ -583,7 +592,10 @@ inspect_task_event() {
 
   # 5. 멈춤(stall) 판정
   local cpu=0
-  for p in "${alive_pids[@]}"; do cpu=$(( cpu + $(cpu_ticks "$p") )); done
+  for p in "${alive_pids[@]}"; do
+    ticks=$(awk -F') ' '{split($2, a, " "); print a[12] + a[13]}' "/proc/$p/stat" 2>/dev/null) || ticks=0
+    [[ $ticks =~ ^[0-9]+$ ]] && cpu=$(( cpu + ticks ))
+  done
   local newest
   newest=$(latest_signature "$task")
   local signature="$cpu:$newest"

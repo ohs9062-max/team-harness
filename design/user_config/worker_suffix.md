@@ -11,7 +11,7 @@ Do not read or write the coordinator journal (`.claude/current_status.md`, `.cla
   `YYYY-MM-DD HH:MM:SS 처리 N/M장 X s/장` or `YYYY-MM-DD HH:MM:SS epoch=k/E`
   so `ths` can estimate the finish time. Do not compute an ETA yourself.
 - Git: `git log --oneline`, `git diff --stat`; read diffs only where suspicious.
-- Long job: smoke test first, then one `setsid nohup` runner, PID in `job.pid`.
+- Long job: smoke test first, then use `th-job-start.sh <task folder> -- <command>`; the actual process records its PID in `job.pid`. Do not launch it with setsid directly.
   The runner chains train → evaluate → plots → report → `DONE`/`FAILED`; on a
   failed step it writes `FAILED` with the step name and rc, even after worker exit.
 - Never hand remaining steps to the coordinator. If stopping yourself, write
