@@ -582,3 +582,14 @@ Claude와 Codex가 함께 실행될 때 Codex waiter가 Claude가 띄운 작업�
 
 **결과.** 작업을 띄운 세션이 사건을 받는다. watchd에 등록하지 않는 th run 및 protocol 경로는
 기존 run 상태로 진행·완료를 확인한다. 상세 계약과 적용 경로는 `design/designs/inbox-session-routing.md`에 둔다.
+
+
+## TH-D42 — Destructive-command guard and worker failure rule
+
+A Claude Code PreToolUse Bash hook requests approval for destructive coordinator commands; `TH_GUARD_MODE=deny` denies them, while workers bypass it. It fails open on errors and records detections in the watch directory. Registration and testing in Claude settings are performed separately by the coordinator. Worker instructions distinguish correctable mechanical errors and known fixes from genuine failure conditions, and require conservative decisions.
+
+| Execution path | Application | Reason |
+| --- | --- | --- |
+| Claude Code coordinator | `scripts/hooks/th-guard-destructive.py` PreToolUse hook (manual registration) | Claude Code supports Bash hooks. |
+| Codex/agy workers | `design/user_config/worker_suffix.md` | Worker instructions govern their own tasks; the hook exempts workers. |
+| Codex coordinator | Document rules only; no hook | Codex does not support Claude hooks. |

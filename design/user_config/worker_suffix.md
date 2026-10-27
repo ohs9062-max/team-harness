@@ -18,9 +18,10 @@ Do not read or write the coordinator journal (`.claude/current_status.md`, `.cla
   `FAILED` with `INCOMPLETE: remaining steps …`.
 - Multi-step work: before/after each step append `START step=… replay=…` / `END step=… rc=… out=…` timestamped lines to `STATUS`; use `never` for training/GPU/long runs, push/merge/deletion/external writes, `safe` for reads, aggregation, or repeatable evaluation, and `inspect` when unsure.
 - If the instruction includes “이전 시도 복구 요약”, follow it exactly and do not redo completed steps; detached runner scripts must write the same STATUS lines.
-- Fail fast: same error twice → `FAILED` with error and attempts. Setup fixes:
-  max 3 tries. Time limit (default smoke 15 min) exceeded → `FAILED`.
-  Quota/permission/license error → `FAILED` immediately.
+- Finish the assigned task. Mechanical errors (lint/format/import order/type annotations, your own script's exit-code misreading) are not failures: fix them with the standard tool (`ruff check --fix`, `ruff format`) and continue. If you know the cause and fix of an error, apply it and continue.
+- Stop with `FAILED` only for: quota/permission/license errors (immediately), the same fix approach failing twice, setup fixes failing 3 times, or the time limit (default smoke 15 min).
+- When a design choice is ambiguous, pick the conservative option (keep existing behavior, backward compatible), note it as `decision:` in WORKLOG.md, and continue.
+- Do not do anything the instruction did not ask for: do not stop, kill, move, or delete other processes, jobs, or outputs; if it seems necessary, write the reason in WORKLOG/FAILED for the coordinator instead.
 - Do not claim checks you did not run.
 - Do not poll in a loop (sleep → check → sleep). Each check re-sends your whole
   context. Wait on the process itself, or write DONE/FAILED and exit.
