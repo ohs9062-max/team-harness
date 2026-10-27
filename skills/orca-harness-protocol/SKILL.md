@@ -141,6 +141,8 @@ team-harness 코디네이터 모드가 준비됐습니다.
 
 ## 부록: 코드 변경 작업
 
+- 기능 지시서에는 적용 경로 표를 넣고 검수에서 경로별 동작(최소 th-launch 경로 실측)을 요구한다.
+
 저장소 코드 변경만 `th protocol`을 사용한다. 기본은 역할을 순서대로 넘기는 MODE C이며,
 독립 대안 비교에는 MODE A, 앞 단계 산출물을 다음 단계가 이어받는 단순 릴레이에는 MODE B를 쓴다.
 MODE C/A를 쓸 때 역할 모델은 작업 경중에 맞춰 `--set-role <역할>.model=... --set-role <역할>.effort=...`로 지정한다(예: `--set-role mode_c_implement.model=gpt-6.1-terra --set-role mode_c_implement.effort=medium`, `--set-role mode_c_design.model=gpt-6.1-terra`, `--set-role mode_a_worker_1.model=...`).

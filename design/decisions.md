@@ -537,3 +537,16 @@ DONE/FAILED가 없으면 pid별 마커로 `TH_HANDOFF_STALL_MIN`(기본 5분)을
 ## TH-D38. 분리 작업은 자신의 PID를 기록하고 생존을 다각도로 확인한다
 
 분리 작업 프로세스가 자신의 PID를 job.pid에 기록한다. 생존은 PID, 환경 태그, 세션 리더 추정 순으로 판정한다.
+
+
+## TH-D39. 기능은 모든 실행 경로에서 동작해야 한다
+
+**결정.** AGENTS.md 규칙 4에 따라 th run/repl, th-launch(Orca), protocol MODE A/B/C,
+th-watchd/th-watch/ths, SDK TeamHarness.run을 적용 경로 표(경로·붙는 지점·테스트)로 검토한다.
+TH-D32처럼 공통 판정 함수 하나를 경로별로 연결하며 한 경로만 변경하면 미완료다.
+기존 기능의 제한된 적용 범위는 설계에 명시한다.
+
+**맥락.** Jev 라우터가 내장 조율자에만 있어 일상적인 Orca + th-launch 흐름에는 적용되지 않았다.
+watchd 관찰은 시스템 Python import 실패를 숨겨 실제 로그가 없었다.
+
+**결과.** 설계와 검수에서 모든 실행 경로를 확인하며 경로별 구현이 서로 어긋나지 않게 한다.
