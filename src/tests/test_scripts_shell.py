@@ -91,6 +91,7 @@ sleep 15 &
     # Individual daemon-start tests opt in; ordinary th-launch tests must not leak one.
     env["TH_NO_DAEMON"] = "1"
     env["TH_DIGEST_COMMAND"] = "/bin/true"
+    env["TH_TEST_MOCK_JEV"] = "1"
     env["PATH"] = f"{bin_dir}:{env.get('PATH', '')}"
 
     yield {
@@ -513,7 +514,7 @@ def test_th_launch_uses_one_image_envelope_and_project_python_for_each_worker_ty
     # --print=<value> option, so it has no separate positional prompt token.
     assert source.count('"$@" -- "$prompt"') == 2
     assert '"$@" --print="$prompt"' in source
-    assert 'context_python=(uv run --directory "$script_dir/.." python)' in source
+    assert "context_python=(th_python)" in source
     assert (
         source.count(
             'PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" "${context_python[@]}"'
@@ -525,12 +526,9 @@ def test_th_launch_uses_one_image_envelope_and_project_python_for_each_worker_ty
 def test_watch_scripts_import_team_harness_via_project_python() -> None:
     lib = (SCRIPTS_DIR / "th-watch-lib.sh").read_text(encoding="utf-8")
     status = (SCRIPTS_DIR / "th-status.sh").read_text(encoding="utf-8")
-    assert (
-        'uv run --directory "$lib_dir/.." python -m team_harness.watch_inspect "$task"'
-        in lib
-    )
+    assert 'th_python -m team_harness.watch_inspect "$task"' in lib
     assert 'python3 - "$task"' not in lib
-    assert 'uv run --directory "$script_dir/.." python - ' in status
+    assert "th_python - " in status
     assert "python3 - " not in status
     assert "team_harness import failed" in status
     assert "context inspection failed" in lib
@@ -3084,3 +3082,108 @@ def test_th_launch_rejects_codex_without_kind_and_does_not_invoke_cli(
         encoding="utf-8"
     )
     assert " | override: TH_CODEX_REASON=긴급 비코드 테스트" in work_log
+
+
+def test_jev_tier_launch_shell_advisory_only(test_env: dict):
+    task = _create_task_dir(test_env["tmp_path"], "jev_launch")
+    env = {**test_env["env"], "TEAM_HARNESS_JEV": "1", "TH_TEST_JEV_CHOICE": "SOL_HIGH"}
+    # Exit immediately; the test observes the launcher, never a real model CLI.
+    (test_env["bin_dir"] / "codex").write_text("#!/bin/sh\nexit 0\n")
+    result = subprocess.run(
+        [
+            str(SCRIPTS_DIR / "th-launch.sh"),
+            str(task),
+            "codex",
+            "gpt-6.1-terra",
+            "medium",
+            str(test_env["workspace"]),
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "[jev] 등급 권고: SOL_HIGH (0.95)" in result.stdout
+    entries = [
+        json.loads(line)
+        for line in (test_env["watch_dir"] / "jev_decisions.log")
+        .read_text()
+        .splitlines()
+    ]
+    assert entries[0]["path"] == "th-launch"
+    usage = json.loads(
+        (test_env["watch_dir"] / "usage.jsonl").read_text().splitlines()[-1]
+    )
+    assert usage["model"] == "gpt-6.1-terra"
+    assert usage["effort"] == "medium"
+
+
+def test_jev_watchd_failure_column_and_consumers(test_env: dict):
+    task = _create_task_dir(test_env["tmp_path"], "jev_failed")
+    owner = test_env["workspace"]
+    subprocess.run(["git", "init", str(owner)], check=True, capture_output=True)
+    (task / ".th_owner").write_text(str(owner))
+    (task / "FAILED").write_text("bad brief")
+    (test_env["watch_dir"] / "tasks.txt").write_text(str(task) + "\n")
+    env = {
+        **test_env["env"],
+        "TEAM_HARNESS_JEV": "1",
+        "TH_ONCE": "1",
+        "TH_TEST_JEV_CHOICE": "BRIEF_ERROR",
+    }
+    result = subprocess.run(
+        [str(SCRIPTS_DIR / "th-watchd.sh")],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert result.returncode == 0, result.stderr
+    inbox = owner / ".claude/inbox.md"
+    line = inbox.read_text().strip()
+    assert line.endswith(" | jev: BRIEF_ERROR 0.95")
+    assert len(line.split(" | ")) == 6
+    (owner / ".claude/.inbox_cursor").write_text("0")
+    result = subprocess.run(
+        [str(SCRIPTS_DIR / "th-status.sh"), "--all"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "jev_failed" in result.stdout
+    result = subprocess.run(
+        [str(SCRIPTS_DIR / "th-inbox-wait.sh"), "0"],
+        cwd=owner,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0
+    assert line in result.stdout
+
+
+def test_jev_launch_disabled_has_no_audit(test_env: dict):
+    task = _create_task_dir(test_env["tmp_path"], "jev_disabled")
+    (test_env["bin_dir"] / "codex").write_text("#!/bin/sh\nexit 0\n")
+    env = {**test_env["env"], "TEAM_HARNESS_JEV": "0"}
+    result = subprocess.run(
+        [
+            str(SCRIPTS_DIR / "th-launch.sh"),
+            str(task),
+            "codex",
+            "gpt-6.1-terra",
+            "medium",
+            str(test_env["workspace"]),
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "[jev]" not in result.stdout
+    assert not (test_env["watch_dir"] / "jev_decisions.log").exists()

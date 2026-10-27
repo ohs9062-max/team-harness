@@ -118,11 +118,14 @@ py_src=$(cd "$script_dir/../src" && pwd)
 # worker_context imports the project dependency graph (including httpx).  Do
 # not use the system interpreter here: th-launch may be started outside an
 # activated development shell.
-context_python=(uv run --directory "$script_dir/.." python)
+context_python=(th_python)
 policy_rc=0
 policy_out=$(PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" "${context_python[@]}" -m team_harness.launch_policy check "$task_dir" "$worker_type" "$model" "$effort" "$watch_dir") || policy_rc=$?
 if (( policy_rc != 0 )); then
   exit "$policy_rc"
+fi
+if [[ $worker_type == codex && ${TEAM_HARNESS_JEV:-} != 0 ]]; then
+  th_jev -m team_harness.decisions.advisor tier --task "$task_dir/task.md" --worker "$worker_type" --model "$model" --effort "$effort"
 fi
 policy_override=""
 while IFS= read -r line; do
@@ -555,7 +558,7 @@ fi
 # STATUS is the durable step record.  Preserve all earlier attempts (including
 # before the most recent LAUNCH) and give a fresh worker only its small,
 # deterministic recovery note.
-recovery_summary=$(PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" python3 -m team_harness.step_records summary "$task_dir")
+recovery_summary=$(PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" th_python -m team_harness.step_records summary "$task_dir")
 if [[ -n $recovery_summary ]]; then
   printf '%s' "$recovery_summary" > "$task_dir/RECOVERY.md"
   task_body="$task_body

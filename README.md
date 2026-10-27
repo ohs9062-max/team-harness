@@ -1,5 +1,7 @@
 # Team Harness
 
+Jev 등급·실패 권고는 모든 실행 경로에 연결되며 모델을 바꾸지 않습니다(TH-D40, `design/designs/jev-all-paths.md`).
+
 다른 코딩 하네스(Codex, Claude Code, Grok Build, Antigravity, OpenCode, pi, OpenHands)를 위한 조율(Coordination) 계층.
 
 > 기능별 사용법과 명령어 요약은 [start.md](./start.md)를 보세요.

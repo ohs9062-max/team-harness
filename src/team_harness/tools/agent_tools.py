@@ -29,6 +29,8 @@ from team_harness.caller_contract import build_nested_caller_context
 from team_harness.caller_contract import CallerContext
 from team_harness.caller_contract import INHERITED_CALLER_CONTEXT_ENV
 from team_harness.coordinator.system_prompt import DEFAULT_WORKER_FOOTER
+from team_harness.decisions.advisor import advise_failure
+from team_harness.decisions.advisor import advise_model_tier
 from team_harness.tracking.models import AgentRecord
 from team_harness.tracking.models import RateLimitedFamilyRecord
 from team_harness.tracking.persistence import write_json_atomic
@@ -1464,6 +1466,18 @@ async def spawn_agent(**kwargs: object) -> str:
             worker_label=worker_label,
             session_output_dir=_session_output_dir,
         )
+        template = resolve_template(agent_type=agent_type, config=config)
+        await asyncio.to_thread(
+            advise_model_tier,
+            prompt,
+            agent_type,
+            model or template.default_model,
+            effort or template.reasoning_effort,
+            settings=config.decision_router,
+            path="agent_tools.spawn_agent",
+            task=cwd,
+            record=run_log.record_decision,
+        )
         spawn_result = await spawner.spawn(
             agent_id=agent_id,
             agent_type=agent_type,
@@ -1719,10 +1733,34 @@ async def agent_availability() -> str:
     )
 
 
+async def _failure_advice_lines(
+    manager: "AgentManager", ids: list[str], config: "Config", run_log: "RunLogWriter"
+) -> dict[str, str]:
+    lines = {}
+    for aid in ids:
+        state = manager.get(aid)
+        if state.exit_code in (None, 0) or state.status == "killed":
+            continue
+        advice = await asyncio.to_thread(
+            advise_failure,
+            state.cwd,
+            failure_context=f"agent={aid} exit={state.exit_code}",
+            task_text=state.prompt,
+            stdout_log=state.stdout_log,
+            stderr_log=state.stderr_log,
+            settings=config.decision_router,
+            path="agent_tools.wait_for_agents",
+            record=run_log.record_decision,
+        )
+        if advice is not None:
+            lines[aid] = advice.line()
+    return lines
+
+
 async def wait_for_agents(
     agent_ids: list[str] | None = None, timeout: float | None = None
 ) -> str:
-    manager, run_log, _, _ = _require_setup()
+    manager, run_log, config, _ = _require_setup()
     breaker = _require_rate_limit_breaker()
     ids = list(manager._agents) if agent_ids is None else agent_ids
     if not ids:
@@ -1737,6 +1775,15 @@ async def wait_for_agents(
                     for agent_id in ids
                 },
                 "timed_out": False,
+                **(
+                    {"jev": lines}
+                    if (
+                        lines := await _failure_advice_lines(
+                            manager, ids, config, run_log
+                        )
+                    )
+                    else {}
+                ),
             }
         )
     except asyncio.TimeoutError:
@@ -1748,6 +1795,15 @@ async def wait_for_agents(
                     for agent_id in ids
                 },
                 "timed_out": True,
+                **(
+                    {"jev": lines}
+                    if (
+                        lines := await _failure_advice_lines(
+                            manager, ids, config, run_log
+                        )
+                    )
+                    else {}
+                ),
             }
         )
 
@@ -2029,6 +2085,18 @@ def build_agent_tool_bindings(
                 worker_label=worker_label,
                 session_output_dir=session_output_dir,
             )
+            template = resolve_template(agent_type=agent_type, config=config)
+            await asyncio.to_thread(
+                advise_model_tier,
+                prompt,
+                agent_type,
+                model_val or template.default_model,
+                effort_val or template.reasoning_effort,
+                settings=config.decision_router,
+                path="agent_tools.spawn_agent",
+                task=cwd,
+                record=run_log.record_decision,
+            )
             spawn_result = await spawner.spawn(
                 agent_id=agent_id,
                 agent_type=agent_type,
@@ -2269,6 +2337,15 @@ def build_agent_tool_bindings(
                         aid: _status_from_state(manager.get(aid)) for aid in ids
                     },
                     "timed_out": False,
+                    **(
+                        {"jev": lines}
+                        if (
+                            lines := await _failure_advice_lines(
+                                manager, ids, config, run_log
+                            )
+                        )
+                        else {}
+                    ),
                 }
             )
         except asyncio.TimeoutError:
@@ -2281,6 +2358,15 @@ def build_agent_tool_bindings(
                         aid: _status_from_state(manager.get(aid)) for aid in ids
                     },
                     "timed_out": True,
+                    **(
+                        {"jev": lines}
+                        if (
+                            lines := await _failure_advice_lines(
+                                manager, ids, config, run_log
+                            )
+                        )
+                        else {}
+                    ),
                 }
             )
 

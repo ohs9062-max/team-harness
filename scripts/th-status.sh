@@ -4,6 +4,8 @@ set -u
 
 script_dir=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 
+source "$script_dir/th-watch-lib.sh"
+
 usage() {
   cat <<'EOF'
 사용법: th-status.sh [-a|--all] [-w|--watch [초]] [-h|--help]
@@ -30,7 +32,7 @@ done
 
 render() {
   # The heredoc imports team_harness (httpx etc.); the system python3 lacks them.
-  uv run --directory "$script_dir/.." python - "$script_dir/../src/team_harness/worker_digest.py" "$all_mode" "${1:-0}" << 'EOF'
+  th_python - "$script_dir/../src/team_harness/worker_digest.py" "$all_mode" "${1:-0}" << 'EOF'
 import sys, os, time, subprocess, re, unicodedata
 from datetime import datetime
 from pathlib import Path

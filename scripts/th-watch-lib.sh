@@ -2,6 +2,34 @@
 # th-watch-lib.sh: th-watch 및 th-watchd 공통 감시·검수 함수 라이브러리
 # 중복 구현 금지 원칙에 따라 사건 판정 및 검수 로직을 단일 정본으로 유지한다.
 
+# Project module calls must use the repository dependency environment.
+th_python() {
+  local repo
+  repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+  if [[ -x $repo/.venv/bin/python ]]; then
+    "$repo/.venv/bin/python" "$@"
+  elif command -v uv >/dev/null 2>&1; then
+    uv run --project "$repo" python "$@"
+  else
+    mkdir -p "${TH_WATCH_DIR:-$HOME/.team-harness/watch}"
+    printf '%s jev 호출 실패: repository Python and uv unavailable; skipped\n' "$(date '+%F %T')" >> "${TH_WATCH_DIR:-$HOME/.team-harness/watch}/events.log"
+    return 127
+  fi
+}
+
+th_jev() {
+  [[ ${TEAM_HARNESS_JEV:-} != 0 ]] || return 0
+  local err rc=0
+  err=$(mktemp)
+  th_python "$@" 2>"$err" || rc=$?
+  if (( rc != 0 )); then
+    mkdir -p "${TH_WATCH_DIR:-$HOME/.team-harness/watch}"
+    printf '%s jev 호출 실패: %s\n' "$(date '+%F %T')" "$(head -c 500 "$err" | tr '\n' ' ') (rc=$rc)" >> "${TH_WATCH_DIR:-$HOME/.team-harness/watch}/events.log"
+  fi
+  rm -f "$err"
+  return 0
+}
+
 task_live_pids() {
   local lib_dir
   lib_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -63,7 +91,7 @@ open_step_detail() {
   program=$(worker_digest_program)
   IFS=$'\t' read -r step replay at out < <(
     PYTHONPATH="$(dirname "$program")/..${PYTHONPATH:+:$PYTHONPATH}" \
-      python3 -m team_harness.step_records open-steps "$task" | tail -n 1
+      th_python -m team_harness.step_records open-steps "$task" | tail -n 1
   ) || true
   [[ -n ${step:-} ]] || return 0
   if [[ $replay == safe ]]; then
@@ -201,7 +229,7 @@ inspect_context_and_job() {
   lib_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
   py_src=$(cd "$lib_dir/../src" && pwd)
   # team_harness needs the project dependency graph (httpx); not system python3.
-  PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" uv run --directory "$lib_dir/.." python -m team_harness.watch_inspect "$task"
+  PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" th_python -m team_harness.watch_inspect "$task"
 }
 
 status_failure_reason() {
@@ -254,7 +282,7 @@ safe_step_auto_retry() {
   local -a open_steps=()
   mapfile -t open_steps < <(
     PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" \
-      python3 -m team_harness.step_records open-steps "$task"
+      th_python -m team_harness.step_records open-steps "$task"
   )
   (( ${#open_steps[@]} > 0 )) || return 1
 

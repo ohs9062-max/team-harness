@@ -1,5 +1,7 @@
 # 변경 로그 (Changelog)
 
+- TH-D40: Jev tier/failure advice across launch, run/repl/SDK, protocol and watch paths; repair shell Python selection (advisory only).
+
 이 프로젝트의 모든 주목할 만한 변경 사항은 이 파일에 기록됩니다.
 
 형식은 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)를 기반으로 하며,

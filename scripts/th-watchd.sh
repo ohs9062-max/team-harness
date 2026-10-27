@@ -120,6 +120,12 @@ handle_daemon_event() {
   esac
   queue_digest "$task" "$digest_event"
 
+  local jev_suffix="" jev_advice=""
+  if [[ $event_type == 실패 && ${TEAM_HARNESS_JEV:-} != 0 ]]; then
+    jev_advice=$(th_jev -m team_harness.decisions.advisor failure --task "$task")
+    [[ -z $jev_advice ]] || jev_suffix=" | $jev_advice"
+  fi
+
   # 1. 소유 작업 공간의 .claude/inbox.md에 한 줄 append
   if [[ -n $owner && -d $owner ]]; then
     local inbox_file="$owner/.claude/inbox.md"
@@ -127,7 +133,7 @@ handle_daemon_event() {
     mkdir -p "$owner/.claude"
     cleanup_inbox_waiter_registry "$owner"
     touch "$inbox_file"
-    printf '%s | %s | %s | %s | %s\n' "$now_time" "$name" "$event_type" "$summary" "$v_res" >> "$inbox_file"
+    printf '%s | %s | %s | %s | %s%s\n' "$now_time" "$name" "$event_type" "$summary" "$v_res" "$jev_suffix" >> "$inbox_file"
     inbox_size=$(wc -c < "$inbox_file")
     now_epoch=$(date +%s)
     record_inbox_append "$owner" "$inbox_size" "$now_epoch"
@@ -144,8 +150,8 @@ handle_daemon_event() {
   printf '%s [%s] %s: %s (검수: %s)\n' "$now_sec" "$event_type" "$name" "$summary" "$v_res" >> "$watch_dir/events.log"
 
   # C. Jev 관찰 (watch_cli.py 호출)
-  if [[ ${TH_JEV_WATCH:-on} != "off" ]]; then
-    python3 -m team_harness.decisions.watch_cli "$task" "$event_type" "$watch_dir" 2>/dev/null || true
+  if [[ ${TH_JEV_WATCH:-on} != "off" && ${TEAM_HARNESS_JEV:-} != 0 ]]; then
+    th_jev -m team_harness.decisions.watch_cli "$task" "$event_type" "$watch_dir"
   fi
 }
 

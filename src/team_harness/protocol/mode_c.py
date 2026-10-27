@@ -10,10 +10,12 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 from datetime import UTC
+import json
 from pathlib import Path
 import re
 import signal
 import subprocess
+from threading import Lock
 import time
 from typing import Any
 from typing import cast
@@ -34,6 +36,7 @@ from team_harness.agents.session_capture import extract_session_id
 from team_harness.agents.tmux_view import tmux_available
 from team_harness.agents.tmux_view import TmuxViewer
 from team_harness.config import Config
+from team_harness.decisions.advisor import advise_model_tier
 from team_harness.protocol.checks import CheckRunner
 from team_harness.protocol.checks import evaluate_checks
 from team_harness.protocol.config import load_protocol_config
@@ -59,6 +62,8 @@ from team_harness.protocol.worktree import changed_files
 from team_harness.protocol.worktree import checkpoint_worktree
 from team_harness.protocol.worktree import create_worktree
 from team_harness.protocol.worktree import diff_worktree
+from team_harness.tracking.models import DecisionRecord
+from team_harness.tracking.run_log import RunLogWriter
 from team_harness.worker_context import ContextMeasurement
 from team_harness.worker_context import ContextRequest
 from team_harness.worker_context import decide
@@ -164,8 +169,11 @@ class TeamHarnessAgentRunner:
         verbose: bool = True,
         breaker: RateLimitCircuitBreaker | None = None,
         context_graph: ContextGraph | None = None,
+        advice_workspace: str = "",
     ) -> None:
         self.config = config or Config()
+        self._advice_settings = config.decision_router if config is not None else None
+        self._advice_workspace = advice_workspace
         self.manager = manager or AgentManager()
         # Run-scoped rate-limit circuit (TH-D18). A protocol run fans out
         # several workers over the same few agent families — MODE A alone
@@ -192,6 +200,7 @@ class TeamHarnessAgentRunner:
             else Path(self.config.output_dir).resolve()
         )
         self.log_dir.mkdir(parents=True, exist_ok=True)
+        self._advice_lock = Lock()
         # Optional live view (TH-D12): when set, every spawned worker also
         # gets a tmux window tailing its stdout log. Purely observational —
         # never wired to the worker's stdin, never required for correctness.
@@ -202,6 +211,25 @@ class TeamHarnessAgentRunner:
             if tmux_session is not None and tmux_available()
             else None
         )
+
+    def _record_advice(self, record: DecisionRecord) -> None:
+        # A resumed protocol may already have run metadata. Preserve it rather
+        # than constructing a new writer that overwrites the existing file.
+        from team_harness.tracking.persistence import write_json_atomic
+
+        with self._advice_lock:
+            log_path = self.log_dir / "run.json"
+            if not log_path.exists():
+                RunLogWriter(
+                    run_id=f"protocol_{uuid.uuid4().hex[:12]}",
+                    run_dir=self.log_dir,
+                    provider=self.config.provider,
+                    model=self.config.model,
+                    api_base=self.config.api_base,
+                )
+            payload = json.loads(log_path.read_text(encoding="utf-8"))
+            payload.setdefault("decisions", []).append(record.model_dump(mode="json"))
+            write_json_atomic(path=log_path, payload=payload)
 
     async def run_agent(
         self,
@@ -343,6 +371,19 @@ class TeamHarnessAgentRunner:
 
             prompt_to_spawn, graph_env = await self.context_graph.prepare_spawn(
                 agent_type=agent_type, prompt=current_prompt, cwd=cwd
+            )
+            template = resolve_template(agent_type=agent_type, config=self.config)
+            await asyncio.to_thread(
+                advise_model_tier,
+                current_prompt,
+                agent_type,
+                model or template.default_model,
+                effort or template.reasoning_effort,
+                settings=self._advice_settings,
+                workspace=self._advice_workspace,
+                path="protocol.role_spawn",
+                task=task_key or cwd,
+                record=self._record_advice,
             )
             spawn_result = await spawner.spawn(
                 agent_id=agent_id,

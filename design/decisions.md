@@ -550,3 +550,21 @@ TH-D32처럼 공통 판정 함수 하나를 경로별로 연결하며 한 경로
 watchd 관찰은 시스템 Python import 실패를 숨겨 실제 로그가 없었다.
 
 **결과.** 설계와 검수에서 모든 실행 경로를 확인하며 경로별 구현이 서로 어긋나지 않게 한다.
+
+
+## TH-D40. Jev 판단을 모든 실행 경로에 권고 전용으로 적용한다
+
+**결정.** TH-D24 범위를 확장하여 공통 advisor가 Codex 등급과 실패 원인을 권고한다.
+th-launch, run/repl/SDK의 두 spawn 바인딩, protocol MODE A/B/C 공통 역할 실행기,
+watchd 실패 사건에 연결한다. 모델·effort·재시도·Gate는 바꾸지 않는다.
+watchd/th-watch/ths는 공통 감시와 추가 컬럼을 통해 같은 권고를 관찰한다.
+설정·secrets·Jev backend를 재사용하고 1.5초 기본 제한 및 실패 시 None을 지킨다.
+TEAM_HARNESS_JEV=0은 호출과 disabled 기록을 모두 생략한다.
+경로별 붙는 지점과 검수는 [설계](designs/jev-all-paths.md)에 정의한다.
+
+**맥락.** TH-D39의 Jev 사례를 해소하려면 내장 조율자 밖의 일상 실행 경로도 필요하다.
+셸은 저장소 Python 헬퍼를 사용하고 기존 watch_cli의 숨겨진 import 실패도 진단한다.
+
+**결과.** JSON 감사 로그와 run.json decisions, 셸 권고 및 inbox 끝 컬럼으로 근거가 남는다.
+외부 TypeSafe 전송은 사용자 승인되었다. 1~2주 기록 후 인간 판단과의 일치율을 보고하고
+자동 적용 여부를 별도 결정한다. 기존 도구 선택 라우터와 실행 계약은 유지한다.

@@ -871,7 +871,10 @@ def _protocol_runner(
             f"({settings.resolved_graphs_dir()})"
         )
     return TeamHarnessAgentRunner(
-        log_dir=log_dir, tmux_session=tmux_session, context_graph=ContextGraph(settings)
+        log_dir=log_dir,
+        tmux_session=tmux_session,
+        context_graph=ContextGraph(settings),
+        advice_workspace=repo,
     )
 
 

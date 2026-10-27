@@ -47,6 +47,13 @@ class MockWatchBackend:
 
 
 async def main() -> int:
+    if os.environ.get("TEAM_HARNESS_JEV", "").strip().lower() in {
+        "0",
+        "false",
+        "off",
+        "no",
+    }:
+        return 0
     if len(sys.argv) < 3:
         return 0
 
