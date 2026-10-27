@@ -4,7 +4,7 @@
 #       Claude 워커는 사용자가 명시했을 때만 TH_USER_REQUESTED_CLAUDE=1을 붙여 실행:
 #       TH_USER_REQUESTED_CLAUDE=1 th-launch.sh <작업폴더> claude claude-sonnet-5 <effort> <작업트리>
 #       (워커 생략 시 기본값: codex)
-#       Codex 모델 생략: <작업폴더> [codex] [작업트리] [추가 인자] → gpt-5.6-terra medium
+#       Codex 모델 생략: <작업폴더> [codex] [작업트리] [추가 인자] → gpt-6.1-terra medium
 #       강제: codex 동시 2개, high/sol은 TH_HIGH_REASON, codex는 front matter kind: code만(아니면 TH_CODEX_REASON),
 #       최근 5시간 codex 사용 90% 이상이면 거부. 우회 사유는 work_log에 남는다.
 # 정책 변경은 다음 launch부터 적용하며 실행 중 워커는 교체하지 않는다.
@@ -52,9 +52,9 @@ fi
 
 if [[ "$worker_type" == "codex" ]]; then
   if (( $# >= 1 )) && [[ -d "$1" ]]; then
-    model="gpt-5.6-terra"; effort="medium"; worktree=$1; shift
+    model="gpt-6.1-terra"; effort="medium"; worktree=$1; shift
   elif (( $# == 0 )); then
-    model="gpt-5.6-terra"; effort="medium"; worktree="$task_dir"
+    model="gpt-6.1-terra"; effort="medium"; worktree="$task_dir"
   else
     (( $# >= 3 )) || { echo '사용: th-launch.sh <작업폴더> [codex] [<모델> <effort>] <작업트리> [codex 추가 인자]'; exit 2; }
     model=$1; effort=$2; worktree=$3; shift 3

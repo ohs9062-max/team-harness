@@ -72,12 +72,12 @@ class ProtocolAgentSpec:
 class ProtocolConfig:
     """Configuration mapping protocol roles to agent specifications across MODE A/B/C."""
 
-    # TH-D29/D30: Codex roles default to gpt-5.6-terra medium, except the
+    # TH-D29/D30: Codex roles default to gpt-6.1-terra medium, except the
     # MODE C design judgment role, which needs Terra high. Explicit runtime,
     # environment and TOML overrides retain their existing precedence.
     mode_a_worker_1: ProtocolAgentSpec = field(
         default_factory=lambda: ProtocolAgentSpec(
-            agent_type="codex", model="gpt-5.6-terra", effort="medium"
+            agent_type="codex", model="gpt-6.1-terra", effort="medium"
         )
     )
     mode_a_worker_2: ProtocolAgentSpec = field(
@@ -87,22 +87,22 @@ class ProtocolConfig:
     )
     mode_a_final: ProtocolAgentSpec = field(
         default_factory=lambda: ProtocolAgentSpec(
-            agent_type="codex", model="gpt-5.6-terra", effort="medium"
+            agent_type="codex", model="gpt-6.1-terra", effort="medium"
         )
     )
     mode_b_default: ProtocolAgentSpec = field(
         default_factory=lambda: ProtocolAgentSpec(
-            agent_type="codex", model="gpt-5.6-terra", effort="medium"
+            agent_type="codex", model="gpt-6.1-terra", effort="medium"
         )
     )
     mode_c_design: ProtocolAgentSpec = field(
         default_factory=lambda: ProtocolAgentSpec(
-            agent_type="codex", model="gpt-5.6-terra", effort="high"
+            agent_type="codex", model="gpt-6.1-terra", effort="high"
         )
     )
     mode_c_implement: ProtocolAgentSpec = field(
         default_factory=lambda: ProtocolAgentSpec(
-            agent_type="codex", model="gpt-5.6-terra", effort="medium"
+            agent_type="codex", model="gpt-6.1-terra", effort="medium"
         )
     )
     mode_c_review: ProtocolAgentSpec = field(
@@ -305,7 +305,7 @@ def load_protocol_config(
         "HARNESS_MODE_A_WORKER_1_AGENT",
         "HARNESS_MODE_A_WORKER_1_MODEL",
         "codex",
-        "gpt-5.6-terra",
+        "gpt-6.1-terra",
         runtime_effort=mode_a_worker_1_effort,
         effort_var="HARNESS_MODE_A_WORKER_1_EFFORT",
         default_effort="medium",
@@ -332,7 +332,7 @@ def load_protocol_config(
         "HARNESS_MODE_A_FINAL_AGENT",
         "HARNESS_MODE_A_FINAL_MODEL",
         "codex",
-        "gpt-5.6-terra",
+        "gpt-6.1-terra",
         runtime_effort=mode_a_final_effort,
         effort_var="HARNESS_MODE_A_FINAL_EFFORT",
         default_effort="medium",
@@ -347,7 +347,7 @@ def load_protocol_config(
         "HARNESS_MODE_B_DEFAULT_AGENT",
         "HARNESS_MODE_B_DEFAULT_MODEL",
         "codex",
-        "gpt-5.6-terra",
+        "gpt-6.1-terra",
         runtime_effort=mode_b_default_effort,
         effort_var="HARNESS_MODE_B_DEFAULT_EFFORT",
         default_effort="medium",
@@ -362,7 +362,7 @@ def load_protocol_config(
         "HARNESS_MODE_C_DESIGN_AGENT",
         "HARNESS_MODE_C_DESIGN_MODEL",
         "codex",
-        "gpt-5.6-terra",
+        "gpt-6.1-terra",
         runtime_effort=mode_c_design_effort,
         effort_var="HARNESS_MODE_C_DESIGN_EFFORT",
         default_effort="high",
@@ -376,7 +376,7 @@ def load_protocol_config(
         "HARNESS_MODE_C_IMPLEMENT_AGENT",
         "HARNESS_MODE_C_IMPLEMENT_MODEL",
         "codex",
-        "gpt-5.6-terra",
+        "gpt-6.1-terra",
         runtime_effort=mode_c_implement_effort,
         effort_var="HARNESS_MODE_C_IMPLEMENT_EFFORT",
         default_effort="medium",

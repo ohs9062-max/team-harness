@@ -381,7 +381,7 @@ def check(
                 violations.append(
                     Violation(
                         "high",
-                        f"codex 고비용 설정({model} {effort}) 거부: 기본은 gpt-5.6-terra medium. "
+                        f"codex 고비용 설정({model} {effort}) 거부: 기본은 gpt-6.1-terra medium. "
                         '꼭 필요하면 TH_HIGH_REASON="<이유>"',
                     )
                 )

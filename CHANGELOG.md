@@ -9,6 +9,8 @@
 
 ### 변경됨 (Changed)
 
+- Codex 기본 워커 모델을 gpt-6.1-terra로 변경 (TH-D29 개정)
+
 - **워커 문서·인계 경계 강화 (TH-D32 보완).** 워커는 지시서의 `## 읽을 문서`만 읽고, 완료된 작업의 오래된 WORKLOG는 인계하지 않습니다. 감시기가 Codex의 현재 입력 맥락(누적 사용량 아님)을 측정해 상한 초과를 요청하며, coordinator 영역 훅·명시적 `allow_paths` 예외와 검수 호환성을 제공합니다.
 
 - **워커 역할 격리 (TH-D34).** Shell·Protocol worker는 `TH_ROLE=worker`를 받고 coordinator journal 규칙·hook을 무시하며, Codex worker는 프로젝트 `AGENTS.md` 자동 로드를 끄고 front-matter prompt를 `--` 뒤로 전달합니다.

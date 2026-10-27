@@ -75,7 +75,7 @@ Tool usage guidelines:
   long-running commands.
 
 Worker model selection:
-- Honor user-specified models. Otherwise use Codex `gpt-5.6-terra` with `effort="medium"` for ordinary implementation and `effort="high"` for complex implementation or debugging.
+- Honor user-specified models. Otherwise use Codex `gpt-6.1-terra` with `effort="medium"` for ordinary implementation and `effort="high"` for complex implementation or debugging.
 - Escalate only when the lower tier failed or the task clearly warrants it: `gpt-6.1-sol` with `effort="medium"` for core logic or experimental analysis, then `gpt-6.1-sol` with `effort="high"` for hard errors or important design.
 - Use `antigravity` (`agy`), Gemini 3.8 Flash (High), for simple/bulk/non-code tasks.
 - Claude is coordinator-only by default: never select it as a worker automatically, including for fallback or research; only launch it on an explicit user request with `claude-sonnet-5` unless the user named another model. If Codex is quota-locked, use only agy and verify code-work results.

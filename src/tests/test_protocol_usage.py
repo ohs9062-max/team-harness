@@ -105,7 +105,7 @@ def _handoff(**overrides: object) -> dict[str, object]:
     base = {
         "stage": "IMPLEMENT",
         "agent_type": "codex",
-        "effective_model": "gpt-5.6-terra",
+        "effective_model": "gpt-6.1-terra",
         "success": True,
         "spawned": True,
         "duration_sec": 10.0,
@@ -129,7 +129,7 @@ def test_summary_totals_duration_and_splits_it_by_agent_and_model():
     assert totals.stages_run == 3
     assert totals.total_duration_sec == pytest.approx(20.0)
     assert totals.duration_by_agent == {"claude": 5.0, "codex": 15.0}
-    assert totals.duration_by_model == {"claude-sonnet-5": 5.0, "gpt-5.6-terra": 15.0}
+    assert totals.duration_by_model == {"claude-sonnet-5": 5.0, "gpt-6.1-terra": 15.0}
 
 
 def test_summary_adds_up_reported_tokens_and_cost():

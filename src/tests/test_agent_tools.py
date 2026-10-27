@@ -78,7 +78,7 @@ def test_spawn_agent_schema_describes_template_default_flags(config):
     assert "--skip-git-repo-check" in codex_line
     assert "--json" in codex_line
     assert "mcp_servers={}" in codex_line
-    assert "gpt-5.6-terra" in codex_line
+    assert "gpt-6.1-terra" in codex_line
     assert "--dangerously-skip-permissions" not in codex_line
     assert "--output-format" not in codex_line
     assert "--verbose" not in codex_line

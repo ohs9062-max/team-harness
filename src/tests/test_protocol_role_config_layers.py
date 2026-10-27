@@ -67,7 +67,7 @@ effort = "high"
         project,
         """
 [protocol.roles.mode_c_implement]
-model = "gpt-5.6-terra"
+model = "gpt-6.1-terra"
 """,
     )
     monkeypatch.setattr("team_harness.config.CONFIG_PATH", global_path)
@@ -77,7 +77,7 @@ model = "gpt-5.6-terra"
     # Only `model` is overridden; the sibling fields survive the deep merge.
     assert tables["mode_c_implement"] == {
         "agent": "codex",
-        "model": "gpt-5.6-terra",
+        "model": "gpt-6.1-terra",
         "effort": "high",
     }
 
@@ -85,14 +85,14 @@ model = "gpt-5.6-terra"
 def test_config_toml_beats_the_protocol_default():
     proto_cfg = load_protocol_config(
         env={},
-        role_tables={"mode_c_design": {"agent": "codex", "model": "gpt-5.6-terra"}},
+        role_tables={"mode_c_design": {"agent": "codex", "model": "gpt-6.1-terra"}},
     )
 
     assert proto_cfg.mode_c_design.agent_type == "codex"
-    assert proto_cfg.mode_c_design.model == "gpt-5.6-terra"
+    assert proto_cfg.mode_c_design.model == "gpt-6.1-terra"
     # The implementation role keeps the Terra medium default (TH-D29); the
     # separate design judgment role is Terra high (TH-D30).
-    assert proto_cfg.mode_c_implement.model == "gpt-5.6-terra"
+    assert proto_cfg.mode_c_implement.model == "gpt-6.1-terra"
     assert proto_cfg.mode_c_implement.effort == "medium"
 
 

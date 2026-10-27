@@ -62,8 +62,8 @@ system_prompt = """
 
 ## Worker choice & task split (manual, not automatic routing)
 
-- Default code implementation and ordinary fixes use `gpt-5.6-terra` medium.
-  Complex implementation and debugging use `gpt-5.6-terra` high; core logic and
+- Default code implementation and ordinary fixes use `gpt-6.1-terra` medium.
+  Complex implementation and debugging use `gpt-6.1-terra` high; core logic and
   experimental analysis use `gpt-6.1-sol` medium; hard errors and important design
   use `gpt-6.1-sol` high. Escalate only after a lower tier fails or when its purpose
   is clear. agy (Gemini 3.8 Flash (High), no effort argument) is for simple,

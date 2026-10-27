@@ -378,6 +378,8 @@ protocol backend 자동 교체 금지는 바꾸지 않는다.
 
 **결과.** `scripts/th-launch.sh`, Codex agent template, Protocol 역할 기본값은 Terra/medium으로 맞춘다. 명시적 `--set-role`·환경변수·TOML 오버라이드는 그대로 우선하며, Terra와 Sol의 context registry도 유지한다. coordinator LLM 기본값은 이 결정의 대상이 아니므로 바꾸지 않는다. 모델을 생략한 워커 소비자는 실행 모델이 바뀌지만 설정 스키마와 명시적 호출 계약은 호환된다. TH-D27을 대체한다.
 
+**개정(2026-10-27).** 기본 Terra 모델을 gpt-6.1-terra로 교체. 등급 구조·effort는 동일, gpt-5.6-terra 명시는 계속 허용.
+
 ## TH-D28. Worker digest의 판정은 스크립트가 보존하고 LLM은 사건별 요약만 쓴다
 
 **결정.** `scripts/th-watch-lib.sh`의 기존 사건 감지를 확장하고 `th-watchd.sh`에서 `th-digest.sh`를 백그라운드 요청한다. `worker_digest.py::verify`가 상태·산출물·수치·기존 verify.sh·프로젝트 hook을 PASS/WARN/FAIL/SKIP으로 판정하고 최악 항목을 전체 판정으로 저장한다. LLM은 읽기 전용 격리 아래 한 번 요약하며 제목과 검수 원문을 수정할 수 없다. 쿼터 잠금·실패·최대 10분 시간 초과 시 검수만 기록한다. 새 감시 데몬이나 감시용 LLM은 만들지 않는다.

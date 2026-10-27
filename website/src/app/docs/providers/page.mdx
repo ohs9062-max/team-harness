@@ -48,7 +48,7 @@ Known built-in Codex model names (context tracking is accurate for these):
 - `gpt-5.1-codex-mini` / `openai/gpt-5.1-codex-mini`
 - `gpt-5.1-codex-max` / `openai/gpt-5.1-codex-max`
 - `gpt-5.5`
-- The GPT-5.6 family: `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`
+- The GPT-5.6 family: `gpt-5.6-sol`, `gpt-6.1-terra`, `gpt-5.6-luna`
 
 Under the `codex` provider, use the **bare** names above: they carry the Codex-subscription context cap. The `openai/`-prefixed variants are still recognized (no warning) but resolve to the raw 1.5M context window rather than the subscription cap, so they are better suited to the `openai_compat` provider.
 

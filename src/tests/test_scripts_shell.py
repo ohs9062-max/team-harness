@@ -233,7 +233,7 @@ def test_th_launch_retains_th_owner(test_env: dict):
         str(launch_script),
         str(task_dir),
         "codex",
-        "gpt-5.6-terra",
+        "gpt-6.1-terra",
         "medium",
         str(task_dir),
     ]
@@ -332,7 +332,7 @@ def test_th_launch_uses_explicit_worktree_as_owner(test_env: dict):
             str(SCRIPTS_DIR / "th-launch.sh"),
             str(task_dir),
             "codex",
-            "gpt-5.6-terra",
+            "gpt-6.1-terra",
             "medium",
             str(worktree),
         ],
@@ -366,7 +366,7 @@ def test_th_launch_passes_terra_model_and_effort_to_codex(
             str(launch_script),
             str(task_dir),
             *(
-                ["codex", "gpt-5.6-terra", "medium", str(task_dir)]
+                ["codex", "gpt-6.1-terra", "medium", str(task_dir)]
                 if arguments == ["explicit"]
                 else [str(task_dir) if a == "worktree" else a for a in arguments]
             ),
@@ -381,7 +381,7 @@ def test_th_launch_passes_terra_model_and_effort_to_codex(
     assert captured_args.read_text(encoding="utf-8").splitlines()[:5] == [
         "exec",
         "-m",
-        "gpt-5.6-terra",
+        "gpt-6.1-terra",
         "-c",
         "model_reasoning_effort=medium",
     ]
@@ -775,7 +775,7 @@ def test_th_launch_concurrent_registry_integrity(test_env: dict):
     import concurrent.futures
 
     def launch_one(t: Path):
-        cmd = [str(launch_script), str(t), "codex", "gpt-5.6-terra", "medium", str(t)]
+        cmd = [str(launch_script), str(t), "codex", "gpt-6.1-terra", "medium", str(t)]
         res = subprocess.run(
             cmd,
             env={**test_env["env"], "TH_MAX_PARALLEL": "20"},
@@ -1454,7 +1454,7 @@ def test_th_launch_extracts_verify_sh(test_env: dict):
         str(launch_script),
         str(task_dir),
         "codex",
-        "gpt-5.6-terra",
+        "gpt-6.1-terra",
         "medium",
         str(worktree_dir),
     ]
@@ -1479,7 +1479,7 @@ def test_th_launch_warns_when_no_verify_block(test_env: dict):
         str(launch_script),
         str(task_dir),
         "codex",
-        "gpt-5.6-terra",
+        "gpt-6.1-terra",
         "medium",
         str(task_dir),
     ]
@@ -1978,7 +1978,7 @@ def test_th_watchd_relaunches_only_a_dead_safe_open_step(test_env: dict):
             str(SCRIPTS_DIR / "th-launch.sh"),
             str(task_dir),
             "codex",
-            "gpt-5.6-terra",
+            "gpt-6.1-terra",
             "medium",
             str(task_dir),
         ],
@@ -2003,7 +2003,7 @@ def test_th_watchd_relaunches_only_a_dead_safe_open_step(test_env: dict):
     ]
     assert len(ledger) == 2
     assert ledger[-1]["worker"] == "codex"
-    assert ledger[-1]["model"] == "gpt-5.6-terra"
+    assert ledger[-1]["model"] == "gpt-6.1-terra"
     assert "TH_AUTO_RETRY" not in (task_dir / "codex.log").read_text(encoding="utf-8")
     calls = [
         line
@@ -2045,7 +2045,7 @@ def test_th_watchd_does_not_auto_retry_unsafe_or_limited_cases(
             "task": str(task_dir),
             "attempt": index + 1,
             "worker": "codex",
-            "model": "gpt-5.6-terra",
+            "model": "gpt-6.1-terra",
             "effort": "medium",
             "owner": str(test_env["workspace"]),
             "override": None,
@@ -2188,7 +2188,7 @@ def test_th_launch_starts_daemon_if_not_running(test_env: dict):
         "scripts/th-launch.sh",
         str(task_dir),
         "codex",
-        "gpt-5.6-terra",
+        "gpt-6.1-terra",
         "medium",
         str(task_dir),
     ]
@@ -2818,7 +2818,7 @@ def test_th_status_sectioned_table_and_formatting(test_env: dict):
     )
     (t_run / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
     (t_run / "codex.log").write_text(
-        "model: gpt-5.6-terra\nreasoning effort: medium\n", encoding="utf-8"
+        "model: gpt-6.1-terra\nreasoning effort: medium\n", encoding="utf-8"
     )
     (t_run / "STATUS").write_text(
         "2026-10-19T10:20:00+09:00 HUMAN smoke 진행\n", encoding="utf-8"
@@ -2829,7 +2829,7 @@ def test_th_status_sectioned_table_and_formatting(test_env: dict):
         test_env["tmp_path"] / "robot_vision3_autolabel" / "outputs" / "runs", "eval_h1"
     )
     (t_fail / "codex.log").write_text(
-        "model: gpt-5.6-terra\nreasoning effort: medium\n", encoding="utf-8"
+        "model: gpt-6.1-terra\nreasoning effort: medium\n", encoding="utf-8"
     )
     (t_fail / "FAILED").write_text("self-check mismatch\n", encoding="utf-8")
     (t_fail / "STATUS").write_text(
@@ -2844,7 +2844,7 @@ def test_th_status_sectioned_table_and_formatting(test_env: dict):
         test_env["tmp_path"] / "team-harness" / "_outputs", "worker_read_policy"
     )
     (t_done / "codex.log").write_text(
-        "model: gpt-5.6-terra\nreasoning effort: high\n", encoding="utf-8"
+        "model: gpt-6.1-terra\nreasoning effort: high\n", encoding="utf-8"
     )
     (t_done / "DONE").write_text("1034 passed\n", encoding="utf-8")
     (t_done / "STATUS").write_text(

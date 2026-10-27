@@ -100,7 +100,7 @@ def _launch_records(watch_dir: Path, task: Path, count: int) -> None:
             "task": str(task),
             "attempt": index + 1,
             "worker": "codex",
-            "model": "gpt-5.6-terra",
+            "model": "gpt-6.1-terra",
             "effort": "medium",
             "owner": str(task.parent),
             "override": None,
@@ -120,14 +120,14 @@ def test_retry_cap_allows_total_attempts_then_rejects_next(
     task = _make_task(tmp_path, "retry_cap")
     env = _base_env(tmp_path, TH_MAX_RETRIES=max_retries)
     _launch_records(watch_dir, task, allowed - 1)
-    assert check(task, "codex", "gpt-5.6-terra", "medium", watch_dir, env) == []
+    assert check(task, "codex", "gpt-6.1-terra", "medium", watch_dir, env) == []
     _launch_records(watch_dir, task, allowed)
-    violations = check(task, "codex", "gpt-5.6-terra", "medium", watch_dir, env)
+    violations = check(task, "codex", "gpt-6.1-terra", "medium", watch_dir, env)
     assert [item.code for item in violations] == ["retry_cap"]
     assert f"시도 {allowed}/{allowed}" in violations[0].message
     assert (
         main(
-            ["check", str(task), "codex", "gpt-5.6-terra", "medium", str(watch_dir)],
+            ["check", str(task), "codex", "gpt-6.1-terra", "medium", str(watch_dir)],
             env=env,
         )
         == 3
@@ -139,7 +139,7 @@ def test_retry_reason_overrides_cap_and_is_audited(tmp_path: Path) -> None:
     task = _make_task(tmp_path, "retry_reason")
     _launch_records(watch_dir, task, 3)
     env = _base_env(tmp_path, TH_RETRY_REASON="새 스텁으로 원인 분리")
-    assert check(task, "codex", "gpt-5.6-terra", "medium", watch_dir, env) == []
+    assert check(task, "codex", "gpt-6.1-terra", "medium", watch_dir, env) == []
     assert collect_overrides(env) == ["TH_RETRY_REASON=새 스텁으로 원인 분리"]
 
 
@@ -164,7 +164,7 @@ def test_parallel_pass_when_below_limit_and_dead_pids_ignored(tmp_path: Path) ->
     )
 
     violations = check(
-        target_task, "codex", "gpt-5.6-terra", "medium", watch_dir, _base_env(tmp_path)
+        target_task, "codex", "gpt-6.1-terra", "medium", watch_dir, _base_env(tmp_path)
     )
     assert violations == []
 
@@ -182,7 +182,7 @@ def test_parallel_reject_when_at_or_above_limit(tmp_path: Path) -> None:
     (watch_dir / "tasks.txt").write_text(f"{task_a}\n{task_b}\n", encoding="utf-8")
 
     violations = check(
-        target, "codex", "gpt-5.6-terra", "medium", watch_dir, _base_env(tmp_path)
+        target, "codex", "gpt-6.1-terra", "medium", watch_dir, _base_env(tmp_path)
     )
     assert len(violations) == 1
     assert violations[0] == Violation(
@@ -205,11 +205,11 @@ def test_parallel_override_with_th_max_parallel(
 
     target = _make_task(tmp_path, "task_c")
     env = _base_env(tmp_path, TH_MAX_PARALLEL="3")
-    violations = check(target, "codex", "gpt-5.6-terra", "medium", watch_dir, env)
+    violations = check(target, "codex", "gpt-6.1-terra", "medium", watch_dir, env)
     assert violations == []
 
     rc = main(
-        ["check", str(target), "codex", "gpt-5.6-terra", "medium", str(watch_dir)],
+        ["check", str(target), "codex", "gpt-6.1-terra", "medium", str(watch_dir)],
         env=env,
     )
     captured = capsys.readouterr()
@@ -222,14 +222,14 @@ def test_high_pass_with_terra_medium(tmp_path: Path) -> None:
     watch_dir.mkdir()
     target = _make_task(tmp_path, "task_normal")
     violations = check(
-        target, "codex", "gpt-5.6-terra", "medium", watch_dir, _base_env(tmp_path)
+        target, "codex", "gpt-6.1-terra", "medium", watch_dir, _base_env(tmp_path)
     )
     assert violations == []
 
 
 @pytest.mark.parametrize(
     ("model", "effort"),
-    [("gpt-5.6-terra", "high"), ("gpt-5.6-terra", "xhigh"), ("gpt-6.1-sol", "medium")],
+    [("gpt-6.1-terra", "high"), ("gpt-6.1-terra", "xhigh"), ("gpt-6.1-sol", "medium")],
 )
 def test_high_reject_without_reason(tmp_path: Path, model: str, effort: str) -> None:
     watch_dir = tmp_path / "watch"
@@ -272,7 +272,7 @@ def test_kind_pass_when_kind_is_code_or_non_codex_worker(tmp_path: Path) -> None
     docs_task = _make_task(tmp_path, "task_docs", kind="docs")
     env = _base_env(tmp_path)
 
-    assert check(code_task, "codex", "gpt-5.6-terra", "medium", watch_dir, env) == []
+    assert check(code_task, "codex", "gpt-6.1-terra", "medium", watch_dir, env) == []
     assert (
         check(docs_task, "agy", "Gemini 3.8 Flash (High)", "none", watch_dir, env) == []
     )
@@ -284,7 +284,7 @@ def test_kind_reject_when_missing_or_not_code(tmp_path: Path, kind: str | None) 
     watch_dir.mkdir()
     target = _make_task(tmp_path, f"task_{kind}", kind=kind)
     violations = check(
-        target, "codex", "gpt-5.6-terra", "medium", watch_dir, _base_env(tmp_path)
+        target, "codex", "gpt-6.1-terra", "medium", watch_dir, _base_env(tmp_path)
     )
     assert [v.code for v in violations] == ["kind"]
     assert "TH_CODEX_REASON" in violations[0].message
@@ -297,11 +297,11 @@ def test_kind_override_with_th_codex_reason(
     watch_dir.mkdir()
     target = _make_task(tmp_path, "task_docs_codex", kind="docs")
     env = _base_env(tmp_path, TH_CODEX_REASON="코드와 문서 동시 검증")
-    violations = check(target, "codex", "gpt-5.6-terra", "medium", watch_dir, env)
+    violations = check(target, "codex", "gpt-6.1-terra", "medium", watch_dir, env)
     assert violations == []
 
     rc = main(
-        ["check", str(target), "codex", "gpt-5.6-terra", "medium", str(watch_dir)],
+        ["check", str(target), "codex", "gpt-6.1-terra", "medium", str(watch_dir)],
         env=env,
     )
     captured = capsys.readouterr()
@@ -347,7 +347,7 @@ def test_budget_pass_and_warning_and_old_rollout_ignored(
     )
 
     env = _base_env(tmp_path, TH_CODEX_5H_BUDGET="1000000")
-    violations = check(target, "codex", "gpt-5.6-terra", "medium", watch_dir, env)
+    violations = check(target, "codex", "gpt-6.1-terra", "medium", watch_dir, env)
     assert violations == []
     warnings = check_warnings("codex", env)
     assert len(warnings) == 1
@@ -357,7 +357,7 @@ def test_budget_pass_and_warning_and_old_rollout_ignored(
     )
 
     rc = main(
-        ["check", str(target), "codex", "gpt-5.6-terra", "medium", str(watch_dir)],
+        ["check", str(target), "codex", "gpt-6.1-terra", "medium", str(watch_dir)],
         env=env,
     )
     captured = capsys.readouterr()
@@ -381,7 +381,7 @@ def test_budget_pass_when_cached_input_tokens_large(tmp_path: Path) -> None:
 
     env = _base_env(tmp_path, TH_CODEX_5H_BUDGET="1000000")
     assert sum_recent_codex_tokens(sessions_dir) == 60_000
-    assert check(target, "codex", "gpt-5.6-terra", "medium", watch_dir, env) == []
+    assert check(target, "codex", "gpt-6.1-terra", "medium", watch_dir, env) == []
     assert check_warnings("codex", env) == []
 
 
@@ -429,7 +429,7 @@ def test_budget_reject_when_at_or_above_90_percent(
     _write_rollout(sessions_dir, "rollout-2.jsonl", 400_000)
 
     env = _base_env(tmp_path, TH_CODEX_5H_BUDGET="1000000")
-    violations = check(target, "codex", "gpt-5.6-terra", "medium", watch_dir, env)
+    violations = check(target, "codex", "gpt-6.1-terra", "medium", watch_dir, env)
     assert [v.code for v in violations] == ["budget"]
     assert (
         "토큰 사용량(캐시 제외, codex 'tokens used' 기준) 90% 이상"
@@ -438,7 +438,7 @@ def test_budget_reject_when_at_or_above_90_percent(
     assert "TH_IGNORE_BUDGET=1" in violations[0].message
 
     rc = main(
-        ["check", str(target), "codex", "gpt-5.6-terra", "medium", str(watch_dir)],
+        ["check", str(target), "codex", "gpt-6.1-terra", "medium", str(watch_dir)],
         env=env,
     )
     captured = capsys.readouterr()
@@ -456,11 +456,11 @@ def test_budget_override_with_th_ignore_budget(
     _write_rollout(sessions_dir, "rollout-1.jsonl", 950_000)
 
     env = _base_env(tmp_path, TH_CODEX_5H_BUDGET="1000000", TH_IGNORE_BUDGET="1")
-    violations = check(target, "codex", "gpt-5.6-terra", "medium", watch_dir, env)
+    violations = check(target, "codex", "gpt-6.1-terra", "medium", watch_dir, env)
     assert violations == []
 
     rc = main(
-        ["check", str(target), "codex", "gpt-5.6-terra", "medium", str(watch_dir)],
+        ["check", str(target), "codex", "gpt-6.1-terra", "medium", str(watch_dir)],
         env=env,
     )
     captured = capsys.readouterr()

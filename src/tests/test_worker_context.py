@@ -767,7 +767,7 @@ def test_three_execution_paths_same_fixture_decision(tmp_path):
             "task_key": "bench/t1",
             "session_id": "sid-shared-1",
             "agent_type": "codex",
-            "model": "gpt-5.6-terra",
+            "model": "gpt-6.1-terra",
             "worktree": str(tmp_path),
         }
     )

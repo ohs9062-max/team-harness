@@ -253,7 +253,7 @@ def test_auto_compact_threshold_for_gpt_5_5():
 
 
 def test_gpt_5_6_family_registry_entries():
-    for model_id in ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"):
+    for model_id in ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-6.1-terra", "gpt-5.6-luna"):
         assert KNOWN_LIMITS[model_id] == 1_500_000
         assert KNOWN_LIMITS[f"openai/{model_id}"] == 1_500_000
         assert KNOWN_MAX_OUTPUT_TOKENS[model_id] == 128_000

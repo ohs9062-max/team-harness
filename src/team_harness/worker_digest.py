@@ -481,7 +481,7 @@ def summary_command(worker: str, model: str, output: Path) -> list[str]:
             "-c",
             "features.shell_tool=false",
             "-m",
-            model or "gpt-5.6-terra",
+            model or "gpt-6.1-terra",
             "-o",
             str(output),
             "-",

@@ -74,7 +74,7 @@ def test_mode_a_lane_isolation_prevents_cross_lane_resume(tmp_path: Path):
             "task_key": "task-mode-a/lane-worker_1/independent_work",
             "session_id": "sid-w1-lane",
             "agent_type": "codex",
-            "model": "gpt-5.6-terra",
+            "model": "gpt-6.1-terra",
             "worktree": str(tmp_path),
         }
     )

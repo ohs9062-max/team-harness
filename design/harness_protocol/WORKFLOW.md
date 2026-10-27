@@ -35,7 +35,7 @@ worker마다 tmux 창을 하나씩 열어 그 worker의 로그를 실시간으�
 연결되지 않는다 — worker는 여전히 TH-D2가 말하는 1회성 배치 서브프로세스다.
 
 **모델/effort 오버라이드 (TH-D29).** Protocol의 Codex 역할 기본값은
-`gpt-5.6-terra`, `effort=medium`입니다. MODE C 설계 판단 역할은 Terra high입니다. 일반 코딩·구현은 Terra medium, 복잡한
+`gpt-6.1-terra`, `effort=medium`입니다. MODE C 설계 판단 역할은 Terra high입니다. 일반 코딩·구현은 Terra medium, 복잡한
 구현·디버깅은 Terra high, 핵심 로직·실험 분석은 Sol medium, 어려운 오류·중요 설계는
 Sol high로 하위 등급 실패 또는 명확한 용도일 때만 올립니다. 사용자 명시 모델과
 Codex 쿼터 잠금 시 agy 대체 규칙은 유지하며 코드 작업 결과는 검증합니다.
@@ -45,7 +45,7 @@ Claude `th cord` 코디네이터는 Opus 5.5입니다. Claude 워커는 사용�
 역할별 환경변수로 지정할 수 있습니다:
 
 ```bash
-HARNESS_MODE_C_IMPLEMENT_MODEL=gpt-5.6-terra HARNESS_MODE_C_IMPLEMENT_EFFORT=medium \
+HARNESS_MODE_C_IMPLEMENT_MODEL=gpt-6.1-terra HARNESS_MODE_C_IMPLEMENT_EFFORT=medium \
   th protocol run --mode c "복잡한 작업" --repo .
 ```
 
@@ -61,7 +61,7 @@ HARNESS_MODE_C_IMPLEMENT_MODEL=gpt-5.6-terra HARNESS_MODE_C_IMPLEMENT_EFFORT=med
 
 ```bash
 th protocol run --mode c "복잡한 작업" --repo . \
-  --set-role mode_c_implement.model=gpt-5.6-terra \
+  --set-role mode_c_implement.model=gpt-6.1-terra \
   --set-role mode_c_implement.effort=medium
 ```
 
@@ -72,7 +72,7 @@ th protocol run --mode c "복잡한 작업" --repo . \
 ```toml
 [protocol.roles.mode_c_implement]
 agent = "codex"
-model = "gpt-5.6-terra"
+model = "gpt-6.1-terra"
 effort = "medium"
 ```
 

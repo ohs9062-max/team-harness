@@ -92,7 +92,7 @@ team-harness 코디네이터 모드가 준비됐습니다.
 
 - 워커 결론을 곧바로 전체 결론으로 반영하지 않는다. 기준값을 먼저 확인하고 결과가 그럴듯한지 검토 후 채택한다.
 - 코디네이터는 지시서 작성·결과 검증·보고만 하며, 문서 수정·브랜치 병합·커밋·push를 포함한 실제 작업은 작은 변경도 Codex 워커에 맡긴다.
-- 기본 코드 구현·일반 수정은 `gpt-5.6-terra` medium이다. 복잡한 구현·디버깅은 Terra high, 핵심 로직·실험 분석은 `gpt-6.1-sol` medium, 어려운 오류·중요 설계는 Sol high로 올린다. 하위 등급이 실패했거나 용도가 명확할 때만 기본→중간→고난도→최고난도 순으로 올리며, 사용자가 모델을 명시하면 그대로 따른다.
+- 기본 코드 구현·일반 수정은 `gpt-6.1-terra` medium이다. 복잡한 구현·디버깅은 Terra high, 핵심 로직·실험 분석은 `gpt-6.1-sol` medium, 어려운 오류·중요 설계는 Sol high로 올린다. 하위 등급이 실패했거나 용도가 명확할 때만 기본→중간→고난도→최고난도 순으로 올리며, 사용자가 모델을 명시하면 그대로 따른다.
 - Claude는 기본 코디네이터 전용이며 자동 기본값·fallback·조사 참가자로 고르지 않는다. 사용자가 Claude 워커를 명시했을 때만 `claude-sonnet-5`(다른 모델 지정 시 그대로)를 쓴다: `TH_USER_REQUESTED_CLAUDE=1 th-launch.sh <폴더> claude claude-sonnet-5 none <작업트리>`.
 - 실행 중 모델 변경은 불가하고 새 워커는 맥락을 다시 읽으므로 단계별 모델 지정은 하지 않는다. 앞단이 큰 경우(환경 준비 등 대략 5만 토큰 이상 예상)에만 "싼 워커로 준비 → WORKLOG.md 인계 → 알맞은 모델로 본 작업"으로 나눈다. 모델은 지시서 문장이 아닌 th-launch 실행 인자로 고르며 검증은 가능한 한 스크립트(LLM 없이)로 한다.
 - `agy`는 지름길·거짓 완료가 잦으므로 단순·대량·비코드 작업(조사, 문서, 데이터 처리)에만 쓴다(effort 인자 없음). 로직 구현·코드 변경은 작더라도 codex(기본 Terra medium)다. agy가 코드를 맡는 것은 codex 쿼터 잠금(`~/.team-harness/watch/quota_lock.codex`)일 때 대체뿐이며, 그때는 결과를 반드시 검증한다.
@@ -101,7 +101,7 @@ team-harness 코디네이터 모드가 준비됐습니다.
 ## 작업 크기에 맞는 실행 방식
 
 - **작은 작업**(파일 1~2개, 변경 방법이 지시서로 정해짐, 설계 판단 불필요): MODE C를 쓰지 않고
-  `th-launch` codex 워커 하나(gpt-5.6-terra medium)에 맡긴다. MODE C는 설계·구현·검수
+  `th-launch` codex 워커 하나(gpt-6.1-terra medium)에 맡긴다. MODE C는 설계·구현·검수
   3단계가 각자 규칙 문서를 읽고 여러 번 호출하므로, 한 줄 수정에도 수십만 토큰이 든다
   (2026-10-13 실측: docstring 1줄에 약 74만 토큰).
 - MODE C는 설계가 필요한 변경, 여러 파일에 걸친 변경, 독립 검수가 가치 있는 변경에만 쓴다.
@@ -143,7 +143,7 @@ team-harness 코디네이터 모드가 준비됐습니다.
 
 저장소 코드 변경만 `th protocol`을 사용한다. 기본은 역할을 순서대로 넘기는 MODE C이며,
 독립 대안 비교에는 MODE A, 앞 단계 산출물을 다음 단계가 이어받는 단순 릴레이에는 MODE B를 쓴다.
-MODE C/A를 쓸 때 역할 모델은 작업 경중에 맞춰 `--set-role <역할>.model=... --set-role <역할>.effort=...`로 지정한다(예: `--set-role mode_c_implement.model=gpt-5.6-terra --set-role mode_c_implement.effort=medium`, `--set-role mode_c_design.model=gpt-5.6-terra`, `--set-role mode_a_worker_1.model=...`).
+MODE C/A를 쓸 때 역할 모델은 작업 경중에 맞춰 `--set-role <역할>.model=... --set-role <역할>.effort=...`로 지정한다(예: `--set-role mode_c_implement.model=gpt-6.1-terra --set-role mode_c_implement.effort=medium`, `--set-role mode_c_design.model=gpt-6.1-terra`, `--set-role mode_a_worker_1.model=...`).
 `graft`(TH-D22)는 코드 심볼 및 호출 관계를 파악하기 위한 구조적 코드 그래프 도구이며, 승인된 작업 결과의 브랜치 병합은 `git merge`로 수행한다.
 
 `th protocol` 명령의 정확한 인자와 현재 상태 확인은 저장소의 Harness Protocol 정본 문서와

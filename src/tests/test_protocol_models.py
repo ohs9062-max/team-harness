@@ -267,10 +267,10 @@ def test_resolve_effective_model_prefers_what_the_spawner_injected():
         stage="IMPLEMENT",
         success=True,
         model="stale",
-        effective_model="gpt-5.6-terra",
+        effective_model="gpt-6.1-terra",
     )
 
-    assert result.resolve_effective_model("gpt-5.6-lite") == "gpt-5.6-terra"
+    assert result.resolve_effective_model("gpt-5.6-lite") == "gpt-6.1-terra"
 
 
 def test_resolve_effective_model_falls_back_to_model_then_configured():
