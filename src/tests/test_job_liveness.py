@@ -73,6 +73,15 @@ def test_tag_and_session_fallback(tmp_path: Path) -> None:
         )
         assert "실행(추정)" in result.stdout
         assert "exact status" in result.stdout
+        (task / "FAILED").write_text("old failure\n")
+        result = subprocess.run(
+            [str(SCRIPTS / "th-status.sh")],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert "실행(추정)" in result.stdout
     finally:
         leader.terminate()
         leader.wait()

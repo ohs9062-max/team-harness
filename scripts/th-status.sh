@@ -1161,6 +1161,9 @@ for task in valid_tasks:
         else:
             state = '실행(추정)' if inferred else '진행'
 
+    if is_alive and (inferred or terminal in ('DONE', 'FAILED')):
+        state = '실행(추정)' if inferred else '실행'
+
     latest_ts = get_latest_output(task)
     if latest_ts is not None:
         age_min = max(0, int((now_ts - latest_ts) // 60))
@@ -1255,8 +1258,8 @@ if not all_mode:
         wm = get_worker_and_model(rec["path"], rec["ctx_info"])
         updated = format_rel_time(rec["latest_ts"], now_ts, include_ago=True)
         stage = rec["prog"] if rec["state"] == "실행(추정)" else get_stage_summary(rec["path"], rec["state"])
-        if rec["state"] == "실행(추정)":
-            stage = f"실행(추정) {stage}"
+        if rec["state"] in ("실행", "실행(추정)"):
+            stage = f"{rec['state']} {stage}"
         eta = rec["eta"] if section_kind == "running" else "-"
 
         if section_kind == "running":
