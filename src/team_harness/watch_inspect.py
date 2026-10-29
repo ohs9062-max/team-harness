@@ -55,6 +55,17 @@ def get_pgid(pid: int) -> int | None:
         return None
 
 
+def log_context_problem(task: Path, reason: str) -> None:
+    watch_dir = Path(
+        os.environ.get("TH_WATCH_DIR", str(Path.home() / ".team-harness" / "watch"))
+    )
+    watch_dir.mkdir(parents=True, exist_ok=True)
+    with (watch_dir / "events.log").open("a", encoding="utf-8") as stream:
+        stream.write(
+            f"{utc_timestamp()} [context measurement unknown] {task}: {reason}\n"
+        )
+
+
 def resolve_captured_session(task: Path, agent_type: str, session_id: str) -> str:
     """Resolve the provider session ID from the worker's captured output."""
     log_path = task / f"{agent_type}.log"
@@ -200,6 +211,10 @@ def main(task: Path) -> None:
                     if (task / ".th_context.json").is_file():
                         write_json_atomic(path=task / ".th_context.json", payload=meta)
                 measurement = measure_codex_rollout(session_id=resolved_sid)
+                if measurement.measurement_status != "measured":
+                    log_context_problem(
+                        task, f"no token_count for session {resolved_sid}"
+                    )
                 decision = decide(
                     ContextRequest(
                         task_key=str(metadata["task_key"]),
@@ -289,8 +304,10 @@ def main(task: Path) -> None:
                             "worker_pid": worker_pid,
                         },
                     )
-            except (OSError, WorkerContextError, ValueError):
-                pass
+            except (OSError, WorkerContextError, ValueError) as exc:
+                log_context_problem(
+                    task, f"inspection failed: {type(exc).__name__}: {exc}"
+                )
 
     if not worker_alive:
         park_worker_if_needed()

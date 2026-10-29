@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
+import re
 
 from team_harness.agents.template import AgentTemplate
 from team_harness.agents.template import template_uses_generated_uuid
@@ -78,6 +79,16 @@ def extract_session_id(
 ) -> str | None:
     if pre_generated_uuid is not None and template_uses_generated_uuid(template):
         return pre_generated_uuid
+    if _template_command_name(template) == "codex":
+        # Non-JSON `codex exec` prints this in its startup header before the
+        # prompt. Limit the search to that header, not arbitrary agent output.
+        header = stdout_bytes.split(b"\nuser\n", 1)[0][:8192]
+        match = re.search(
+            rb"(?m)^session id: ([0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})\r?$",
+            header,
+        )
+        if match:
+            return match.group(1).decode("ascii")
     capture = template.session_capture
     if capture is None or capture.strategy != "stream_json_event":
         return None

@@ -746,6 +746,7 @@ registry.cleanup(settings)
             "workspace": meta["workspace"],
             "task_key": meta["task_key"],
             "follow_up": meta["follow_up"],
+            "context_budget": meta.get("context_budget"),
             "session_id": session_id,
             "agent_type": meta["agent_type"],
             "worklog_path": meta["worklog_path"],

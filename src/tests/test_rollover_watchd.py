@@ -135,3 +135,71 @@ safe_step_auto_retry "$1" "$2" "$1/marker" callback "$1"
         capture_output=True,
     )
     assert "자동 재시도 실패" in result.stdout
+
+
+def test_text_session_id_is_resolved_before_measurement(tmp_path: Path):
+    sid = "01a186a0-d853-7762-9143-4e049810c799"
+    (tmp_path / "codex.log").write_text(
+        f"OpenAI Codex\n--------\nsession id: {sid}\n--------\nuser\n"
+        "session id: 00000000-0000-0000-0000-000000000000\n"
+    )
+    assert (
+        watch_inspect.resolve_captured_session(tmp_path, "codex", "placeholder") == sid
+    )
+
+
+@pytest.mark.parametrize(("tokens", "expected"), [(25000, False), (25001, True)])
+def test_task_budget_and_session_drive_live_rollover(
+    scenario: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tokens: int,
+    expected: bool,
+):
+    task, calls, _ = scenario
+    sid = "01a186a0-d853-7762-9143-4e049810c799"
+    (task / "task.md").write_text("---\ntask_key: test\ncontext_budget: 25000\n---\n")
+    (task / "codex.log").write_text(f"--------\nsession id: {sid}\n--------\nuser\n")
+    meta = json.loads((task / ".th_context.json").read_text())
+    (task / ".th_context.json").write_text(json.dumps(meta))
+    monkeypatch.setattr(
+        watch_inspect.WorkerContextRegistry, "rekey_active_session", lambda *args: None
+    )
+    root = tmp_path / ".codex" / "sessions"
+    root.mkdir(parents=True)
+    (root / f"rollout-{sid}.jsonl").write_text(
+        json.dumps(
+            {
+                "type": "event_msg",
+                "payload": {"info": {"last_token_usage": {"input_tokens": tokens}}},
+            }
+        )
+        + "\n"
+    )
+    from team_harness.worker_context import measure_codex_rollout
+
+    monkeypatch.setattr(
+        watch_inspect,
+        "measure_codex_rollout",
+        lambda **kw: measure_codex_rollout(sessions_root=root, **kw),
+    )
+    watch_inspect.main(task)
+    assert bool(calls) is expected
+    assert json.loads((task / ".th_context.json").read_text())["session_id"] == sid
+
+
+def test_unknown_measurement_records_reason(
+    scenario: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    task, _, _ = scenario
+    monkeypatch.setenv("TH_WATCH_DIR", str(tmp_path / "watch"))
+    monkeypatch.setattr(
+        watch_inspect,
+        "measure_codex_rollout",
+        lambda **kw: ContextMeasurement(None, "unknown"),
+    )
+    watch_inspect.main(task)
+    assert (
+        "no token_count for session s"
+        in (tmp_path / "watch" / "events.log").read_text()
+    )
