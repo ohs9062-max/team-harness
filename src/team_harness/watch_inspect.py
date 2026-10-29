@@ -50,6 +50,22 @@ def get_pgid(pid: int) -> int | None:
         return None
 
 
+def resolve_captured_session(task: Path, agent_type: str, session_id: str) -> str:
+    """Resolve the provider session ID from the worker's captured output."""
+    log_path = task / f"{agent_type}.log"
+    template = DEFAULT_AGENT_TEMPLATES.get(agent_type)
+    if log_path.is_file() and template is not None:
+        try:
+            captured = extract_session_id(
+                template, _read_prefix_and_tail(log_path, 65536), None
+            )
+            if captured:
+                return captured
+        except OSError:
+            pass
+    return session_id
+
+
 def main(task: Path) -> None:
     worker_pid = read_pid(task / "worker.pid")
     job_pid = read_pid(task / "job.pid")
@@ -117,17 +133,7 @@ def main(task: Path) -> None:
             return
         agent_type = str(meta.get("agent_type", "codex"))
         sid = str(meta.get("session_id", ""))
-        resolved_sid = sid
-        log_path = task / f"{agent_type}.log"
-        template = DEFAULT_AGENT_TEMPLATES.get(agent_type)
-        if log_path.is_file() and template is not None:
-            try:
-                raw = _read_prefix_and_tail(log_path, 65536)
-                captured = extract_session_id(template, raw, None)
-                if captured:
-                    resolved_sid = captured
-            except OSError:
-                pass
+        resolved_sid = resolve_captured_session(task, agent_type, sid)
         sessions_root = (
             Path(os.environ.get("HOME", str(Path.home()))) / ".codex" / "sessions"
         )
@@ -175,7 +181,18 @@ def main(task: Path) -> None:
             try:
                 metadata = parse_task_metadata(task / "task.md")
                 workspace = Path(str(meta.get("workspace"))).resolve()
-                measurement = measure_codex_rollout(session_id=str(meta["session_id"]))
+                sid = str(meta["session_id"])
+                resolved_sid = resolve_captured_session(task, "codex", sid)
+                if resolved_sid != sid:
+                    reg_path = meta.get("registry_path")
+                    if reg_path:
+                        WorkerContextRegistry(Path(str(reg_path))).rekey_active_session(
+                            sid, resolved_sid
+                        )
+                    meta["session_id"] = resolved_sid
+                    if (task / ".th_context.json").is_file():
+                        write_json_atomic(path=task / ".th_context.json", payload=meta)
+                measurement = measure_codex_rollout(session_id=resolved_sid)
                 decision = decide(
                     ContextRequest(
                         task_key=str(metadata["task_key"]),
