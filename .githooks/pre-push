@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root=$(git rev-parse --show-toplevel)
+needs_canary=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [[ $local_sha =~ ^0+$ ]] && continue
+  if [[ $remote_sha =~ ^0+$ ]]; then
+    revisions=$(git rev-list "$local_sha" --not --remotes)
+  else
+    revisions=$(git rev-list "$local_sha" "^$remote_sha")
+  fi
+  while read -r revision; do
+    [[ -n $revision ]] || continue
+    if git diff-tree --root -m --no-commit-id --name-only -r "$revision" | grep -E '^(scripts/|src/team_harness/)' > /dev/null; then
+      needs_canary=1
+      break
+    fi
+  done <<< "$revisions"
+done
+if (( needs_canary )); then
+  skip=${TH_CANARY_SKIP:-}
+  if [[ -n ${skip//[[:space:]]/} ]]; then
+    watch_dir=${TH_WATCH_DIR:-"$HOME/.team-harness/watch"}
+    mkdir -p "$watch_dir"
+    reason=${TH_CANARY_SKIP//$'\n'/ }
+    printf '%s [canary skip] %s\n' "$(date '+%F %T')" "$reason" >> "$watch_dir/events.log"
+  else
+    "$root/scripts/th-canary.sh" "$root"
+  fi
+fi

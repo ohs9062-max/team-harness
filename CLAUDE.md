@@ -15,6 +15,10 @@
 ## 개발 명령어 (Development Commands)
 
 ```bash
+git config core.hooksPath .githooks
+```
+
+```bash
 uv sync --extra dev          # dev를 포함한 모든 의존성 설치
 uv run ruff check src/       # 린트 검사
 uv run ruff format src/      # 코드 포맷팅

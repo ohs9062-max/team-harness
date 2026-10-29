@@ -714,3 +714,28 @@ Codex의 sleep_tool과 multi_agent 기능을 끄고 PreToolUse/PostToolUse 가�
 |---|---|
 | th report | 지정 날짜 범위와 owner 집계, 표 또는 JSON |
 | watchd | report.last 기준 24시간마다 전날 보고서와 inbox 요약 |
+
+## TH-D48. 병합 전 실환경 시험
+
+실제 출력과 실행 환경을 반영한 canary를 병합 전에 실행한다.
+
+| 기능 | 기존 테스트와 실제 실패의 차이 |
+|---|---|
+| 세션 측정 | JSON만 검사해 텍스트 codex 로그의 세션 ID를 놓침 |
+| 손실 리포트 | 실제 events.log의 깨진 UTF-8 바이트로 예외 발생 |
+| watchd 속도 | 500개 가짜 등록과 달리 실제 503개 한 바퀴 74초 |
+| 자동 계속 | 단위 테스트 통과 후 실제 FAILED watch 루프에서 미발동 |
+| 지시서 검사 | 실제 지시서의 정상 사례 오탐 |
+| 테스트 워커 | setsid 잔류 프로세스가 생존 판정을 오염 |
+
+| 시나리오 | 판정 |
+|---|---|
+| DONE | 다음 watchd 바퀴의 완료 사건과 멈춤 사건 부재 |
+| 세션·budget | 텍스트 세션 ID, token_count와 WORKLOG 갱신 후 롤오버 |
+| FAILED INCOMPLETE | 자동 계속 사건과 실제 재실행 |
+| 500개 등록 | 한 바퀴 30초 미만 |
+| 손상 events.log | th report 예외 없이 출력 |
+| 정상 지시서 | good fixture의 오류 0개 |
+| 정리 | 합성 워커 프로세스 잔류 0개 |
+
+scripts 또는 src/team_harness 변경이 포함된 push는 pre-push 훅이 후보 worktree의 canary 통과를 요구한다. 명시적 사유가 있는 TH_CANARY_SKIP은 events.log에 기록한다. 실제 watch 데이터는 읽기 전용으로 측정하고 저장소에 복사하지 않는다.

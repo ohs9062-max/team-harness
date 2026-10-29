@@ -1,0 +1,13 @@
+Reading additional input from stdin...
+OpenAI Codex v0.165.0
+--------
+workdir: /synthetic/worktree
+model: gpt-6.1-terra
+session id: 01a186b5-f3ac-7c62-a02a-3ed039e056bb
+--------
+exec
+printf synthetic
+codex
+synthetic response
+tokens used
+61,897
