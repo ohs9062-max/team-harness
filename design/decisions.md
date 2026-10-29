@@ -663,7 +663,8 @@ Codex의 sleep_tool과 multi_agent 기능을 끄고 PreToolUse/PostToolUse 가�
 | 실행 경로 | 실행 지점 |
 | --- | --- |
 | watchd | 하루 한 번 등록된 모든 소유 workspace |
-| run, repl, protocol | 시작 시 공유 시각 파일 기준 하루 한 번 |
+| run, repl, SDK | TeamHarness.run 시작 시 공유 시각 파일 기준 24시간마다 |
+| protocol A, B, C | 각 모드 시작 시 같은 공유 시각 파일 기준 24시간마다 |
 | `th archive` | 수동 실행, `--dry-run`과 `--owner` 지원 |
 
 공유 잠금 아래 커서와 경로 오프셋을 보정하고 이관 내역을 기록한다. 충돌하는 이름은 시간 접미사를 붙인다.

@@ -22,6 +22,7 @@ from typing import cast
 from typing import Protocol as TypingProtocol
 import uuid
 
+from team_harness import workspace_archive
 from team_harness.agents import spawner
 from team_harness.agents.api_error_classifier import classify_agent_failure
 from team_harness.agents.context_graph import ContextGraph
@@ -945,6 +946,7 @@ async def run_mode_c(
         → FIX_REQUIRED → FIX(codex) → TEST → CHECK → REVIEW (max cycles)
         → BLOCKED → terminate
     """
+    workspace_archive.archive_on_start(Path(target_repo))
     proto_cfg = protocol_config or load_protocol_config()
     run_path = Path(run_dir).resolve()
     state_mgr = ProtocolStateManager(run_path)

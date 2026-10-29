@@ -13,6 +13,7 @@ from typing import Literal
 from typing import Never
 import uuid
 
+from team_harness import workspace_archive
 from team_harness.agents.manager import AgentManager
 from team_harness.agents.manager import FinalizationTimeoutError
 from team_harness.agents.process_identity import signal_group
@@ -132,6 +133,7 @@ class TeamHarness:
         Raises TeamHarnessError on terminal failures (API errors, retries
         exhausted, etc.). The run log is always finalized in a finally block.
         """
+        workspace_archive.archive_on_start(Path(self._cwd or Path.cwd()))
         run_id = _make_run_id()
         allowed_agents_str = _normalize_agents(agents=self._agents)
         try:

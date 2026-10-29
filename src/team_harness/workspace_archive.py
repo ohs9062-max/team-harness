@@ -272,6 +272,22 @@ def archive_daily(
         return moves
 
 
+def archive_on_start(owner: Path) -> None:
+    """Run the shared daily check without blocking the caller on failure."""
+    try:
+        archive_daily(datetime.now().astimezone(), owner)
+    except Exception as exc:
+        try:
+            wd = watch_dir()
+            wd.mkdir(parents=True, exist_ok=True)
+            with (wd / "events.log").open("a") as out:
+                out.write(f"{datetime.now().isoformat()} archive failed: {exc}\n")
+        except OSError:
+            import logging
+
+            logging.getLogger(__name__).exception("Unable to record archive failure")
+
+
 if __name__ == "__main__":
     try:
         archive_daily(datetime.now().astimezone())

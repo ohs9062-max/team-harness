@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 import re
 
+from team_harness import workspace_archive
 from team_harness.protocol.checks import CheckRunner
 from team_harness.protocol.config import load_protocol_config
 from team_harness.protocol.config import ProtocolConfig
@@ -151,6 +152,7 @@ async def run_mode_a(
         → WORKER_GATE → CROSS_REVIEW → RESPONSE (1 round)
         → COMPARE → WAITING_USER
     """
+    workspace_archive.archive_on_start(Path(target_repo))
     proto_cfg = protocol_config or load_protocol_config()
     run_path = Path(run_dir).resolve()
     state_mgr = ProtocolStateManager(run_path)

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from team_harness import workspace_archive
 from team_harness.protocol.checks import CheckStatus
 from team_harness.protocol.config import load_protocol_config
 from team_harness.protocol.config import ProtocolConfig
@@ -43,6 +44,7 @@ async def run_mode_b(
     State machine:
         (existing task) → GIT_VERIFY → CONTINUE → CHECK → FINAL
     """
+    workspace_archive.archive_on_start(Path(target_repo))
     proto_cfg = protocol_config or load_protocol_config()
     if next_agent is not None:
         target_agent = normalize_agent_type(next_agent)
