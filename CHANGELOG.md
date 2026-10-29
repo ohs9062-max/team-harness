@@ -72,6 +72,8 @@
 
 ### 수정됨 (Fixed)
 
+- 실행 중 워커 감시가 캡처 로그의 실제 Codex 세션 ID로 맥락을 측정하도록 수정.
+
 - **protocol 상태 파일에 저장되는 모든 토큰 수가 `[MASKED]`가 되던 문제.** `protocol/state.py`의 비밀정보 마스킹 키 패턴이 `input_tokens`/`output_tokens`/`total_tokens`의 "token" 부분에 매칭되어, 사용량 수치가 로그에는 있는데도 저장 시점에 전부 가려졌습니다. 이제 sensitive 키에 걸려도 값이 실제 숫자면 마스킹하지 않습니다(자격증명은 맨 숫자가 아닙니다). 문자열·dict·리스트는 이전과 동일하게 마스킹되어 비밀정보 보호는 약화되지 않았습니다.
 - MODE A에서 worker가 실패했을 때 그 워커의 실제 오류 메시지가 유실되던 문제. `state.blocker = result.error_message`로 담아둔 값이 바로 다음 줄의 `_block()`에 의해 `"Required MODE A worker failed: worker_1"`이라는 일반 메시지로 덮어써져, 그 대입은 사실상 죽은 코드였고 무엇이 잘못됐는지에 대한 유일한 설명(TH-D18의 실패 분류와 리셋 시각 포함)이 사라졌습니다. 이제 blocker가 레인 이름과 원인을 함께 담습니다.
 - `test_bash_cancellation_cleans_up_process_group` 및 `test_bash_cancellation_escalates_for_sigterm_ignoring_group`의 심각한 간헐적 실패(단독 실행 시 12회 중 10회 실패). `bash`는 프로세스 그룹을 죽이고 자신이 띄운 셸을 정상적으로 reap하지만, 셸의 자식은 테스트 프로세스의 손자입니다. 셸이 먼저 죽으면 이미 죽은 손자는 init으로 재양육되어 init이 reap할 때까지 좀비로 남고, 그 동안 `os.kill(pid, 0)`은 계속 성공합니다. 이 창은 약 20ms에 불과하지만 두 테스트가 `task.cancel()` 직후 즉시 단정하고 있어 부하가 걸린 머신에서 대부분 실패했습니다. 이제 유한한 데드라인(5초) 안에서 폴링하며, 프로세스가 실제로 종료된다는 사실은 그대로 검증합니다. `shell_tools`의 정리 로직 자체는 정상이었으며 변경하지 않았습니다.
