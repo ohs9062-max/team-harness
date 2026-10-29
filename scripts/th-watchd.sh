@@ -208,6 +208,11 @@ handle_daemon_event() {
 }
 
 while true; do
+  report_epoch=$(cat "$watch_dir/report.last" 2>/dev/null || printf 0)
+  report_epoch=${report_epoch%%.*}
+  if [[ ! $report_epoch =~ ^[0-9]+$ ]] || (( $(date +%s) - report_epoch >= 86400 )); then
+    th_python -m team_harness.loss_report || true
+  fi
   archive_epoch=$(cat "$watch_dir/archive.last" 2>/dev/null || printf 0)
   archive_epoch=${archive_epoch%%.*}
   if [[ ! $archive_epoch =~ ^[0-9]+$ ]] || (( $(date +%s) - archive_epoch >= 86400 )); then

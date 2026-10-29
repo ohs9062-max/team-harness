@@ -689,3 +689,19 @@ Codex의 sleep_tool과 multi_agent 기능을 끄고 PreToolUse/PostToolUse 가�
 | th-launch | 실행 전 오류 거부, TH_BRIEF_OK 사유로 우회 기록 |
 | run/repl spawn_agent | 프롬프트 점검 후 로그만 기록 |
 | protocol | 워커 프롬프트 점검 후 로그만 기록 |
+## TH-D46. 하루 손실 리포트
+
+발사와 재실행 및 실패 사건을 날짜와 owner별로 집계해 손실 추이를 확인한다. 날짜는 로컬 시간이다.
+
+| 지표 | 정의 |
+|---|---|
+| launch / 재실행 | usage 기록 수 / attempt > 1 수 |
+| 롤오버 / 자동 계속 | usage 플래그 또는 inbox 롤오버 / inbox 자동 계속 |
+| 실패 원인 | 가드, 쿼터, 인계 없음, 멈춤, 스스로 멈춤 순으로 분류, 나머지 기타 |
+| 토큰 | 작업 codex.log의 tokens used 다음 숫자 합 (남아 있는 기록만) |
+| 완료 시간 | 첫 launch부터 inbox 완료까지 초 |
+
+| 실행 지점 | 동작 |
+|---|---|
+| th report | 지정 날짜 범위와 owner 집계, 표 또는 JSON |
+| watchd | report.last 기준 24시간마다 전날 보고서와 inbox 요약 |

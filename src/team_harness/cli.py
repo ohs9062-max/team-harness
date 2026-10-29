@@ -78,6 +78,27 @@ def _archive_on_start(owner: Path) -> None:
             out.write(f"{datetime.now().isoformat()} archive failed: {exc}\n")
 
 
+@main.command("report")
+@click.option("--days", type=click.IntRange(min=1), default=1, show_default=True)
+@click.option("--owner", type=click.Path(path_type=Path), default=None)
+@click.option("--json", "as_json", is_flag=True)
+def report_cli(days: int, owner: Path | None, as_json: bool) -> None:
+    """Show loss metrics for the past DAYS, including today."""
+    from datetime import timedelta
+
+    from team_harness.loss_report import collect
+    from team_harness.loss_report import owners
+    from team_harness.loss_report import render
+
+    wd = watch_dir()
+    end = datetime.now().astimezone().date()
+    roots = {owner.resolve()} if owner else owners(wd)
+    rows = collect(wd, roots, end - timedelta(days=days - 1), end)
+    click.echo(
+        json.dumps(rows, ensure_ascii=False, indent=2) if as_json else render(rows)
+    )
+
+
 @main.command("archive")
 @click.option("--dry-run", is_flag=True)
 @click.option("--owner", type=click.Path(path_type=Path), default=Path.cwd)

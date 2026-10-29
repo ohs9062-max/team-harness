@@ -6,6 +6,7 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -20,6 +21,7 @@ def sandbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     workspace.mkdir()
     watch = tmp_path / "watch"
     watch.mkdir()
+    (watch / "report.last").write_text(str(time.time()))
     fake = tmp_path / "fake-summary"
     fake.write_text(
         "#!/bin/sh\ncat > /dev/null\nprintf '요약: 확인한 자료만 보고한다.\\n다음: 결과 검토.\\n'\n"

@@ -52,6 +52,7 @@ def test_env(tmp_path: Path):
     """Sets up an isolated environment with stub binaries and test directories."""
     watch_dir = tmp_path / "watch"
     watch_dir.mkdir(parents=True, exist_ok=True)
+    (watch_dir / "report.last").write_text(str(time.time()))
     workspace = tmp_path / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
     bin_dir = tmp_path / "bin"
