@@ -23,6 +23,7 @@ from team_harness.agents.registry import check_harness_depth
 from team_harness.agents.registry import get_allowed_types
 from team_harness.agents.registry import resolve_template
 from team_harness.agents.session_capture import capture_session_id_from_path
+from team_harness.agents.session_capture import extract_session_id
 from team_harness.agents.template import AgentTemplate
 from team_harness.agents.template import template_supports_effort
 from team_harness.caller_contract import build_nested_caller_context
@@ -31,12 +32,16 @@ from team_harness.caller_contract import INHERITED_CALLER_CONTEXT_ENV
 from team_harness.coordinator.system_prompt import DEFAULT_WORKER_FOOTER
 from team_harness.decisions.advisor import advise_failure
 from team_harness.decisions.advisor import advise_model_tier
+from team_harness.protocol.worker_output import extract_final_text
+from team_harness.stop_policy import classify_stop_text
+from team_harness.stop_policy import continuation_prompt
 from team_harness.tracking.models import AgentRecord
 from team_harness.tracking.models import RateLimitedFamilyRecord
 from team_harness.tracking.persistence import write_json_atomic
 from team_harness.tracking.worker_sessions import resume_info_for_agent_type
 from team_harness.worker_context import ContextRequest
 from team_harness.worker_context import dispatch as dispatch_worker_context
+from team_harness.worker_context import measure_agent_context
 from team_harness.worker_context import RegistryConflictError
 from team_harness.worker_context import WorkerContextRegistry
 
@@ -1351,6 +1356,89 @@ def _confirm_worker_context_spawn(
     return context_session_id
 
 
+def _install_continuation(
+    state: AgentState,
+    *,
+    config: "Config",
+    run_dir: Path,
+    full_prompt: str,
+    extra_env: dict[str, str],
+    model: str | None,
+    effort: str | None,
+    flags: list[str] | None,
+    agents: list[str] | None,
+) -> None:
+    count = 0
+
+    async def continue_if_needed(current: AgentState) -> bool:
+        nonlocal count
+        stdout = (
+            current.stdout_log.read_text(encoding="utf-8", errors="replace")
+            if current.stdout_log.exists()
+            else ""
+        )
+        stderr = (
+            current.stderr_log.read_text(encoding="utf-8", errors="replace")
+            if current.stderr_log.exists()
+            else ""
+        )
+        reason = extract_final_text(stdout)
+        if (
+            current.status == "killed"
+            or classify_agent_failure(stderr_text=stderr, stdout_text=stdout)
+            is not None
+            or classify_stop_text(reason) != "self_stop"
+        ):
+            return False
+        if count >= 2:
+            current.continuation_exhausted = True
+            current.failure_classification = {
+                "category": "auto_continue_exhausted",
+                "detail": "자동 계속 소진 — 작업 분할 필요",
+            }
+            return False
+        count += 1
+        sid = (
+            extract_session_id(current.template, stdout.encode(), current.session_id)
+            if current.template
+            else None
+        )
+        measurement = (
+            measure_agent_context(agent_type=current.agent_type, session_id=sid)
+            if sid
+            else None
+        )
+        resume = bool(
+            sid
+            and measurement
+            and measurement.measurement_status == "measured"
+            and measurement.input_tokens is not None
+            and measurement.input_tokens <= 90000
+        )
+        result = await spawner.spawn(
+            agent_id=current.id,
+            agent_type=current.agent_type,
+            prompt=continuation_prompt(full_prompt, reason, count),
+            cwd=Path(current.cwd),
+            config=config,
+            log_dir=run_dir,
+            extra_env=extra_env,
+            model=model,
+            effort=effort,
+            extra_flags=flags,
+            allowed_agents=agents if current.agent_type == "harness" else None,
+            stdout_path=current.stdout_log,
+            stderr_path=current.stderr_log,
+            mode="resume" if resume else "fresh",
+            resume_session_id=sid if resume else None,
+        )
+        current.proc, current.pgid = result.proc, result.pgid
+        current.session_id = result.generated_uuid or (sid if resume else None)
+        return True
+
+    state.continuation = continue_if_needed
+
+
 async def spawn_agent(**kwargs: object) -> str:
     """Validate, record, and launch one worker for the active legacy binding."""
 
@@ -1535,6 +1623,17 @@ async def spawn_agent(**kwargs: object) -> str:
         codex_sessions_root=(
             Path(custom_home) / ".codex" / "sessions" if custom_home else None
         ),
+    )
+    _install_continuation(
+        state,
+        config=config,
+        run_dir=run_dir,
+        full_prompt=full_prompt,
+        extra_env=extra_env,
+        model=model,
+        effort=effort,
+        flags=flags,
+        agents=agents,
     )
     manager.register(state=state)
     record = AgentRecord(
@@ -2154,6 +2253,17 @@ def build_agent_tool_bindings(
             codex_sessions_root=(
                 Path(custom_home) / ".codex" / "sessions" if custom_home else None
             ),
+        )
+        _install_continuation(
+            state,
+            config=config,
+            run_dir=run_dir,
+            full_prompt=full_prompt,
+            extra_env=extra_env,
+            model=model_val,
+            effort=effort_val,
+            flags=flags,
+            agents=agents_arg,
         )
         manager.register(state=state)
         record = AgentRecord(

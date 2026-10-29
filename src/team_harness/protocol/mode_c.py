@@ -62,6 +62,8 @@ from team_harness.protocol.worktree import changed_files
 from team_harness.protocol.worktree import checkpoint_worktree
 from team_harness.protocol.worktree import create_worktree
 from team_harness.protocol.worktree import diff_worktree
+from team_harness.stop_policy import classify_stop_text
+from team_harness.stop_policy import continuation_prompt
 from team_harness.tracking.models import DecisionRecord
 from team_harness.tracking.run_log import RunLogWriter
 from team_harness.worker_context import ContextMeasurement
@@ -271,6 +273,8 @@ class TeamHarnessAgentRunner:
         current_follow_up = follow_up
         rollover_generation = 0
         max_rollovers = 5
+        auto_continues = 0
+        auto_resume_sid: str | None = None
 
         context_registry = (
             WorkerContextRegistry(registry_path_for_workspace(cwd))
@@ -293,6 +297,10 @@ class TeamHarnessAgentRunner:
             spawn_mode = "fresh"
             resume_session_id: str | None = None
             context_session_id: str | None = None
+            if auto_resume_sid is not None:
+                spawn_mode = "resume"
+                resume_session_id = auto_resume_sid
+                auto_resume_sid = None
 
             if use_context and context_registry is not None and task_key is not None:
                 dispatch_request = ContextRequest(
@@ -309,7 +317,11 @@ class TeamHarnessAgentRunner:
                     snapshot={"candidates": context_registry.sessions()},
                     settings=context_settings,
                 )
-                if dispatch_decision.action == "resume" and rollover_generation == 0:
+                if (
+                    spawn_mode != "resume"
+                    and dispatch_decision.action == "resume"
+                    and rollover_generation == 0
+                ):
                     spawn_mode = "resume"
                     resume_session_id = dispatch_decision.session_id
                 context_session_id = resume_session_id or str(uuid.uuid4())
@@ -511,17 +523,6 @@ class TeamHarnessAgentRunner:
                     f"{classification['detail']}]"
                 )
 
-            if self.verbose:
-                print(
-                    _completion_line(
-                        label=label or agent_id,
-                        agent_type=agent_type,
-                        effective_model=spawn_result.effective_model,
-                        effort=effort,
-                        success=success,
-                    )
-                )
-
             is_rollover = False
             if (
                 use_context
@@ -668,6 +669,59 @@ class TeamHarnessAgentRunner:
 
             if is_rollover:
                 continue
+
+            final_text = extract_final_text(stdout_text)
+            failure = classify_agent_failure(
+                stderr_text=stderr_text, stdout_text=stdout_text
+            )
+            if (
+                not timed_out
+                and failure is None
+                and classify_stop_text(final_text) == "self_stop"
+            ):
+                if auto_continues < 2:
+                    auto_continues += 1
+                    current_prompt = continuation_prompt(
+                        prompt, final_text, auto_continues
+                    )
+                    sid = extract_session_id(
+                        spawn_result.template,
+                        stdout_text.encode(),
+                        spawn_result.generated_uuid,
+                    )
+                    measurement = (
+                        measure_agent_context(agent_type=agent_type, session_id=sid)
+                        if sid
+                        else None
+                    )
+                    if (
+                        measurement
+                        and measurement.measurement_status == "measured"
+                        and measurement.input_tokens is not None
+                        and measurement.input_tokens <= 90000
+                    ):
+                        auto_resume_sid = sid
+                    if state_mgr is not None:
+                        state_mgr.append_event(
+                            "AUTO_CONTINUE",
+                            task_key=task_key,
+                            count=auto_continues,
+                            reason=final_text,
+                        )
+                    continue
+                success = False
+                error_msg = "자동 계속 소진 — 작업 분할 필요"
+
+            if self.verbose:
+                print(
+                    _completion_line(
+                        label=label or agent_id,
+                        agent_type=agent_type,
+                        effective_model=spawn_result.effective_model,
+                        effort=effort,
+                        success=success,
+                    )
+                )
 
             break
 

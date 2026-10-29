@@ -19,7 +19,7 @@ Do not read or write the coordinator journal (`.claude/current_status.md`, `.cla
 - If the instruction includes “이전 시도 복구 요약”, follow it exactly and do not redo completed steps; detached runner scripts must write the same STATUS lines.
 - Finish the assigned task. Mechanical errors (lint/format/import order/type annotations, your own script's exit-code misreading) are not failures: fix them with the standard tool (`ruff check --fix`, `ruff format`) and continue. If you know the cause and fix of an error, apply it and continue.
 - A guard or hook denial (including PreToolUse deny and zone guard) is not a permission error. Retry by splitting the command into smaller commands or using a file-editing tool such as `apply_patch`. If the same denial occurs twice using different approaches, write `FAILED` including the exact denial messages.
-- Stop with `FAILED` only for: quota/permission/license errors (immediately), the same fix approach failing twice, setup fixes failing 3 times, or the time limit (default smoke 15 min).
+- Stop with `FAILED` only for: quota/permission/license errors (immediately), the same fix approach failing twice, setup fixes failing 3 times, or the time limit given in the instruction (smoke experiment runs default to 15 min; no limit otherwise).
 - When a design choice is ambiguous, pick the conservative option (keep existing behavior, backward compatible), note it as `decision:` in WORKLOG.md, and continue.
 - Do not do anything the instruction did not ask for: do not stop, kill, move, or delete other processes, jobs, or outputs; if it seems necessary, write the reason in WORKLOG/FAILED for the coordinator instead.
 - Do not claim checks you did not run.

@@ -1,4 +1,6 @@
 import asyncio
+from collections.abc import Awaitable
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
@@ -62,6 +64,9 @@ class AgentState:
     context_session_id: str | None = None
     context_parked: bool = False
     codex_sessions_root: Path | None = None
+    continuation: Callable[["AgentState"], Awaitable[bool]] | None = None
+    completion_task: asyncio.Task[int] | None = None
+    continuation_exhausted: bool = False
 
 
 class AgentManager:
@@ -203,7 +208,7 @@ class AgentManager:
 
     def poll_exit_codes(self) -> None:
         for state in self._agents.values():
-            if state.exit_code is not None:
+            if state.exit_code is not None or state.continuation is not None:
                 continue
             if state.proc.returncode is None:
                 continue
@@ -215,7 +220,23 @@ class AgentManager:
 
     async def wait_one(self, agent_id: str) -> int:
         state = self.get(agent_id)
-        exit_code = await state.proc.wait()
+        if state.continuation is not None:
+            if state.completion_task is None:
+                state.completion_task = asyncio.create_task(
+                    self._wait_continuations(state)
+                )
+            return await asyncio.shield(state.completion_task)
+        return await self._wait_continuations(state)
+
+    async def _wait_continuations(self, state: AgentState) -> int:
+        while True:
+            exit_code = await state.proc.wait()
+            if state.status == "killed" or state.continuation is None:
+                break
+            if not await state.continuation(state):
+                break
+        if state.continuation_exhausted and state.status != "killed":
+            exit_code = exit_code or 1
         state.exit_code = exit_code
         state.finished_at = datetime.now(timezone.utc)
         if state.status != "killed":

@@ -53,6 +53,27 @@ def _allowed_failure(reason: str) -> bool:
     )
 
 
+def classify_stop_text(text: str) -> StopClassification:
+    """Classify an explicit terminal result card when no marker directory exists."""
+    match = re.search(
+        r"(?im)^\s*(?:\*\*)?(FAILED|DONE)(?:\*\*)?\s*[:：-]?\s*(.*)$", text
+    )
+    if match is None:
+        return "ok"
+    reason = text[match.start(2) :]
+    if match.group(1).upper() == "FAILED":
+        return "allowed_fail" if _allowed_failure(reason) else "self_stop"
+    return "self_stop" if _REMAINING.search(reason) else "ok"
+
+
+def continuation_prompt(prompt: str, reason: str, count: int) -> str:
+    """Append the previous result without discarding the original assignment."""
+    return (
+        f"{prompt}\n\n## 자동 계속 ({count}차)\n\n직전 사유:\n{reason}\n\n"
+        "남은 항목을 이어서 끝까지 하라, 이미 된 것은 다시 하지 마라."
+    )
+
+
 def classify_stop(task_dir: Path) -> StopClassification:
     """Classify the current terminal marker; uncertainty favors continuation."""
     failed = task_dir / "FAILED"

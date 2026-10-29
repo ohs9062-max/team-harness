@@ -243,3 +243,112 @@ def test_concurrent_watchers_start_only_one_relaunch(
         )
     assert len(calls) == 1
     assert sum(bool(result) for result in results) == 1
+
+
+def test_text_terminal_result_classification() -> None:
+    assert stop_policy.classify_stop_text("FAILED: INCOMPLETE") == "self_stop"
+    assert stop_policy.classify_stop_text("DONE: 남은 작업 있음") == "self_stop"
+    assert stop_policy.classify_stop_text("FAILED: quota exhausted") == "allowed_fail"
+    assert stop_policy.classify_stop_text("DONE: complete") == "ok"
+
+
+@pytest.mark.asyncio
+async def test_protocol_continues_before_publishing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from team_harness.agents.template import AgentTemplate
+    from team_harness.config import Config
+    from team_harness.protocol import mode_c
+
+    count = tmp_path / "count"
+    script = tmp_path / "worker.sh"
+    script.write_text(
+        f'''if [ ! -f "{count}" ]; then touch "{count}"; echo "FAILED: INCOMPLETE"; else echo "DONE: complete"; fi\n'''
+    )
+    config = Config()
+    config.agent_templates = {
+        "codex": AgentTemplate(command=("sh", str(script)), model_flag=None)
+    }
+    calls = []
+    original = stop_policy.classify_stop_text
+
+    def classify(text: str) -> stop_policy.StopClassification:
+        calls.append(text)
+        return original(text)
+
+    monkeypatch.setattr(mode_c, "classify_stop_text", classify)
+    runner = mode_c.TeamHarnessAgentRunner(config=config, log_dir=tmp_path / "logs")
+    result = await runner.run_agent(
+        agent_type="codex", prompt="p", cwd=str(tmp_path), timeout_sec=10
+    )
+    assert result.success and result.output_text.strip() == "DONE: complete"
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_direct_continuation_shared_wait_and_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+    from datetime import datetime
+    from datetime import timezone
+
+    from team_harness.agents import spawner
+    from team_harness.agents.manager import AgentManager
+    from team_harness.agents.manager import AgentState
+    from team_harness.agents.template import AgentTemplate
+    from team_harness.config import Config
+    from team_harness.tools import agent_tools
+
+    script = tmp_path / "worker.sh"
+    script.write_text('echo "FAILED: INCOMPLETE"\n')
+    config = Config()
+    config.agent_templates = {
+        "codex": AgentTemplate(command=("sh", str(script)), model_flag=None)
+    }
+    stdout, stderr = tmp_path / "out", tmp_path / "err"
+    result = await spawner.spawn(
+        agent_id="a",
+        agent_type="codex",
+        prompt="p",
+        cwd=tmp_path,
+        config=config,
+        log_dir=tmp_path,
+        stdout_path=stdout,
+        stderr_path=stderr,
+    )
+    state = AgentState(
+        id="a",
+        agent_type="codex",
+        prompt="p",
+        cwd=str(tmp_path),
+        proc=result.proc,
+        spawn_time=datetime.now(timezone.utc),
+        stdout_log=stdout,
+        stderr_log=stderr,
+        template=result.template,
+    )
+    calls = []
+    original = stop_policy.classify_stop_text
+
+    def classify(text: str) -> stop_policy.StopClassification:
+        calls.append(text)
+        return original(text)
+
+    monkeypatch.setattr(agent_tools, "classify_stop_text", classify)
+    agent_tools._install_continuation(
+        state,
+        config=config,
+        run_dir=tmp_path,
+        full_prompt="p",
+        extra_env={},
+        model=None,
+        effort=None,
+        flags=None,
+        agents=None,
+    )
+    manager = AgentManager()
+    manager.register(state)
+    assert await asyncio.gather(manager.wait_one("a"), manager.wait_one("a")) == [1, 1]
+    assert len(calls) == 3
+    assert state.continuation_exhausted and state.status == "failed"
