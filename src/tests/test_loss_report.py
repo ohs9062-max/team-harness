@@ -113,3 +113,28 @@ def test_event_duplicate_not_counted_twice(tmp_path: Path) -> None:
     )
     row = collect(watch, {owner}, now.date(), now.date())[0]
     assert row["causes"] == {"스스로 멈춤": 1}
+
+
+def test_invalid_utf8_events_and_inbox(tmp_path: Path) -> None:
+    owner, task, watch, now = fixture_data(tmp_path)
+    with (owner / ".claude" / "inbox.md").open("ab") as out:
+        out.write(f"{now:%Y-%m-%d %H:%M} | {task} | 실패 | quota ".encode() + b"\xff\n")
+    (watch / "events.log").write_bytes(
+        f"{now:%Y-%m-%d %H:%M:%S} [실패] {task}: guard ".encode() + b"\xff\n"
+    )
+    row = collect(watch, {owner}, now.date(), now.date())[0]
+    assert row["causes"]["쿼터"] == 1
+
+
+def test_invalid_json_count(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    owner, _, watch, now = fixture_data(tmp_path)
+    with (watch / "usage.jsonl").open("ab") as out:
+        out.write(b"\n{bad json\n\xff\n")
+    assert collect(watch, {owner}, now.date(), now.date())[0]["launch"] == 2
+    assert "2" in capsys.readouterr().err
+
+
+def test_missing_codex_log(tmp_path: Path) -> None:
+    owner, task, watch, now = fixture_data(tmp_path)
+    (task / "codex.log").unlink()
+    assert collect(watch, {owner}, now.date(), now.date())[0]["tokens"] == 0

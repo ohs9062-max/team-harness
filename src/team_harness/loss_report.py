@@ -10,6 +10,7 @@ import fcntl
 import json
 from pathlib import Path
 import re
+import sys
 from typing import Any
 
 from team_harness.workspace_archive import watch_dir
@@ -35,9 +36,13 @@ def owners(wd: Path, owner: Path | None = None) -> set[Path]:
     result = {owner.resolve()} if owner else set()
     registry = wd / "tasks.txt"
     if registry.exists():
-        for line in registry.read_text().splitlines():
+        for line in registry.read_text(encoding="utf-8", errors="replace").splitlines():
             try:
-                value = (Path(line) / ".th_owner").read_text().strip()
+                value = (
+                    (Path(line) / ".th_owner")
+                    .read_text(encoding="utf-8", errors="replace")
+                    .strip()
+                )
                 if value:
                     result.add(Path(value).resolve())
             except OSError:
@@ -47,8 +52,8 @@ def owners(wd: Path, owner: Path | None = None) -> set[Path]:
 
 def _lines(path: Path) -> list[str]:
     try:
-        return path.read_text(encoding="utf-8").splitlines()
-    except FileNotFoundError:
+        return path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
         return []
 
 
@@ -86,9 +91,14 @@ def collect(wd: Path, roots: set[Path], start: date, end: date) -> list[dict[str
             },
         )
 
+    invalid_json = 0
     for line in _lines(wd / "usage.jsonl"):
         try:
             entry = json.loads(line)
+        except json.JSONDecodeError:
+            invalid_json += 1
+            continue
+        try:
             root = Path(entry["owner"]).resolve()
             if root not in roots:
                 continue
@@ -106,8 +116,10 @@ def collect(wd: Path, roots: set[Path], start: date, end: date) -> list[dict[str
             item["launch"] += 1
             item["retry"] += int(entry.get("attempt", 1) > 1)
             item["rollover"] += int(bool(entry.get("rollover")))
-        except (ValueError, KeyError, TypeError, json.JSONDecodeError):
+        except (ValueError, KeyError, TypeError, AttributeError):
             continue
+    if invalid_json:
+        print(f"건너뛴 잘못된 JSON 줄: {invalid_json}", file=sys.stderr)
     events: list[tuple[datetime, Path, str, str, str]] = []
     seen: set[tuple[str, str, str, str]] = set()
     for root in roots:
@@ -134,7 +146,10 @@ def collect(wd: Path, roots: set[Path], start: date, end: date) -> list[dict[str
         )
         if not match:
             continue
-        stamp = datetime.strptime(match[1], "%Y-%m-%d %H:%M:%S").astimezone()
+        try:
+            stamp = datetime.strptime(match[1], "%Y-%m-%d %H:%M:%S").astimezone()
+        except ValueError:
+            continue
         matches = [
             p
             for p, (_, name) in tasks.items()
@@ -196,7 +211,11 @@ def daily(now: datetime, wd: Path | None = None) -> None:
         fcntl.flock(lock, fcntl.LOCK_EX)
         last = wd / "report.last"
         try:
-            if now.timestamp() - float(last.read_text()) < 86400:
+            if (
+                now.timestamp()
+                - float(last.read_text(encoding="utf-8", errors="replace"))
+                < 86400
+            ):
                 return
         except (OSError, ValueError):
             pass

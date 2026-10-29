@@ -73,7 +73,10 @@ def _inbox(
         if not cursors or (alert.exists() and alert.stat().st_size):
             return
         try:
-            positions = [int(p.read_text().strip()) for p in cursors]
+            positions = [
+                int(p.read_text(encoding="utf-8", errors="replace").strip())
+                for p in cursors
+            ]
         except (OSError, ValueError):
             return
         if any(p < 0 or p > len(data) for p in positions):
@@ -97,7 +100,11 @@ def _inbox(
         if not end:
             return
         routes = root / "inbox.routes"
-        route_data = routes.read_text() if routes.exists() else ""
+        route_data = (
+            routes.read_text(encoding="utf-8", errors="replace")
+            if routes.exists()
+            else ""
+        )
         adjusted = []
         archived_routes = []
         for line in route_data.splitlines():
@@ -143,7 +150,7 @@ def _alive(path: Path) -> bool:
     if not path.exists():
         return False
     try:
-        pid = int(path.read_text().strip())
+        pid = int(path.read_text(encoding="utf-8", errors="replace").strip())
         if pid <= 0:
             return True
         os.kill(pid, 0)
@@ -159,7 +166,14 @@ def _eligible(task: Path, owner: Path, now: datetime) -> bool:
         return False
     try:
         # Require explicit owner and an output directory, never arbitrary project data.
-        if Path((task / ".th_owner").read_text().strip()).resolve() != owner.resolve():
+        if (
+            Path(
+                (task / ".th_owner")
+                .read_text(encoding="utf-8", errors="replace")
+                .strip()
+            ).resolve()
+            != owner.resolve()
+        ):
             return False
         if "_outputs" not in task.parts or "_archive" in task.parts:
             return False
@@ -174,7 +188,7 @@ def _eligible(task: Path, owner: Path, now: datetime) -> bool:
             return False
         wtfile = task / ".th_worktree"
         if wtfile.exists():
-            wt = Path(wtfile.read_text().strip())
+            wt = Path(wtfile.read_text(encoding="utf-8", errors="replace").strip())
             if not wt.is_absolute():
                 return False
             if wt.exists():
@@ -214,7 +228,7 @@ def archive_workspace(
     if registry.is_file():
         with (watch_dir() / "tasks.lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
-            lines = registry.read_text().splitlines()
+            lines = registry.read_text(encoding="utf-8", errors="replace").splitlines()
             changed = False
             for i, line in enumerate(lines):
                 task = Path(line)
@@ -248,7 +262,11 @@ def archive_daily(
         fcntl.flock(lock, fcntl.LOCK_EX)
         last = wd / "archive.last"
         try:
-            if now.timestamp() - float(last.read_text()) < 86400:
+            if (
+                now.timestamp()
+                - float(last.read_text(encoding="utf-8", errors="replace"))
+                < 86400
+            ):
                 return []
         except (OSError, ValueError):
             pass
@@ -257,9 +275,15 @@ def archive_daily(
             owners.add(owner.resolve())
         registry = wd / "tasks.txt"
         if registry.exists():
-            for line in registry.read_text().splitlines():
+            for line in registry.read_text(
+                encoding="utf-8", errors="replace"
+            ).splitlines():
                 try:
-                    value = (Path(line) / ".th_owner").read_text().strip()
+                    value = (
+                        (Path(line) / ".th_owner")
+                        .read_text(encoding="utf-8", errors="replace")
+                        .strip()
+                    )
                     if value:
                         owners.add(Path(value).resolve())
                 except OSError:
