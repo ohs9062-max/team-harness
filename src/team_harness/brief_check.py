@@ -42,7 +42,7 @@ def check_brief_text(text: str, task_dir: Path | None = None) -> list[Finding]:
     in_acceptance = False
     in_bash = False
     in_read_section = False
-    in_design = False
+    in_tasks = False
     commands: list[str] = []
     own = task_dir.name if task_dir else None
     for i, line in enumerate(lines, 1):
@@ -50,8 +50,8 @@ def check_brief_text(text: str, task_dir: Path | None = None) -> list[Finding]:
             continue
         if re.match(r"^##\s+", line):
             in_acceptance = bool(re.match(r"^##\s+검수\s*$", line))
-            in_read_section = bool(re.match(r"^##\s+읽을\s*문서(?:\s|$|\()", line))
-            in_design = bool(re.match(r"^##\s+확정\s*설계", line))
+            in_read_section = bool(re.match(r"^##\s+읽을\s*문서", line))
+            in_tasks = bool(re.match(r"^##\s+할\s*일", line))
             acceptance |= in_acceptance
             in_bash = False
         if in_acceptance and re.match(r"^```(?:bash|sh)\s*$", line):
@@ -143,15 +143,14 @@ def check_brief_text(text: str, task_dir: Path | None = None) -> list[Finding]:
         level: Literal["error", "warn"] = (
             "error"
             if in_read_section
-            or re.search(
+            or in_tasks
+            and re.search(
                 r"읽|\bread\b|\b(?:cat|tail|head|rg|grep)(?:\s|`)|\bsed\s+-n\b|\bopen\s*\(",
                 line,
                 re.I,
             )
             else "warn"
         )
-        if in_design and "→" in line and not re.search(r"읽|\bread\b", line, re.I):
-            level = "warn"
         if re.search(r"\bcat\s*>>?", line) and not re.search(
             r"읽|\bread\b|\b(?:tail|head|rg|grep)\s", line, re.I
         ):

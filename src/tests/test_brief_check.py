@@ -38,6 +38,38 @@ def test_path_severity_and_shell_syntax():
     assert not [f for f in check_brief_text(shell) if f.rule == "missing_command"]
 
 
+def test_section_prefixes_and_read_instructions():
+    text = "\n".join(
+        [
+            "read `_outputs/other/a`",
+            "## 재현 (예시)",
+            "cat `_outputs/other/b`",
+            "## 현재 문제 부연",
+            "read `_outputs/other/c`",
+            "## 읽을 문서(필수)",
+            "`_outputs/other/d`",
+            "## 할 일 (순서)",
+            "1. read `_outputs/other/e`",
+            "2. `_outputs/other/f` 기록",
+            "## 배경",
+            "read `_outputs/other/g`",
+        ]
+    )
+    assert [
+        (f.level, f.line)
+        for f in check_brief_text(text, Path("/tmp/current"))
+        if f.rule == "foreign_path"
+    ] == [
+        ("warn", 1),
+        ("warn", 3),
+        ("warn", 5),
+        ("error", 7),
+        ("error", 9),
+        ("warn", 10),
+        ("warn", 12),
+    ]
+
+
 def rules(text: str) -> set[str]:
     return {f.rule for f in check_brief_text(text, Path("/tmp/current"))}
 
