@@ -540,7 +540,7 @@ def test_th_launch_uses_one_image_envelope_and_project_python_for_each_worker_ty
         source.count(
             'PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" "${context_python[@]}"'
         )
-        == 3
+        == 4
     )
 
 

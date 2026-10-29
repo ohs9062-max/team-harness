@@ -670,3 +670,22 @@ Codex의 sleep_tool과 multi_agent 기능을 끄고 PreToolUse/PostToolUse 가�
 | `th archive` | 수동 실행, `--dry-run`과 `--owner` 지원 |
 
 공유 잠금 아래 커서와 경로 오프셋을 보정하고 이관 내역을 기록한다. 충돌하는 이름은 시간 접미사를 붙인다.
+
+## TH-D47. 지시서 자동 점검
+
+워커 실행 전에 지시서의 위험한 경로와 검수 명령을 검사한다. 불확실한 품질 문제는 경고한다.
+
+| 규칙 | 수준 | 내용 |
+| --- | --- | --- |
+| foreign_path | error | 다른 작업 폴더와 보호된 watch·기록 경로 |
+| missing_command | error | 검수 명령이 PATH에 없음 |
+| weak_acceptance | warn | 커밋 로그만 검사 |
+| escape_phrase | warn | 부분 완료를 허용하는 표현 |
+| allow_paths_ambiguous | warn | 기본 쓰기 범위 미명시 |
+| missing_acceptance | warn | 코드 작업의 검수 절 누락 |
+
+| 실행 경로 | 실행 지점 |
+| --- | --- |
+| th-launch | 실행 전 오류 거부, TH_BRIEF_OK 사유로 우회 기록 |
+| run/repl spawn_agent | 프롬프트 점검 후 로그만 기록 |
+| protocol | 워커 프롬프트 점검 후 로그만 기록 |

@@ -256,6 +256,9 @@ class TeamHarnessAgentRunner:
         state: Any | None = None,
         **extra_kwargs: Any,
     ) -> AgentResult:
+        from team_harness.brief_check import log_brief_warnings
+
+        log_brief_warnings(prompt)
         resolve_template(agent_type=agent_type, config=self.config)
 
         trip = self.breaker.active_trip(agent_type)

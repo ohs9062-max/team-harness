@@ -127,7 +127,18 @@ fi
 if [[ $worker_type == codex && ${TEAM_HARNESS_JEV:-} != 0 ]]; then
   th_jev -m team_harness.decisions.advisor tier --task "$task_dir/task.md" --worker "$worker_type" --model "$model" --effort "$effort"
 fi
+brief_rc=0
+PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" "${context_python[@]}" -m team_harness.brief_check "$task_dir" || brief_rc=$?
+if (( brief_rc != 0 )); then
+  if (( brief_rc != 2 )) || [[ -z ${TH_BRIEF_OK:-} || -z ${TH_BRIEF_OK//[[:space:]]/} ]]; then
+    echo '지시서 점검 실패: 수정하거나 TH_BRIEF_OK에 우회 사유를 지정하세요' >&2
+    exit "$brief_rc"
+  fi
+fi
 policy_override=""
+if (( brief_rc == 2 )); then
+  policy_override="override: TH_BRIEF_OK=$TH_BRIEF_OK"
+fi
 while IFS= read -r line; do
   if [[ $line == override:* ]]; then
     if [[ -n $policy_override ]]; then

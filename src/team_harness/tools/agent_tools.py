@@ -1492,6 +1492,9 @@ async def spawn_agent(**kwargs: object) -> str:
     manager, run_log, config, ui = _require_setup()
     agent_type = str(kwargs["type"])
     prompt = str(kwargs["prompt"])
+    from team_harness.brief_check import log_brief_warnings
+
+    log_brief_warnings(prompt)
     cwd = _resolve_spawn_cwd(str(kwargs["cwd"]), config)
     model = str(kwargs["model"]) if kwargs.get("model") is not None else None
     breaker = _require_rate_limit_breaker()
@@ -2116,6 +2119,9 @@ def build_agent_tool_bindings(
         _validate_spawn_agent_kwargs(kwargs=kwargs)
         agent_type = str(kwargs["type"])
         prompt = str(kwargs["prompt"])
+        from team_harness.brief_check import log_brief_warnings
+
+        log_brief_warnings(prompt)
         cwd = _resolve_spawn_cwd(str(kwargs["cwd"]), config)
         model_val = str(kwargs["model"]) if kwargs.get("model") is not None else None
         _sync_finished_rate_limits(
