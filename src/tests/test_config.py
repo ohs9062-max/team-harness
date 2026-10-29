@@ -911,3 +911,12 @@ def test_prepare_task_validates_inputs(tmp_path):
         _prepare_task(task=None, task_file=None)
     with pytest.raises(click.UsageError):
         _prepare_task(task="x", task_file=str(task_file))
+
+
+def test_worker_suffix_does_not_restore_self_stop_exit():
+    from pathlib import Path
+
+    suffix = (
+        Path(__file__).resolve().parents[2] / "design/user_config/worker_suffix.md"
+    ).read_text(encoding="utf-8")
+    assert "If stopping yourself" not in suffix

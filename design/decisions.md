@@ -588,6 +588,8 @@ Claude와 Codex가 함께 실행될 때 Codex waiter가 Claude가 띄운 작업�
 
 A Claude Code PreToolUse Bash hook requests approval for destructive coordinator commands; `TH_GUARD_MODE=deny` denies them, while workers bypass it. It fails open on errors and records detections in the watch directory. Registration and testing in Claude settings are performed separately by the coordinator. Worker instructions distinguish correctable mechanical errors and known fixes from genuine failure conditions, and require conservative decisions.
 
+2026-10-29 revision: Worker context grew from 19,000 to 65,000–113,000 tokens, with 65–77% of the increase from tool output; one call returned 32,000 characters and one file was reread seven times. Of 98 robot3 failures, 51 were INCOMPLETE self-stops; three on October 29 followed guard denials that could have been retried with smaller commands. Limit reads and output, remove self-stop exits, and retry guard denials using a different approach before reporting repeated denial.
+
 | Execution path | Application | Reason |
 | --- | --- | --- |
 | Claude Code coordinator | `scripts/hooks/th-guard-destructive.py` PreToolUse hook (manual registration) | Claude Code supports Bash hooks. |
