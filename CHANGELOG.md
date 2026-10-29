@@ -44,6 +44,8 @@
 
 ### 추가됨 (Added)
 
+- 워크스페이스 기록과 완료 작업의 보존형 자동 이관 및 `th archive` 명령을 추가했습니다.
+
 - **워커 컨텍스트 롤오버 세 경로 연결 및 기본 활성화 (TH-D32 3단계).**
   - 셸(`th-launch.sh`, `th-watch-lib.sh`, `th-status.sh`), run/repl(`agent_tools.py`, `manager.py`), 프로토콜(`mode_a.py`, `mode_b.py`, `mode_c.py`, `usage.py`) 세 실행 경로에 `worker_context` 서비스를 통합하고 `[worker_context] enabled = true` 기본 활성화.
   - 작업서 `task.md`의 `context_budget` 필드(기본 60000, 큰 단위 120000 등) 지원으로 최소 작업 단위 크기에 따른 유연한 소프트 캡 적용.

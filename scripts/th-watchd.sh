@@ -208,6 +208,11 @@ handle_daemon_event() {
 }
 
 while true; do
+  archive_epoch=$(cat "$watch_dir/archive.last" 2>/dev/null || printf 0)
+  archive_epoch=${archive_epoch%%.*}
+  if [[ ! $archive_epoch =~ ^[0-9]+$ ]] || (( $(date +%s) - archive_epoch >= 86400 )); then
+    th_python -m team_harness.workspace_archive || true
+  fi
   # 자기 스크립트 또는 라이브러리 파일 변경 시 스스로 재실행 (exec)
   current_sig=$(get_script_sig)
   if [[ -n $current_sig && -n $last_sig && $current_sig != "$last_sig" ]]; then

@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime
 import json
 from pathlib import Path
 from typing import Any
@@ -54,6 +55,9 @@ from team_harness.worker_context import parse_task_metadata
 from team_harness.worker_context import registry_path_for_workspace
 from team_harness.worker_context import WorkerContextError
 from team_harness.worker_context import WorkerContextRegistry
+from team_harness.workspace_archive import archive_daily
+from team_harness.workspace_archive import archive_workspace
+from team_harness.workspace_archive import watch_dir
 
 if TYPE_CHECKING:
     from team_harness.protocol.mode_c import TeamHarnessAgentRunner
@@ -62,6 +66,25 @@ if TYPE_CHECKING:
 @click.group()
 def main() -> None:
     """th \u2014 multi-agent AI orchestration harness."""
+
+
+def _archive_on_start(owner: Path) -> None:
+    try:
+        archive_daily(datetime.now().astimezone(), owner)
+    except Exception as exc:
+        wd = watch_dir()
+        wd.mkdir(parents=True, exist_ok=True)
+        with (wd / "events.log").open("a") as out:
+            out.write(f"{datetime.now().isoformat()} archive failed: {exc}\n")
+
+
+@main.command("archive")
+@click.option("--dry-run", is_flag=True)
+@click.option("--owner", type=click.Path(path_type=Path), default=Path.cwd)
+def archive_cli(dry_run: bool, owner: Path) -> None:
+    """Archive eligible workspace data."""
+    for move in archive_workspace(owner, datetime.now().astimezone(), dry_run):
+        click.echo(f"{move.source} → {move.destination}")
 
 
 def _write_config_file(path: Path, text: str, force: bool) -> None:
@@ -295,6 +318,7 @@ def run_cli(
     cli_system_prompt_file: str | None,
     cwd: str,
 ) -> None:
+    _archive_on_start(Path(cwd))
     asyncio.run(
         _run(
             task=task,
@@ -339,6 +363,7 @@ def repl(
     cli_system_prompt_file: str | None,
     cwd: str,
 ) -> None:
+    _archive_on_start(Path(cwd))
     asyncio.run(
         _repl(
             provider=provider,
@@ -699,6 +724,7 @@ def protocol() -> None:
     MODE C — ROLE PIPELINE: one agent designs, another implements, a third
              reviews (`th protocol run --mode c`).
     """
+    _archive_on_start(Path.cwd())
 
 
 def _parse_set_role(values: tuple[str, ...]) -> dict[str, dict[str, str]]:

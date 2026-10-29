@@ -642,3 +642,22 @@ Codex의 sleep_tool과 multi_agent 기능을 끄고 PreToolUse/PostToolUse 가�
 | th-launch / th-watchd | 완료·실패 사건과 검수 결과 처리 |
 | run / repl | 워커 프로세스 종료 처리 |
 | protocol mode A/B/C | 공통 mode C 워커 러너 종료 처리 |
+
+## TH-D45. 워크스페이스 문서 이관
+
+오래된 작업 기록은 삭제하지 않고 이관한다. 불확실한 커서, 작업 상태 또는 워크트리는 보존한다.
+
+| 대상 | 기준 | 이관 위치 |
+| --- | --- | --- |
+| inbox와 경로 정보 | 3일 경과, 모든 세션 커서 통과 | 소유 workspace의 보관 디렉터리, 월별 파일 |
+| 등록된 작업 폴더 | 7일 경과, DONE·VERIFIED, 실패 없음, 워커 종료, 워크트리 깨끗함 | 같은 부모의 `_archive/YYYYMM/` |
+| 날짜별 work log 및 workers archive | 7일 경과 | 소유 workspace의 보관 디렉터리 |
+| watch events | 5MB 초과 | watch 디렉터리의 월별 파일 |
+
+| 실행 경로 | 실행 지점 |
+| --- | --- |
+| watchd | 하루 한 번 등록된 모든 소유 workspace |
+| run, repl, protocol | 시작 시 공유 시각 파일 기준 하루 한 번 |
+| `th archive` | 수동 실행, `--dry-run`과 `--owner` 지원 |
+
+공유 잠금 아래 커서와 경로 오프셋을 보정하고 이관 내역을 기록한다. 충돌하는 이름은 시간 접미사를 붙인다.
