@@ -1,5 +1,7 @@
 # 변경 로그 (Changelog)
 
+- TH-D43: timeout 오탐 제거, 사용자 메시지별 가드 초기화 및 Codex 창 미확인 표시.
+
 - TH-D43: Codex 코디네이터 폴링·권한 재시도 가드 및 워커 경로 오탐 수정.
 
 - TH-D42: Add destructive-command guard and revise worker failure rules.

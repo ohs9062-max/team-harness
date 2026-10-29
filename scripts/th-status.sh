@@ -512,6 +512,7 @@ def get_unread_inbox_alerts(w_dir):
                 continue
             stamp, size_text, _alerted, owner = parts[:4]
             route = parts[4] if len(parts) > 4 else "*"
+            agent = parts[5] if len(parts) > 5 else "unknown"
             try:
                 size, stamp_epoch = int(size_text), int(stamp)
             except ValueError:
@@ -540,11 +541,11 @@ def get_unread_inbox_alerts(w_dir):
                 except (OSError, ValueError):
                     pass
             if cursor < size:
-                group = (owner, route, route != "*" and route not in active)
+                group = (owner, route, route != "*" and route not in active, agent)
                 count, oldest = grouped.get(group, (0, stamp_epoch))
                 grouped[group] = (count + 1, min(oldest, stamp_epoch))
-    return [(owner, route, missing, count, oldest)
-            for (owner, route, missing), (count, oldest) in sorted(grouped.items())]
+    return [(owner, route, missing, count, oldest, agent)
+            for (owner, route, missing, agent), (count, oldest) in sorted(grouped.items())]
 
 unread_inbox_alerts = get_unread_inbox_alerts(watch_dir)
 
@@ -552,12 +553,18 @@ def unread_inbox_line():
     if not unread_inbox_alerts:
         return ""
     details = []
-    for owner, route, missing, count, oldest in unread_inbox_alerts:
-        if missing:
+    codex = {}
+    for owner, route, missing, count, oldest, agent in unread_inbox_alerts:
+        if agent == "codex":
+            previous_count, previous_oldest = codex.get(owner, (0, oldest))
+            codex[owner] = (previous_count + count, min(previous_oldest, oldest))
+        elif missing:
             details.append(f"{owner} 세션 {route[:8]} waiter 없음")
         else:
             details.append(f"{owner} 미확인 {count}건 (가장 오래된 {datetime.fromtimestamp(oldest).strftime('%H:%M')})")
-    return "⚠ 알림 미수신: " + "; ".join(details)
+    lines = ["⚠ 알림 미수신: " + "; ".join(details)] if details else []
+    lines.extend(f"ℹ Codex 창 확인 필요: {owner} {count}건 (가장 오래된 {datetime.fromtimestamp(oldest).strftime('%H:%M')})" for owner, (count, oldest) in codex.items())
+    return "\n".join(lines)
 
 def get_footer_line(w_dir):
     # 1. Quota locks

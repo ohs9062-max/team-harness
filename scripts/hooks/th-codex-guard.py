@@ -25,13 +25,16 @@ def segments(command):
 def sleep_block(command, limit):
     for args in segments(command):
         for i, word in enumerate(args[:-1]):
+            if os.path.basename(word) in ('bash', 'sh', 'zsh') and args[i + 1] == '-c' and i + 2 < len(args):
+                if sleep_block(args[i + 2], limit):
+                    return True
             name = os.path.basename(word)
             value = args[i + 1]
             if name == 'watch' and value in ('-n', '--interval') and i + 2 < len(args):
                 value = args[i + 2]
             elif name == 'watch' and value.startswith('--interval='):
                 value = value.split('=', 1)[1]
-            elif name not in ('sleep', 'timeout'):
+            elif name not in ('sleep',):
                 continue
             match = re.fullmatch(r'(\d+(?:\.\d+)?)([smhd]?)', value)
             if match and float(match[1]) * {'': 1, 's': 1, 'm': 60, 'h': 3600, 'd': 86400}[match[2]] >= limit:
@@ -62,16 +65,17 @@ def main():
         return
     payload = json.load(sys.stdin)
     event = payload.get('hook_event_name')
-    if event not in ('PreToolUse', 'PostToolUse'):
+    if event not in ('PreToolUse', 'PostToolUse', 'UserPromptSubmit'):
         return
+    session = payload.get('session_id') or os.environ.get('ORCA_PANE_KEY')
     data = payload.get('tool_input', {})
     if not isinstance(data, dict):
         return
     command = data.get('command', data.get('cmd'))
-    if not isinstance(command, str):
+    if event != 'UserPromptSubmit' and not isinstance(command, str):
         return
+    command = command if isinstance(command, str) else ''
     worker = os.environ.get('TH_ROLE') == 'worker' or 'TH_JOB_TASK' in os.environ
-    session = payload.get('session_id') or os.environ.get('ORCA_PANE_KEY')
     checks, retry = targets(command)
     watch = Path(os.environ.get('TH_WATCH_DIR', str(Path.home() / '.team-harness' / 'watch')))
     folder = watch / 'codex_guard'
@@ -87,14 +91,18 @@ def main():
             state = {'checks': [], 'denied': []}
         state['checks'] = [x for x in state['checks'] if now - x[0] < 600]
         state['denied'] = [x for x in state['denied'] if now - x[0] < 1800]
-        if event == 'PostToolUse':
+        if event == 'UserPromptSubmit':
+            if session:
+                state['checks'] = [x for x in state['checks'] if x[2] != session]
+                state['denied'] = [x for x in state['denied'] if len(x) < 3 or x[2] != session]
+        elif event == 'PostToolUse':
             output = json.dumps(payload.get('tool_response', ''), ensure_ascii=False)
             if re.search(r'permission denied|rejected|not permitted|approval.{0,40}(?:denied|reject|거부)|승인.{0,20}거부', output, re.I):
-                state['denied'].extend([[now, x] for x in retry])
+                state['denied'].extend([[now, x, session] for x in retry])
         else:
             if sleep_block(command, 60 if worker else 10):
                 rule = 'sleep'
-            elif any(item == x[1] for item in retry for x in state['denied']):
+            elif any(item == x[1] and (len(x) < 3 or x[2] == session) for item in retry for x in state['denied']):
                 rule = '권한 거부 재시도'
             elif not worker and session:
                 for item in checks:

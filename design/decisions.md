@@ -606,3 +606,5 @@ Codex의 sleep_tool과 multi_agent 기능을 끄고 PreToolUse/PostToolUse 가�
 | Codex 코디네이터 | features 끔 + th-codex-guard | 자동 깨움이 없어 폴링 방지 |
 | Codex 워커 | 같은 hook, 워커 기준치 | 긴 sleep을 제한하며 상태 확인 허용 |
 | agy | 해당 없음 | Codex hook을 실행하지 않음 |
+
+**개정(2026-10-29).** `timeout` 상한 자체는 차단하지 않고 내부 sleep과 watch는 기존 기준을 적용한다. 사용자 메시지마다 해당 세션의 상태 확인 및 권한 거부 기록을 초기화한다. 작업 실행 시 대상 창 종류를 기록하여 Codex 창의 미확인은 일반 알림과 ℹ 표시로 구분하고 기존 작업과 Claude 창의 경고는 유지한다.

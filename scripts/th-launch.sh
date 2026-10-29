@@ -490,8 +490,23 @@ print(json.dumps(data.get("allow_paths", [])))
 PYEOF
 )
 
+session_agent=unknown
+if [[ -n ${CLAUDECODE:-} ]]; then
+  session_agent=claude
+else
+  while IFS='=' read -r name _; do
+    [[ $name == CODEX_* ]] && session_agent=codex
+  done < <(env)
+  parent=$PPID
+  while [[ $parent =~ ^[0-9]+$ && $parent -gt 1 && -r /proc/$parent/stat ]]; do
+    comm=$(cat "/proc/$parent/comm" 2>/dev/null || true)
+    [[ $comm == codex || $comm == codex-* ]] && session_agent=codex
+    parent=$(awk '{print $4}' "/proc/$parent/stat" 2>/dev/null || printf 0)
+  done
+fi
+printf '%s\n' "$session_agent" > "$task_dir/.th_session_agent"
 journal_append
-if ! inbox_waiter_registered "$journal_workspace"; then
+if [[ $session_agent != codex ]] && ! inbox_waiter_registered "$journal_workspace"; then
   printf '[th-launch] 경고: %s 코디네이터 inbox 대기 없음 — 사건이 전달되지 않을 수 있음\n' "$journal_workspace" >&2
   printf '%s | 경고 | inbox-wait 없음 | %s\n' "$(date '+%F %R')" "$task_dir" >> "$journal_log"
 fi

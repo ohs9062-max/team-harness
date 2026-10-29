@@ -67,22 +67,23 @@ inbox_unread_file() {
 }
 
 record_inbox_append() {
-  local owner=$1 inbox_size=$2 now_epoch=$3 route=$4 state
+  local owner=$1 inbox_size=$2 now_epoch=$3 route=$4 agent=$5 state
   state=$(inbox_unread_file "$owner")
   mkdir -p "$(dirname "$state")"
-  printf '%s\t%s\t0\t%s\t%s\n' "$now_epoch" "$inbox_size" "$owner" "$route" >> "$state"
+  printf '%s\t%s\t0\t%s\t%s\t%s\n' "$now_epoch" "$inbox_size" "$owner" "$route" "$agent" >> "$state"
 }
 
 realert_unread_inboxes() {
-  local state now_epoch cursor line_epoch line_size line_alerted owner route entry pid key file active
+  local state now_epoch cursor line_epoch line_size line_alerted owner route agent entry pid key file active
   now_epoch=$(date +%s)
   for state in "$watch_dir"/inbox_unread/*.tsv; do
     [[ -f $state ]] || continue
     local tmp="$state.tmp.$$"
     : > "$tmp"
-    while IFS=$'\t' read -r line_epoch line_size line_alerted owner route || [[ -n ${line_epoch:-} ]]; do
+    while IFS=$'\t' read -r line_epoch line_size line_alerted owner route agent || [[ -n ${line_epoch:-} ]]; do
       [[ $line_epoch =~ ^[0-9]+$ && $line_size =~ ^[0-9]+$ && -n ${owner:-} ]] || continue
       route=${route:-*}
+      agent=${agent:-unknown}
       cursor=0
       active=0
       if [[ $route == '*' ]]; then
@@ -126,12 +127,20 @@ realert_unread_inboxes() {
       fi
       if (( cursor < line_size && line_alerted != 1 )) && { (( active == 0 )) || (( now_epoch - line_epoch >= inbox_unread_sec )); }; then
         if command -v notify-send >/dev/null 2>&1; then
-          notify-send -u critical "team-harness: inbox 미수신" "$owner: 세션 ${route:0:8} waiter 없음 또는 미확인" 2>/dev/null || true
+          if [[ $agent == codex ]]; then
+            notify-send -u normal "team-harness: Codex 창 확인 필요" "$owner: 미확인 사건" 2>/dev/null || true
+          else
+            notify-send -u critical "team-harness: inbox 미수신" "$owner: 세션 ${route:0:8} waiter 없음 또는 미확인" 2>/dev/null || true
+          fi
         fi
-        printf '%s [inbox 미수신] %s: cursor=%s < size=%s\n' "$(date '+%F %T')" "$owner" "$cursor" "$line_size" >> "$watch_dir/events.log"
+        if [[ $agent == codex ]]; then
+          printf '%s [Codex 창 확인 필요] %s: cursor=%s < size=%s\n' "$(date '+%F %T')" "$owner" "$cursor" "$line_size" >> "$watch_dir/events.log"
+        else
+          printf '%s [inbox 미수신] %s: cursor=%s < size=%s\n' "$(date '+%F %T')" "$owner" "$cursor" "$line_size" >> "$watch_dir/events.log"
+        fi
         line_alerted=1
       fi
-      printf '%s\t%s\t%s\t%s\t%s\n' "$line_epoch" "$line_size" "$line_alerted" "$owner" "$route" >> "$tmp"
+      printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$line_epoch" "$line_size" "$line_alerted" "$owner" "$route" "$agent" >> "$tmp"
     done < "$state"
     mv "$tmp" "$state"
   done
@@ -178,7 +187,7 @@ handle_daemon_event() {
       printf '%s | %s | %s | %s | %s%s\n' "$now_time" "$name" "$event_type" "$summary" "$v_res" "$jev_suffix" >> "$inbox_file"
       inbox_size=$(wc -c < "$inbox_file")
       now_epoch=$(date +%s)
-      record_inbox_append "$owner" "$inbox_size" "$now_epoch" "$route"
+      record_inbox_append "$owner" "$inbox_size" "$now_epoch" "$route" "$(cat "$task/.th_session_agent" 2>/dev/null || printf unknown)"
     ) 202>"$owner/.claude/.inbox_cursor.lock"
   fi
 
