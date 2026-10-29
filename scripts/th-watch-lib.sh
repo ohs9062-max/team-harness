@@ -465,8 +465,31 @@ inspect_task_event() {
   # Failures take precedence over a stale DONE marker.
   # 1. 완료 판정 (단, 분리된 긴 job.pid가 아직 실행 중이면 인계만으로 최종 DONE 처리하지 않음)
   if [[ $terminal == DONE && $distinct_job_alive != 1 ]]; then
-    if [[ $marker_prefix == .th_daemon && $current_worker_alive == 1 ]]; then
-      return 0
+    if [[ $current_worker_alive == 1 && ! -f $marker.done ]]; then
+      # Wait for a quiet worker log for 60 seconds after DONE is observed.
+      local done_signature done_now done_previous done_since
+      done_signature=$(stat -c '%n:%s:%Y' "$task"/{codex,agy,claude}.log 2>/dev/null | sort | cksum)
+      done_now=$(date +%s)
+      done_previous=$(cat "$marker.done_wait" 2>/dev/null || true)
+      done_since=${done_previous##*|}
+      if [[ ${done_previous%|*} != "$done_signature" || ! $done_since =~ ^[0-9]+$ ]]; then
+        printf '%s|%s\n' "$done_signature" "$done_now" > "$marker.done_wait"
+        return 0
+      fi
+      (( done_now - done_since >= 60 )) || return 0
+      # Serialize the two watchers; never target a detached job's group.
+      (
+        flock -x 9
+        if [[ ! -f $task/.th_done_terminated ]] && kill -0 "$current_worker_pid" 2>/dev/null; then
+          local repo
+          repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+          if PYTHONPATH="$repo/src${PYTHONPATH:+:$PYTHONPATH}" th_python -c \
+            'import sys; from team_harness.worker_relaunch import terminate_worker_group; terminate_worker_group(int(sys.argv[1]))' "$current_worker_pid"; then
+            touch "$task/.th_done_terminated"
+            printf '%s [DONE 후 잔류 프로세스 종료] %s pid=%s\n' "$(date '+%F %T')" "$task" "$current_worker_pid" >> "$watch_dir/events.log"
+          fi
+        fi
+      ) 9>"$task/.th_done_terminate.lock"
     fi
     # A worker may rewrite DONE while finishing its report.  Its presence,
     # rather than its mtime, defines this attempt's completion event; th-launch

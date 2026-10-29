@@ -330,6 +330,7 @@ endpoint로 전송됩니다. MODE A의 사용자 선택, MODE C의 CHECK/REVIEW,
 
 **결정.**
 1. **상시 감시 데몬(`th-watchd.sh`)**: 작업 등록부(`tasks.txt`)를 계속 감시하며 사건(완료, 실패, 쿼터, 중단, 멈춤) 발생 시마다 (1) 소유 작업 공간 `.claude/inbox.md`에 한 줄 기록, (2) `notify-send` 데스크톱 알림, (3) `events.log` 기록을 수행합니다. 코디네이터 깨우기용 `th-watch.sh`와 사건 표시가 상호 소모되지 않도록 마커 파일을 분리(`.th_notified.*` vs `.th_daemon.*`)하고, 사건 판정 로직은 `scripts/th-watch-lib.sh` 단일 정본 라이브러리로 공유합니다.
+   DONE 후 워커가 살아 있으면 출력이 60초간 멈춘 뒤 워커 그룹만 종료하고 완료를 알리며, 분리 job이 살아 있으면 기존 인계 규칙을 유지한다.
 2. **보조 검수(Verification)**: `task.md`의 `## 검수` 블록을 `verify.sh`로 추출하여 DONE 시 자동 실행하고, 공통 검사(작업 트리 내 `pyproject.toml` 변경 실패, `uv.lock` 변경 경고, 저장소 루트 새 `*.md`/`RESULTS.md`/`WORKLOG.md` 금지)를 수행하여 `VERIFIED`/`VERIFY_FAILED`를 기록하고 알림 문구에 "검수 통과/실패/없음"을 첨부합니다. **코디네이터를 깨우는 완료 판정 동작 자체는 변경하지 않습니다.**
 3. **순수 관찰용 Jev 판단(`watch_cli.py`)**: 완료+검수통과(`{ACCEPT,SUSPECT,NOTIFY}`), 멈춤(`{WAIT_MORE,KILL,NOTIFY}`), 쿼터(`{LOCK_AND_WAIT,NOTIFY}`) 사건에 대해 TypeSafe Jev의 선택 결과를 `jev_decisions.log`에만 기록합니다. 이는 순수 감사/관찰용이며 알림·실행 제어에 영향을 주지 않고, 장애 시에도 감시를 방해하지 않습니다.
 
