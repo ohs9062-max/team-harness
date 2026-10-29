@@ -30,6 +30,66 @@ th_jev() {
   return 0
 }
 
+watch_task_settled() {
+  local task=$1 cutoff=${2:-} marker file pid terminal
+  if [[ -f $task/FAILED ]]; then
+    terminal=failed
+  elif [[ -f $task/DONE ]]; then
+    terminal=done
+    for file in "$task"/FAILED.*; do [[ ! -f $file ]] || return 1; done
+  else
+    return 1
+  fi
+  [[ -f $task/.th_daemon.$terminal && -f $task/.th_digest.$terminal ]] || return 1
+  [[ -f $task/VERIFIED || -f $task/VERIFY_FAILED ]] || return 1
+  marker="$task/.th_daemon.settled"
+  [[ -f $marker ]] || marker="$task/.th_daemon.auto_continue"
+  [[ -f $marker && ! -e $task/context_exit_requested.json ]] || return 1
+  for file in "$task"/.th_daemon.handoff_wait.*; do [[ ! -e $file ]] || return 1; done
+  for file in "$task/worker.pid" "$task/job.pid"; do
+    [[ -e $file ]] || continue
+    [[ -r $file ]] || return 1
+    pid=$(<"$file")
+    [[ $pid =~ ^[1-9][0-9]*$ ]] || return 1
+    { kill -0 "$pid" 2>/dev/null || [[ -d /proc/$pid ]]; } && return 1
+  done
+  for file in "$task/DONE" "$task/FAILED" "$task"/FAILED.* "$task/STATUS" \
+    "$task/task.md" "$task/verify.sh" "$task/VERIFIED" "$task/VERIFY_FAILED" \
+    "$task/KILLED" "$task/job.pid" "$task/worker.pid" \
+    "$task/.th_daemon.$terminal" "$task/.th_digest.$terminal"; do
+    [[ -e $file ]] || continue
+    [[ ! $file -nt $marker ]] || return 1
+    [[ -z $cutoff || $file -ot $cutoff ]] || return 1
+  done
+  [[ -z $cutoff || $marker -ot $cutoff ]]
+}
+
+watch_retire_settled() {
+  local watch_dir=$1 cutoff tmp task changed=0
+  cutoff=$(mktemp "$watch_dir/.cutoff.XXXXXX") || return 1
+  touch -d '24 hours ago' "$cutoff" || { rm -f "$cutoff"; return 1; }
+  (
+    flock -x 200 || exit 1
+    tmp=$(mktemp "$watch_dir/.tasks.XXXXXX") || exit 1
+    while IFS= read -r task || [[ -n $task ]]; do
+      if [[ -n $task && -d $task ]] && watch_task_settled "$task" "$cutoff"; then
+        printf '%s\n' "$task" >> "$watch_dir/tasks_done.txt" || { rm -f "$tmp"; exit 1; }
+        changed=1
+      else
+        printf '%s\n' "$task" >> "$tmp" || { rm -f "$tmp"; exit 1; }
+      fi
+    done < "$watch_dir/tasks.txt"
+    if (( changed )); then
+      mv -f "$tmp" "$watch_dir/tasks.txt"
+    else
+      rm -f "$tmp"
+    fi
+  ) 200>"$watch_dir/tasks.lock"
+  local rc=$?
+  rm -f "$cutoff"
+  return "$rc"
+}
+
 task_live_pids() {
   local lib_dir
   lib_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)

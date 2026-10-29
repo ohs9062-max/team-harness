@@ -3249,3 +3249,50 @@ def test_th_launch_drops_inherited_job_tag(test_env: dict) -> None:
     while not captured.exists() and time.time() < deadline:
         time.sleep(0.05)
     assert captured.read_text() == "unset"
+
+
+def test_retired_task_is_registered_again_on_launch(test_env: dict):
+    task = _create_task_dir(test_env["tmp_path"], "retired_relaunch")
+    for name in (
+        "DONE",
+        ".th_daemon.done",
+        ".th_digest.done",
+        "VERIFIED",
+        ".th_daemon.auto_continue",
+    ):
+        (task / name).touch()
+    old = time.time() - 90000
+    for path in task.iterdir():
+        os.utime(path, (old, old))
+    watch = test_env["watch_dir"]
+    (watch / "tasks.txt").write_text(f"{task}\n")
+    retire = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; watch_retire_settled "$2"',
+            "bash",
+            str(SCRIPTS_DIR / "th-watch-lib.sh"),
+            str(watch),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert retire.returncode == 0, retire.stderr
+    assert (watch / "tasks.txt").read_text() == ""
+    result = subprocess.run(
+        [
+            str(SCRIPTS_DIR / "th-launch.sh"),
+            str(task),
+            "codex",
+            "gpt-6.1-terra",
+            "medium",
+            str(task),
+        ],
+        env=test_env["env"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert (watch / "tasks.txt").read_text().splitlines() == [str(task)]
+    assert not (task / ".th_daemon.auto_continue").exists()

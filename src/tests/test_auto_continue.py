@@ -130,6 +130,13 @@ def test_quota_lock_prevents_continue(
     monkeypatch.setattr(stop_policy, "launch_arguments", lambda *args: ["t", "codex"])
     assert stop_policy.continue_stopped_task(tmp_path, tmp_path, tmp_path) == ""
     assert not (tmp_path / ".auto_continue_count").exists()
+    assert not (tmp_path / ".th_daemon.settled").exists()
+
+
+def test_no_continuation_required_marks_settled(tmp_path: Path) -> None:
+    (tmp_path / "DONE").write_text("complete")
+    assert stop_policy.continue_stopped_task(tmp_path, tmp_path, tmp_path) == ""
+    assert (tmp_path / ".th_daemon.settled").is_file()
 
 
 def test_relaunch_error_is_reported(

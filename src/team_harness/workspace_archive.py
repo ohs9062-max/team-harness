@@ -224,27 +224,38 @@ def archive_workspace(
         for src in [*root.glob("work_log_*.md"), root / "workers_archive.md"]:
             if src.is_file() and now.timestamp() - src.stat().st_mtime >= 7 * 86400:
                 _move(src, root / "archive" / src.name, now, dry_run, moves, log)
-    registry = watch_dir() / "tasks.txt"
-    if registry.is_file():
+    registries = [watch_dir() / "tasks.txt", watch_dir() / "tasks_done.txt"]
+    if any(registry.is_file() for registry in registries):
         with (watch_dir() / "tasks.lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
-            lines = registry.read_text(encoding="utf-8", errors="replace").splitlines()
-            changed = False
-            for i, line in enumerate(lines):
-                task = Path(line)
-                if line and _eligible(task, owner, now):
-                    dest = _move(
-                        task,
-                        task.parent / "_archive" / now.strftime("%Y%m") / task.name,
-                        now,
-                        dry_run,
-                        moves,
-                        log,
-                    )
-                    lines[i] = str(dest)
-                    changed = True
-            if not dry_run and changed:
-                registry.write_text("".join(line + "\n" for line in lines))
+            moved_paths: dict[str, str] = {}
+            for registry in registries:
+                if not registry.is_file():
+                    continue
+                lines = registry.read_text(
+                    encoding="utf-8", errors="replace"
+                ).splitlines()
+                changed = False
+                for i, line in enumerate(lines):
+                    if line in moved_paths:
+                        lines[i] = moved_paths[line]
+                        changed = True
+                        continue
+                    task = Path(line)
+                    if line and _eligible(task, owner, now):
+                        dest = _move(
+                            task,
+                            task.parent / "_archive" / now.strftime("%Y%m") / task.name,
+                            now,
+                            dry_run,
+                            moves,
+                            log,
+                        )
+                        moved_paths[line] = str(dest)
+                        lines[i] = str(dest)
+                        changed = True
+                if not dry_run and changed:
+                    registry.write_text("".join(line + "\n" for line in lines))
     events = watch_dir() / "events.log"
     if events.is_file() and events.stat().st_size > 5 * 1024 * 1024:
         _move(
@@ -273,8 +284,9 @@ def archive_daily(
         owners: set[Path] = set()
         if owner is not None:
             owners.add(owner.resolve())
-        registry = wd / "tasks.txt"
-        if registry.exists():
+        for registry in (wd / "tasks.txt", wd / "tasks_done.txt"):
+            if not registry.exists():
+                continue
             for line in registry.read_text(
                 encoding="utf-8", errors="replace"
             ).splitlines():

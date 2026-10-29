@@ -229,8 +229,10 @@ while true; do
   if [[ -f $registry ]]; then
     while IFS= read -r task || [[ -n $task ]]; do
       [[ -n $task && -d $task ]] || continue
+      watch_task_settled "$task" && continue
       inspect_task_event "$task" "$watch_dir" ".th_daemon" "$stall_sec" "" handle_daemon_event
     done < "$registry"
+    watch_retire_settled "$watch_dir"
   fi
 
   realert_unread_inboxes

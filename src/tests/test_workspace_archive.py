@@ -91,6 +91,28 @@ def test_task_old_registered(env: tuple[Path, Path]) -> None:
     )
 
 
+def test_retired_task_is_archived_and_registry_updated(env: tuple[Path, Path]) -> None:
+    path = task(env)
+    watch = env[1]
+    (watch / "tasks.txt").rename(watch / "tasks_done.txt")
+    archive_daily(NOW)
+    dest = path.parent / "_archive/202610/job"
+    assert dest.is_dir()
+    assert (watch / "tasks_done.txt").read_text().strip() == str(dest)
+
+
+def test_archive_updates_both_registries_after_reregistration(
+    env: tuple[Path, Path],
+) -> None:
+    path = task(env)
+    watch = env[1]
+    (watch / "tasks_done.txt").write_text(f"{path}\n{path}\n")
+    archive_workspace(env[0], NOW)
+    dest = str(path.parent / "_archive/202610/job")
+    assert (watch / "tasks.txt").read_text().splitlines() == [dest]
+    assert (watch / "tasks_done.txt").read_text().splitlines() == [dest, dest]
+
+
 def test_task_recent(env: tuple[Path, Path]) -> None:
     path = task(env)
     os.utime(path / "DONE", (NOW.timestamp(), NOW.timestamp()))
