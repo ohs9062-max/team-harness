@@ -1,11 +1,20 @@
 from concurrent.futures import ThreadPoolExecutor
+import os
 from pathlib import Path
 import subprocess
+import time
 
 import pytest
 
 from team_harness import stop_policy
 from team_harness.stop_policy import classify_stop
+
+
+@pytest.fixture(autouse=True)
+def recent_launch(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        stop_policy, "_last_launch_time", lambda *args: time.time() - 10
+    )
 
 
 def test_incomplete_failed(tmp_path: Path) -> None:
@@ -98,10 +107,12 @@ def test_auto_continue_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(
         stop_policy, "relaunch_worker", lambda *args, **kwargs: calls.append(1)
     )
-    for _ in range(2):
+    for index in range(2):
+        (tmp_path / "FAILED").write_text("INCOMPLETE" + str(index))
         assert "자동 계속(" in stop_policy.continue_stopped_task(
             tmp_path, tmp_path, tmp_path
         )
+    (tmp_path / "FAILED").write_text("INCOMPLETE final")
     assert "작업 분할 필요" in stop_policy.continue_stopped_task(
         tmp_path, tmp_path, tmp_path
     )
@@ -387,3 +398,77 @@ def test_future_capacity_lock_prevents_continue(
     monkeypatch.setattr(stop_policy, "launch_arguments", lambda *args: ["t", "codex"])
     assert stop_policy.continue_stopped_task(tmp_path, tmp_path, tmp_path) == ""
     assert not (tmp_path / ".auto_continue_count").exists()
+
+
+@pytest.mark.parametrize(
+    "case", ["old", "before_launch", "pre_deployment", "missing", "future"]
+)
+def test_ineligible_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    now = time.time()
+    marker = tmp_path / "FAILED"
+    marker.write_text("INCOMPLETE")
+    (tmp_path / "task.md").write_text("kind: code\n")
+    launch = now - 10
+    if case == "old":
+        os.utime(marker, (now - 1801, now - 1801))
+        launch = now - 2000
+    elif case == "before_launch":
+        launch = now + 1
+    elif case == "pre_deployment":
+        launch = stop_policy._DEPLOYED - 1
+    elif case == "missing":
+        launch = None
+    elif case == "future":
+        os.utime(marker, (now + 60, now + 60))
+    monkeypatch.setattr(stop_policy, "_last_launch_time", lambda *args: launch)
+    monkeypatch.setattr(stop_policy, "launch_arguments", lambda *args: ["t", "codex"])
+    calls: list[int] = []
+    monkeypatch.setattr(
+        stop_policy, "relaunch_worker", lambda *args, **kwargs: calls.append(1)
+    )
+    assert stop_policy.continue_stopped_task(tmp_path, tmp_path, tmp_path) == ""
+    assert calls == []
+
+
+def test_recent_failure_is_processed_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "FAILED").write_text("INCOMPLETE")
+    (tmp_path / "task.md").write_text("kind: code\n")
+    monkeypatch.setattr(stop_policy, "launch_arguments", lambda *args: ["t", "codex"])
+    calls: list[int] = []
+    monkeypatch.setattr(
+        stop_policy, "relaunch_worker", lambda *args, **kwargs: calls.append(1)
+    )
+    assert "자동 계속(" in stop_policy.continue_stopped_task(
+        tmp_path, tmp_path, tmp_path
+    )
+    assert stop_policy.continue_stopped_task(tmp_path, tmp_path, tmp_path) == ""
+    assert len(calls) == 1
+
+
+def test_launch_evidence_from_ledger_and_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import datetime
+    from datetime import timezone
+    import json
+
+    monkeypatch.undo()
+    now = int(time.time())
+    (tmp_path / "usage.jsonl").write_text(
+        json.dumps(
+            {
+                "task": str(tmp_path),
+                "at": datetime.fromtimestamp(now - 20, timezone.utc).isoformat(),
+            }
+        )
+        + "\n"
+    )
+    (tmp_path / "STATUS").write_text(
+        time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now - 10))
+        + " LAUNCH worker=codex\n"
+    )
+    assert stop_policy._last_launch_time(tmp_path, tmp_path) == now - 10

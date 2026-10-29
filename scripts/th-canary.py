@@ -127,6 +127,27 @@ else:
             count = int((task / "canary-attempts").read_text())
             return ("[자동 계속]" in events() and count >= 2, f"relaunches={count - 1}")
 
+        def stale_failures():
+            stale_tasks = []
+            old = time.time() - 7200
+            for index in range(15):
+                task = base / f"stale-{index}"
+                task.mkdir()
+                stale_tasks.append(task)
+                (task / "task.md").write_text("---\nkind: code\n---\n")
+                (task / "STATUS").write_text(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(old - 60)) + " LAUNCH worker=codex\n")
+                (task / "FAILED").write_text("INCOMPLETE\n")
+                os.utime(task / "FAILED", (old, old))
+                (task / ".th_owner").write_text(str(workspace))
+                (task / ".th_daemon.failed").touch()
+                (task / ".th_digest.failed").touch()
+                (task / "VERIFIED").touch()
+            (watch / "tasks.txt").write_text("".join(str(task) + "\n" for task in stale_tasks))
+            before = events().count("[자동 계속]")
+            once()
+            count = events().count("[자동 계속]") - before
+            return (count == 0 and all(not (task / ".auto_continue_count").exists() for task in stale_tasks), f"15 stale failures, automatic continuations={count}")
+
         def registry():
             r = run([str(python), str(fixture / "generate_registry.py"), str(base)], env)
             if r.returncode:
@@ -162,6 +183,7 @@ sys.exit(bool(bad))'''
                     check("done", done)
                     check("rollover", rollover)
                     check("auto-continue", auto_continue)
+                    check("stale failures", stale_failures)
                     check("registry", registry)
             else:
                 real_watch = Path(os.environ.get("TH_WATCH_DIR", str(Path.home() / ".team-harness/watch")))

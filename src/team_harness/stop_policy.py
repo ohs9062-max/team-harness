@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 import fcntl
+import json
 from pathlib import Path
 import re
 import subprocess
+import time
 from typing import Literal
 
 from team_harness.worker_digest import quota_lock_active
@@ -90,6 +95,62 @@ def classify_stop(task_dir: Path) -> StopClassification:
     return "ok"
 
 
+# TH-D44 was deployed at 10:33 Asia/Seoul on 2026-10-29.
+_DEPLOYED = datetime(
+    2026, 10, 29, 10, 33, tzinfo=timezone(timedelta(hours=9))
+).timestamp()
+
+
+def _last_launch_time(task: Path, watch_dir: Path) -> float | None:
+    """Find the latest launch, rejecting malformed matching evidence."""
+    times: list[float] = []
+    ledger = watch_dir / "usage.jsonl"
+    if ledger.exists():
+        for line in ledger.read_text(encoding="utf-8").splitlines():
+            try:
+                row = json.loads(line)
+                if not isinstance(row, dict):
+                    return None
+                if Path(row["task"]).resolve() != task.resolve():
+                    continue
+                at = datetime.fromisoformat(row["at"].replace("Z", "+00:00"))
+                if at.tzinfo is None:
+                    return None
+                times.append(at.timestamp())
+            except (ValueError, KeyError, TypeError, AttributeError):
+                return None
+    status = task / "STATUS"
+    if status.exists():
+        for line in status.read_text(encoding="utf-8").splitlines():
+            if " LAUNCH " in line:
+                try:
+                    times.append(
+                        datetime.strptime(line[:19], "%Y-%m-%d %H:%M:%S").timestamp()
+                    )
+                except ValueError:
+                    return None
+    return max(times) if times else None
+
+
+def _eligible_signature(task: Path, watch_dir: Path) -> str | None:
+    marker = task / ("FAILED" if (task / "FAILED").is_file() else "DONE")
+    stat = marker.stat()
+    now = time.time()
+    launched = _last_launch_time(task, watch_dir)
+    if (
+        launched is None
+        or launched <= _DEPLOYED
+        or not (0 <= now - stat.st_mtime <= 30 * 60)
+        or stat.st_mtime <= launched
+    ):
+        return None
+    signature = f"{marker.name} {stat.st_mtime_ns} {stat.st_size}"
+    seen = task / ".auto_continue_signature"
+    if seen.exists() and seen.read_text(encoding="utf-8").strip() == signature:
+        return None
+    return signature
+
+
 def continue_stopped_task(task: Path, watch_dir: Path, owner: Path) -> str:
     """Continue a stopped th-launch task, returning an event description if needed."""
     lock_path = task / ".auto_continue.lock"
@@ -97,6 +158,9 @@ def continue_stopped_task(task: Path, watch_dir: Path, owner: Path) -> str:
         fcntl.flock(lock, fcntl.LOCK_EX)
         if (task / "KILLED").exists() or classify_stop(task) != "self_stop":
             (task / ".th_daemon.settled").touch()
+            return ""
+        signature = _eligible_signature(task, watch_dir)
+        if signature is None:
             return ""
         task_file = task / "task.md"
         try:
@@ -134,6 +198,9 @@ def continue_stopped_task(task: Path, watch_dir: Path, owner: Path) -> str:
                     ]
                 )
                 section += f"\n검수 출력 마지막 20줄:\n{tail}\n"
+        (task / ".auto_continue_signature").write_text(
+            signature + "\n", encoding="utf-8"
+        )
         with task_file.open("a", encoding="utf-8") as stream:
             stream.write(section)
         count_path.write_text(str(count + 1), encoding="utf-8")
