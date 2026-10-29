@@ -8,6 +8,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+import pytest
+
 from team_harness.coordinator_zone import coordinator_paths_in_command
 
 REPO = Path(__file__).resolve().parents[2]
@@ -25,7 +27,7 @@ def run_guard(
         check=True,
         cwd=tmp_path,
         env={
-            **os.environ,
+            **{k: v for k, v in os.environ.items() if k != "TH_WORKER_ALLOW_PATHS"},
             "HOME": str(tmp_path),
             "TH_HARNESS_SRC": str(REPO / "src"),
             **env,
@@ -233,3 +235,78 @@ def test_printf_escaped_newlines_allow_own_output(tmp_path: Path) -> None:
             TH_WORKER_OUTPUT_DIR=str(own),
         )
     )
+
+
+@pytest.mark.parametrize(
+    "suffix", [".", ",", ";", ":", "!", "?", ")", "]", "}", ">", "'", '"', "`", ".),"]
+)
+def test_command_path_trailing_punctuation(tmp_path: Path, suffix: str) -> None:
+    target = tmp_path / "outputs" / "runs" / "retrain_v19_test100_20261029"
+    assert coordinator_paths_in_command(
+        f"echo 'save to {target}{suffix} then'", cwd=tmp_path
+    ) == [target]
+
+
+def test_command_path_parentheses_and_escape(tmp_path: Path) -> None:
+    target = tmp_path / "outputs" / "runs" / "x" / "STATUS"
+    assert coordinator_paths_in_command(f"cat ({target})", cwd=tmp_path) == [target]
+    assert coordinator_paths_in_command(f"printf '{target}\\n'", cwd=tmp_path) == [
+        target
+    ]
+
+
+@pytest.mark.parametrize(
+    "particle",
+    ["에", "을", "를", "은", "는", "이", "가", "로", "으로", "의", "와", "과", "도"],
+)
+def test_command_path_korean_particle(tmp_path: Path, particle: str) -> None:
+    target = tmp_path / "outputs" / "runs" / "abc_1029"
+    assert coordinator_paths_in_command(f"echo {target}{particle}", cwd=tmp_path) == [
+        target
+    ]
+
+
+def test_existing_korean_path_and_parent_directory(tmp_path: Path) -> None:
+    target = tmp_path / "outputs" / "runs" / "한글이"
+    target.mkdir(parents=True)
+    assert coordinator_paths_in_command(f"cat {target}", cwd=tmp_path) == [target]
+    assert coordinator_paths_in_command(f"cat {target}/..", cwd=tmp_path) == [
+        target.parent
+    ]
+    assert coordinator_paths_in_command(f"cat {target}/.", cwd=tmp_path) == [target]
+
+
+def test_guard_allows_both_path_variants_and_denies_other(tmp_path: Path) -> None:
+    workspace = tmp_path / "repo"
+    own = workspace / "outputs" / "runs" / "abc_1029"
+    original = workspace / "outputs" / "runs" / "abc_1029에"
+    common = {
+        "TH_ROLE": "worker",
+        "TH_WORKSPACE": str(workspace),
+        "TH_WORKER_OUTPUT_DIR": str(own),
+    }
+
+    def check(path: Path, **env: str) -> bool:
+        return denied(
+            run_guard(
+                tmp_path,
+                {
+                    "hook_event_name": "PreToolUse",
+                    "tool_input": {"cmd": f"echo {path}"},
+                },
+                **env,
+            )
+        )
+
+    assert not check(Path(str(own) + "."), **common)
+    assert not check(original, **common)
+    assert not check(original, **{**common, "TH_WORKER_OUTPUT_DIR": str(original)})
+    assert not check(
+        original,
+        **{
+            **common,
+            "TH_WORKER_OUTPUT_DIR": "",
+            "TH_WORKER_ALLOW_PATHS": json.dumps([str(original)]),
+        },
+    )
+    assert check(workspace / "outputs" / "runs" / "other", **common)

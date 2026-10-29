@@ -65,6 +65,7 @@ def is_coordinator_zone(
     output_dir: str | Path | None = None,
     allowed_paths: Iterable[str | Path] = (),
     cwd: str | Path | None = None,
+    original: str | Path | None = None,
 ) -> bool:
     """Whether a worker must not read or write *path*.
 
@@ -74,7 +75,12 @@ def is_coordinator_zone(
     """
 
     target = _resolved(path, cwd)
-    if any(_within(target, _resolved(item, cwd)) for item in allowed_paths):
+    variants = (target, _resolved(original, cwd)) if original is not None else (target,)
+    if any(
+        _within(value, _resolved(item, cwd))
+        for value in variants
+        for item in allowed_paths
+    ):
         return False
     if ".claude" in target.parts:
         return True
@@ -96,7 +102,7 @@ def is_coordinator_zone(
         for output_root in (ws / "_outputs", ws / "outputs" / "runs"):
             if _within(target, output_root):
                 own = _resolved(output_dir, cwd) if output_dir else None
-                return own is None or not _within(target, own)
+                return own is None or not any(_within(value, own) for value in variants)
     return False
 
 
@@ -105,12 +111,31 @@ _PATH_TOKEN = re.compile(
 )
 
 
+def coordinator_path_pairs_in_command(
+    command: str, *, cwd: str | Path | None = None
+) -> list[tuple[Path, Path]]:
+    """Return cleaned paths alongside their original spelling for allowances."""
+    pairs = []
+    for token in _PATH_TOKEN.findall(command):
+        raw = re.split(r"\\[ntr]", token, maxsplit=1)[0]
+        clean = raw
+        while clean and clean[-1] in ".,;:!?)]}>'\"`\\":
+            if clean.endswith(("/.", "/..", "./")):
+                break
+            clean = clean[:-1]
+        original_path = _resolved(raw, cwd)
+        cleaned_path = _resolved(clean, cwd)
+        match = re.search(r"(?:으로|에|을|를|은|는|이|가|로|의|와|과|도)$", clean)
+        if match and match.start() > clean.rfind("/") + 1:
+            candidate = _resolved(clean[: match.start()], cwd)
+            if candidate.exists() or not cleaned_path.exists():
+                cleaned_path = candidate
+        pairs.append((cleaned_path, original_path))
+    return pairs
+
+
 def coordinator_paths_in_command(
     command: str, *, cwd: str | Path | None = None
 ) -> list[Path]:
-    """Return plausible path arguments in a shell command, conservatively."""
-
-    return [
-        _resolved(re.split(r"\\[ntr]", token, maxsplit=1)[0], cwd)
-        for token in _PATH_TOKEN.findall(command)
-    ]
+    """Return plausible cleaned path arguments in a shell command."""
+    return [path for path, _ in coordinator_path_pairs_in_command(command, cwd=cwd)]

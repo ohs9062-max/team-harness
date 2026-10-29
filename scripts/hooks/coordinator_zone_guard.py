@@ -31,14 +31,14 @@ def _load_zone():
                 spec.loader.exec_module(module)
                 return (
                     module.DENY_REASON,
-                    module.coordinator_paths_in_command,
+                    module.coordinator_path_pairs_in_command,
                     module.is_coordinator_zone,
                     module.parse_allowed_paths,
                 )
     try:
         from team_harness.coordinator_zone import (  # pyright: ignore[reportMissingImports]
             DENY_REASON,
-            coordinator_paths_in_command,
+            coordinator_path_pairs_in_command,
             is_coordinator_zone,
             parse_allowed_paths,
         )
@@ -48,7 +48,7 @@ def _load_zone():
         return None
     return (
         DENY_REASON,
-        coordinator_paths_in_command,
+        coordinator_path_pairs_in_command,
         is_coordinator_zone,
         parse_allowed_paths,
     )
@@ -61,7 +61,7 @@ def _deny(reason: str) -> None:
 
 def _extract_command_paths(
     value: object, command_paths, *, cwd: str | None
-) -> list[Path]:
+) -> list[tuple[Path, Path]]:
     if isinstance(value, str):
         return list(command_paths(value, cwd=cwd))
     if isinstance(value, list):
@@ -72,7 +72,7 @@ def _extract_command_paths(
 
 def _extract_paths(
     payload: dict[str, object], command_paths, *, cwd: str | None
-) -> list[Path]:
+) -> list[tuple[Path, Path]]:
     raw_input = (
         payload.get("tool_input")
         if "tool_input" in payload
@@ -86,11 +86,11 @@ def _extract_paths(
         except json.JSONDecodeError:
             return _extract_command_paths(raw_input, command_paths, cwd=cwd)
     tool_input = raw_input if isinstance(raw_input, dict) else payload
-    paths: list[Path] = []
+    paths: list[tuple[Path, Path]] = []
     for key in ("file_path", "path", "target_file"):
         value = tool_input.get(key)
         if isinstance(value, str) and value:
-            paths.append(Path(value))
+            paths.append((Path(value), Path(value)))
     for key in ("command", "cmd", "patch", "script"):
         paths.extend(
             _extract_command_paths(tool_input.get(key), command_paths, cwd=cwd)
@@ -128,7 +128,7 @@ def main() -> None:
         "cwd": cwd,
     }
     paths = _extract_paths(payload, command_paths, cwd=cwd)
-    if any(in_zone(path, **kwargs) for path in paths):
+    if any(in_zone(path, original=original, **kwargs) for path, original in paths):
         _deny(reason)
 
 

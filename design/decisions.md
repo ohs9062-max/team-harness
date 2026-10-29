@@ -596,6 +596,8 @@ A Claude Code PreToolUse Bash hook requests approval for destructive coordinator
 
 ## TH-D43. Codex 코디네이터 폴링과 권한 거부 재시도 차단
 
+명령의 경로 끝 문장부호와 조사를 정리하되 원본과 정리된 경로 중 허용되는 경로가 있으면 허용한다.
+
 2026-10-28 Codex 코디네이터는 235회 모델 호출과 2,590만 캐시 읽기를 사용했다. sleep 22회, 상태 확인 31회, 내장 서브에이전트 우회와 거부 후 재시도가 원인이었다. Codex에는 백그라운드 완료 자동 깨움이 없어 워커 실행 후 턴을 끝내고 watchd가 사용자에게 완료를 알린다. 1차 작업에서는 printf의 리터럴 이스케이프가 워커 영역 경로에 붙는 오탐도 확인되어 경로 추출을 수정했다.
 
 Codex의 sleep_tool과 multi_agent 기능을 끄고 PreToolUse/PostToolUse 가드는 sleep, 반복 상태 확인 및 권한 거부 재시도를 제한한다. 가드는 오류 시 통과하며 워커와 코디네이터의 sleep 기준은 다르다.

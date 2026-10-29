@@ -2,6 +2,8 @@
 
 - TH-D43: timeout 오탐 제거, 사용자 메시지별 가드 초기화 및 Codex 창 미확인 표시.
 
+- 명령 경로 끝 문장부호와 한글 조사로 인한 워커 영역 가드 오탐을 수정합니다.
+
 - TH-D43: Codex 코디네이터 폴링·권한 재시도 가드 및 워커 경로 오탐 수정.
 
 - TH-D42: Add destructive-command guard and revise worker failure rules.
