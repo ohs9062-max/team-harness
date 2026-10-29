@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import signal
+import subprocess
 import sys
 import time
 
@@ -28,11 +29,15 @@ from team_harness.worker_context import measure_codex_rollout
 from team_harness.worker_context import parse_task_front_matter
 from team_harness.worker_context import parse_task_metadata
 from team_harness.worker_context import registry_path_for_workspace
+from team_harness.worker_context import rollover_decision
 from team_harness.worker_context import utc_timestamp
 from team_harness.worker_context import WorkerContextError
 from team_harness.worker_context import WorkerContextRegistry
 from team_harness.worker_context import write_minimal_worklog
 from team_harness.worker_digest import pid_alive
+from team_harness.worker_relaunch import launch_arguments
+from team_harness.worker_relaunch import relaunch_worker
+from team_harness.worker_relaunch import terminate_worker_group
 
 
 def read_pid(path: Path) -> int | None:
@@ -176,7 +181,9 @@ def main(task: Path) -> None:
             meta
             and str(meta.get("agent_type")) == "codex"
             and meta.get("session_id")
-            and not request_file.is_file()
+            and (
+                not request_file.is_file() or os.environ.get("TH_WATCH_ROLLOVER") == "1"
+            )
         ):
             try:
                 metadata = parse_task_metadata(task / "task.md")
@@ -207,7 +214,65 @@ def main(task: Path) -> None:
                     },
                     load_worker_context_settings(workspace),
                 )
-                if (
+                if os.environ.get("TH_WATCH_ROLLOVER") == "1":
+                    state_file = task / "rollover_state.json"
+                    worklog = task / "WORKLOG.md"
+                    try:
+                        state = json.loads(state_file.read_text(encoding="utf-8"))
+                    except FileNotFoundError:
+                        state = {
+                            "last_check": time.time(),
+                            "count": 0,
+                            "last_hash": None,
+                        }
+                        write_json_atomic(path=state_file, payload=state)
+                    try:
+                        content = worklog.read_bytes()
+                        mtime = worklog.stat().st_mtime
+                        digest = hashlib.sha256(content).hexdigest()
+                    except FileNotFoundError:
+                        mtime, digest = None, None
+                    action = rollover_decision(
+                        measurement.input_tokens
+                        if measurement.measurement_status == "measured"
+                        and decision.reason != "worker_context_disabled"
+                        else None,
+                        metadata.get("context_budget")
+                        or load_worker_context_settings(workspace).soft_cap_tokens,
+                        mtime,
+                        float(state["last_check"]),
+                        int(state["count"]),
+                        digest != state.get("last_hash"),
+                    )
+                    if action == "split_needed" and state.get("split_mtime") != mtime:
+                        state["split_mtime"] = mtime
+                        write_json_atomic(path=state_file, payload=state)
+                        print("split_needed\t0\t작업 분할 필요")
+                        return
+                    if action == "rollover" and worker_pid is not None:
+                        try:
+                            watch_dir = Path(
+                                os.environ.get(
+                                    "TH_WATCH_DIR",
+                                    str(Path.home() / ".team-harness" / "watch"),
+                                )
+                            )
+                            args = launch_arguments(task, watch_dir)
+                            terminate_worker_group(worker_pid)
+                            park_worker_if_needed("context_cap_exceeded")
+                            state.update(
+                                last_check=mtime,
+                                last_hash=digest,
+                                count=int(state["count"]) + 1,
+                            )
+                            write_json_atomic(path=state_file, payload=state)
+                            relaunch_worker(task, args, workspace)
+                        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                            print(f"rollover_failed\t0\t롤오버 실패: {exc}")
+                            return
+                        print(f"rollover\t0\t롤오버({state['count']}/3)")
+                        return
+                elif (
                     decision.action == "rollover"
                     and decision.reason == "context_cap_exceeded"
                 ):

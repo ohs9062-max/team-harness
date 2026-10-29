@@ -519,10 +519,10 @@ usage_record() {
   override_json=$(printf '%s' "${policy_override:-}" | python3 -c 'import json,sys; x=sys.stdin.read(); print(json.dumps(x if x else None))')
   if ! (
     flock -x 200
-    printf '{"v":1,"at":"%s","task":%s,"attempt":%s,"worker":%s,"model":%s,"effort":%s,"owner":%s,"override":%s}\n' \
+    printf '{"v":1,"at":"%s","task":%s,"attempt":%s,"worker":%s,"model":%s,"effort":%s,"owner":%s,"override":%s,"rollover":%s}\n' \
       "$at" "$(printf '%s' "$task_dir" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" "$attempt" \
       "$(printf '%s' "$worker_type" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" "$(printf '%s' "$model" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" \
-      "$(printf '%s' "$effort" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" "$owner_json" "$override_json" >> "$usage_file"
+      "$(printf '%s' "$effort" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" "$owner_json" "$override_json" "$( [[ ${TH_ROLLOVER:-0} == 1 ]] && printf true || printf false )" >> "$usage_file"
   ) 200>>"$usage_file"; then
     printf 'warning: usage ledger append failed; launch continues\n' >&2
   fi

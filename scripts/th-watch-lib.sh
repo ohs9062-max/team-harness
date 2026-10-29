@@ -348,7 +348,7 @@ count = 0
 for line in ledger.read_text(encoding="utf-8", errors="replace").splitlines():
     try:
         row = json.loads(line)
-        if isinstance(row, dict) and row.get("v") == 1 and Path(str(row.get("task", ""))).expanduser().resolve() == target:
+        if isinstance(row, dict) and row.get("v") == 1 and not row.get("rollover", False) and Path(str(row.get("task", ""))).expanduser().resolve() == target:
             count += 1
     except (OSError, json.JSONDecodeError):
         continue
@@ -427,7 +427,7 @@ inspect_task_event() {
   fi
 
   local ctx_line ctx_event="" distinct_job_alive=0 ctx_detail=""
-  ctx_line=$(inspect_context_and_job "$task" 2>/dev/null) || {
+  ctx_line=$(TH_WATCH_ROLLOVER=$([[ $marker_prefix == .th_daemon ]] && printf 1 || printf 0) inspect_context_and_job "$task" 2>/dev/null) || {
     echo "th-watch: context inspection failed for $task (team_harness import?)" >&2
     ctx_line=""
   }
@@ -503,7 +503,10 @@ inspect_task_event() {
   fi
 
   # 2b. 긴 실행 대기 감지 / 강제 종료 / 분리 job 완료 사건
-  if [[ $ctx_event == "long_running_wait" && ! -f $marker.long_wait ]]; then
+  if [[ $ctx_event == "rollover" || $ctx_event == "split_needed" || $ctx_event == "rollover_failed" ]]; then
+    "$callback_fn" "$task" "$ctx_detail" "$ctx_detail" "-" "$owner"
+    return 0
+  elif [[ $ctx_event == "long_running_wait" && ! -f $marker.long_wait ]]; then
     touch "$marker.long_wait"
     "$callback_fn" "$task" "긴 실행 대기" "$ctx_detail" "-" "$owner"
   elif [[ $ctx_event == "kill_deferred" && ! -f $marker.kill_deferred ]]; then
