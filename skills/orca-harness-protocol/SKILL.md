@@ -63,6 +63,10 @@ team-harness 코디네이터 모드가 준비됐습니다.
 
 ## 감시와 완료 규약
 
+- Codex 코디네이터 규칙: 워커는 `th-launch`로만 띄운다.
+- 띄운 뒤 보고하고 턴을 끝낸다. 대기·폴링 금지, sleep·spawn_agent는 꺼져 있다.
+- 진행은 사용자가 물을 때 `th-inbox-peek`을 한 번 실행한다. 긴 작업을 지켜보며 기다려야 하면 Claude Code(Opus) 코디네이터를 쓴다.
+
 Codex 코디네이터는 waiter를 실행하지 않고 사용자가 물을 때 `th-inbox-peek.sh`로 확인한다.
 
 `ths`는 사용자가 Orca의 별도 터미널 패널에서 실행한다(`ths -w`로 띄워 두기). 에이전트 대화창의

@@ -53,7 +53,12 @@ def test_tag_and_session_fallback(tmp_path: Path) -> None:
         tagged.wait()
     env.pop("TH_JOB_TASK")
     leader = subprocess.Popen(
-        [sys.executable, "-c", "import time; time.sleep(30)", task.name],
+        [
+            str(Path(sys.executable).resolve()),
+            "-c",
+            "import time; time.sleep(30)",
+            task.name,
+        ],
         env=env,
         start_new_session=True,
     )

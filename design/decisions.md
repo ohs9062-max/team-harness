@@ -593,3 +593,16 @@ A Claude Code PreToolUse Bash hook requests approval for destructive coordinator
 | Claude Code coordinator | `scripts/hooks/th-guard-destructive.py` PreToolUse hook (manual registration) | Claude Code supports Bash hooks. |
 | Codex/agy workers | `design/user_config/worker_suffix.md` | Worker instructions govern their own tasks; the hook exempts workers. |
 | Codex coordinator | Document rules only; no hook | Codex does not support Claude hooks. |
+
+## TH-D43. Codex 코디네이터 폴링과 권한 거부 재시도 차단
+
+2026-10-28 Codex 코디네이터는 235회 모델 호출과 2,590만 캐시 읽기를 사용했다. sleep 22회, 상태 확인 31회, 내장 서브에이전트 우회와 거부 후 재시도가 원인이었다. Codex에는 백그라운드 완료 자동 깨움이 없어 워커 실행 후 턴을 끝내고 watchd가 사용자에게 완료를 알린다. 1차 작업에서는 printf의 리터럴 이스케이프가 워커 영역 경로에 붙는 오탐도 확인되어 경로 추출을 수정했다.
+
+Codex의 sleep_tool과 multi_agent 기능을 끄고 PreToolUse/PostToolUse 가드는 sleep, 반복 상태 확인 및 권한 거부 재시도를 제한한다. 가드는 오류 시 통과하며 워커와 코디네이터의 sleep 기준은 다르다.
+
+| 적용 경로 | 조치 | 이유 |
+| --- | --- | --- |
+| Claude 코디네이터 | Claude Code 자체 sleep 차단 + TH-D42 가드 | 백그라운드 자동 깨움 지원 |
+| Codex 코디네이터 | features 끔 + th-codex-guard | 자동 깨움이 없어 폴링 방지 |
+| Codex 워커 | 같은 hook, 워커 기준치 | 긴 sleep을 제한하며 상태 확인 허용 |
+| agy | 해당 없음 | Codex hook을 실행하지 않음 |

@@ -110,4 +110,7 @@ def coordinator_paths_in_command(
 ) -> list[Path]:
     """Return plausible path arguments in a shell command, conservatively."""
 
-    return [_resolved(token, cwd) for token in _PATH_TOKEN.findall(command)]
+    return [
+        _resolved(re.split(r"\\[ntr]", token, maxsplit=1)[0], cwd)
+        for token in _PATH_TOKEN.findall(command)
+    ]

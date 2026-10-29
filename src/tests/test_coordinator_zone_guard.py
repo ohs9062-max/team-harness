@@ -218,3 +218,18 @@ def test_install_script_updates_claude_and_codex_hooks_idempotently(
     assert len(pre_tool_use) == 2
     assert pre_tool_use[0]["hooks"][0]["command"] == ": orca-agent-hook-form=1;"
     assert "coordinator_zone_guard.py" in pre_tool_use[1]["hooks"][0]["command"]
+
+
+def test_printf_escaped_newlines_allow_own_output(tmp_path: Path) -> None:
+    workspace = tmp_path / "repo"
+    own = workspace / "_outputs" / "task"
+    command = f"printf '...\\n출력: {own}\\n' > {own}/WORKLOG.md"
+    assert not denied(
+        run_guard(
+            tmp_path,
+            {"hook_event_name": "PreToolUse", "tool_input": {"cmd": command}},
+            TH_ROLE="worker",
+            TH_WORKSPACE=str(workspace),
+            TH_WORKER_OUTPUT_DIR=str(own),
+        )
+    )
