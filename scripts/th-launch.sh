@@ -636,14 +636,14 @@ if [[ "$worker_type" == "codex" ]]; then
   else
     worker_cmd=(codex exec -m "$model" -c "model_reasoning_effort=$effort" -c "mcp_servers={}" "${project_doc_args[@]}" --dangerously-bypass-approvals-and-sandbox -C "$worktree")
   fi
-  env "${worker_env[@]}" setsid nohup "${worker_cmd[@]}" "$@" -- "$prompt" < /dev/null > codex.log 2>&1 &
+  env -u TH_JOB_TASK "${worker_env[@]}" setsid nohup "${worker_cmd[@]}" "$@" -- "$prompt" < /dev/null > codex.log 2>&1 &
   printf '%s\n' "$!" > "$task_dir/worker.pid"
 elif [[ "$worker_type" == "agy" ]]; then
   add_dir_args=("--add-dir" "$task_dir")
   if [[ -n "$worktree" && "$worktree" != "$task_dir" && -d "$worktree" ]]; then
     add_dir_args+=("--add-dir" "$worktree")
   fi
-  env "${worker_env[@]}" setsid nohup agy --dangerously-skip-permissions --model "$model" "${add_dir_args[@]}" "$@" --print="$prompt" < /dev/null > agy.log 2>&1 &
+  env -u TH_JOB_TASK "${worker_env[@]}" setsid nohup agy --dangerously-skip-permissions --model "$model" "${add_dir_args[@]}" "$@" --print="$prompt" < /dev/null > agy.log 2>&1 &
   init_pid=$!
 
   # agy는 실행 직후 별도 PID로 재부모화될 수 있다. 최초 nohup PID는
@@ -680,7 +680,7 @@ elif [[ "$worker_type" == "claude" ]]; then
   else
     worker_cmd=(claude -p --dangerously-skip-permissions --model "$model" --strict-mcp-config)
   fi
-  env "${worker_env[@]}" setsid nohup "${worker_cmd[@]}" "$@" -- "$prompt" < /dev/null > claude.log 2>&1 &
+  env -u TH_JOB_TASK "${worker_env[@]}" setsid nohup "${worker_cmd[@]}" "$@" -- "$prompt" < /dev/null > claude.log 2>&1 &
   printf '%s\n' "$!" > "$task_dir/worker.pid"
 fi
 

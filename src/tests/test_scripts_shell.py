@@ -67,7 +67,6 @@ def test_env(tmp_path: Path):
         stub_path = bin_dir / cli_name
         stub_content = f"""#!/usr/bin/env bash
 echo "{cli_name} invoked with $@"
-sleep 15 &
 """
         stub_path.write_text(stub_content, encoding="utf-8")
         stub_path.chmod(
@@ -110,6 +109,17 @@ sleep 15 &
     }
 
     _stop_watchd_for(watch_dir)
+    for pid_file in tmp_path.rglob("worker.pid"):
+        try:
+            pid = int(pid_file.read_text().strip())
+            environ = Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
+            if (
+                f"TH_WATCH_DIR={watch_dir}".encode() in environ
+                and os.getpgid(pid) == pid
+            ):
+                os.killpg(pid, signal.SIGTERM)
+        except (OSError, ValueError):
+            pass
 
 
 def _create_task_dir(
@@ -140,7 +150,6 @@ def test_th_launch_appends_deterministic_step_recovery_summary(test_env: dict):
         encoding="utf-8",
     )
     prompt_fifo = task_dir / "prompt.fifo"
-    os.mkfifo(prompt_fifo)
     test_env["bin_dir"].joinpath("codex").write_text(
         f"#!/usr/bin/env bash\nprintf '%s\\n' \"$@\" > {prompt_fifo}\n",
         encoding="utf-8",
@@ -159,8 +168,12 @@ def test_th_launch_appends_deterministic_step_recovery_summary(test_env: dict):
     assert "중단 replay=safe" in recovery and "eval" in recovery
     assert "중단 replay=never/inspect" in recovery and "push(replay=never)" in recovery
     assert len(recovery.splitlines()) <= 20
+    deadline = time.time() + 3
+    while not prompt_fifo.exists() and time.time() < deadline:
+        time.sleep(0.05)
     assert recovery in prompt_fifo.read_text(encoding="utf-8")
 
+    test_env["bin_dir"].joinpath("codex").write_text("#!/bin/sh\nexit 0\n")
     no_steps = _create_task_dir(test_env["tmp_path"], "task_no_step_recovery")
     result = subprocess.run(
         [str(SCRIPTS_DIR / "th-launch.sh"), str(no_steps)],
@@ -514,7 +527,7 @@ def test_th_launch_uses_one_image_envelope_and_project_python_for_each_worker_ty
     None
 ):
     source = (SCRIPTS_DIR / "th-launch.sh").read_text(encoding="utf-8")
-    assert source.count('env "${worker_env[@]}" setsid nohup') == 3
+    assert source.count('env -u TH_JOB_TASK "${worker_env[@]}" setsid nohup') == 3
     assert '"TH_WORKER_ALLOW_PATHS=$worker_allow_paths"' in source
     assert "TH_CODEX_PROJECT_DOC" in source
     assert source.count("project_doc_max_bytes=0") == 1
@@ -3216,3 +3229,22 @@ def test_watchd_writes_session_route_for_event(test_env: dict) -> None:
     assert result.returncode == 0, result.stderr
     assert (owner / ".claude" / "inbox.routes").read_text() == "0\tpane-A\n"
     assert "session_event" in (owner / ".claude" / "inbox.md").read_text()
+
+
+def test_th_launch_drops_inherited_job_tag(test_env: dict) -> None:
+    task = _create_task_dir(test_env["tmp_path"], "tag_worker")
+    captured = test_env["tmp_path"] / "job_tag"
+    stub = test_env["bin_dir"] / "codex"
+    stub.write_text(f'#!/bin/sh\nprintf "%s" "${{TH_JOB_TASK-unset}}" > "{captured}"\n')
+    test_env["env"]["TH_JOB_TASK"] = str(test_env["tmp_path"] / "parent")
+    result = subprocess.run(
+        [str(SCRIPTS_DIR / "th-launch.sh"), str(task)],
+        env=test_env["env"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    deadline = time.time() + 3
+    while not captured.exists() and time.time() < deadline:
+        time.sleep(0.05)
+    assert captured.read_text() == "unset"

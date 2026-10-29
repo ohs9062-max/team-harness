@@ -33,7 +33,12 @@ def live_processes(task):
             stat = (proc / "stat").read_text().rsplit(") ", 1)[1].split()
             if stat[0] == "Z":
                 continue
-            if tag in (proc / "environ").read_bytes().split(b"\0"):
+            environ = (proc / "environ").read_bytes().split(b"\0")
+            worker_dirs = [entry.split(b"=", 1)[1] for entry in environ if entry.startswith(b"TH_WORKER_OUTPUT_DIR=")]
+            if tag in environ:
+                if worker_dirs and Path(os.fsdecode(worker_dirs[0])).resolve() != task:
+                    direct.discard(pid)
+                    continue
                 tagged.add(pid)
             if int(stat[3]) != pid:
                 continue

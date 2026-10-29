@@ -6,6 +6,8 @@ import signal
 import subprocess
 import sys
 
+import pytest
+
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 
 
@@ -162,6 +164,60 @@ def test_live_attempt_ignores_only_older_markers(tmp_path: Path) -> None:
             check=True,
         )
         assert "실패" in result.stdout
+    finally:
+        proc.terminate()
+        proc.wait()
+
+
+@pytest.mark.parametrize("worker_dir_matches", [True, False])
+def test_tag_respects_worker_output_dir(
+    tmp_path: Path, worker_dir_matches: bool
+) -> None:
+    task = tmp_path / "target"
+    task.mkdir()
+    other = tmp_path / "other"
+    other.mkdir()
+    env = {
+        **os.environ,
+        "TH_JOB_TASK": str(task),
+        "TH_WORKER_OUTPUT_DIR": str(task if worker_dir_matches else other),
+    }
+    proc = subprocess.Popen(["sleep", "30"], env=env)
+    try:
+        assert (proc.pid in found(task)) is worker_dir_matches
+    finally:
+        proc.terminate()
+        proc.wait()
+
+
+def test_worker_environment_is_isolated() -> None:
+    for key in (
+        "TH_JOB_TASK",
+        "TH_WORKER_OUTPUT_DIR",
+        "TH_WORKER_ALLOW_PATHS",
+        "TH_ROLE",
+        "TH_SESSION_KEY",
+        "ORCA_PANE_KEY",
+    ):
+        assert key not in os.environ
+
+
+def test_mismatched_worker_tag_cannot_use_pid_or_guess(tmp_path: Path) -> None:
+    task = tmp_path / "target"
+    task.mkdir()
+    env = {
+        **os.environ,
+        "TH_JOB_TASK": str(task),
+        "TH_WORKER_OUTPUT_DIR": str(tmp_path / "other"),
+    }
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)", str(task)],
+        env=env,
+        start_new_session=True,
+    )
+    try:
+        (task / "job.pid").write_text(str(proc.pid))
+        assert proc.pid not in found(task)
     finally:
         proc.terminate()
         proc.wait()

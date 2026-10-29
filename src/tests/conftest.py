@@ -10,6 +10,19 @@ from team_harness.config import Config
 from team_harness.tracking.context import ContextTracker
 
 
+@pytest.fixture(autouse=True)
+def isolate_worker_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key in (
+        "TH_JOB_TASK",
+        "TH_WORKER_OUTPUT_DIR",
+        "TH_WORKER_ALLOW_PATHS",
+        "TH_ROLE",
+        "TH_SESSION_KEY",
+        "ORCA_PANE_KEY",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+
 class DummyToolContext:
     def __init__(self) -> None:
         self.results: list[tuple[str, bool]] = []
