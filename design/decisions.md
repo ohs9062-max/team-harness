@@ -597,6 +597,8 @@ A Claude Code PreToolUse Bash hook requests approval for destructive coordinator
 
 2026-10-29 revision: Worker context grew from 19,000 to 65,000–113,000 tokens, with 65–77% of the increase from tool output; one call returned 32,000 characters and one file was reread seven times. Of 98 robot3 failures, 51 were INCOMPLETE self-stops; three on October 29 followed guard denials that could have been retried with smaller commands. Limit reads and output, remove self-stop exits, and retry guard denials using a different approach before reporting repeated denial.
 
+The coordinator-zone denial directs workers to proceed without the blocked path and report FAILED only after another approach is also blocked.
+
 | Execution path | Application | Reason |
 | --- | --- | --- |
 | Claude Code coordinator | `scripts/hooks/th-guard-destructive.py` PreToolUse hook (manual registration) | Claude Code supports Bash hooks. |

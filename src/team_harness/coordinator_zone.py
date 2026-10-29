@@ -17,7 +17,11 @@ WORKER_PROMPT_HEADER = (
     "너는 team-harness 워커다(TH_ROLE=worker). 코디네이터가 아니다. "
     "이 지시서의 작업만 하고 결과는 결과 폴더에만 남긴다."
 )
-DENY_REASON = "코디네이터 영역입니다. 필요하면 FAILED에 이유를 쓰세요"
+DENY_REASON = (
+    "코디네이터 영역 또는 다른 작업 폴더입니다. 이 경로 없이 진행하세요 "
+    "(자기 작업 트리·작업 폴더는 허용). 지시서에 있는 내용만 쓰고, "
+    "다른 방법으로도 막히면 그때 FAILED에 거부 문구를 적으세요."
+)
 
 
 def _resolved(path: str | Path, cwd: str | Path | None = None) -> Path:

@@ -41,6 +41,13 @@ def denied(value: dict[str, object]) -> bool:
     return isinstance(output, dict) and output.get("permissionDecision") == "deny"
 
 
+def test_no_immediate_failed_advice_in_source_or_scripts() -> None:
+    forbidden = "FAILED에 이유를" + " 쓰세요"
+    for root in (REPO / "src", REPO / "scripts"):
+        for path in root.rglob("*.py"):
+            assert forbidden not in path.read_text(encoding="utf-8"), str(path)
+
+
 def test_worker_guard_blocks_coordinator_zone_but_not_source_or_own_output(
     tmp_path: Path,
 ) -> None:
@@ -60,9 +67,13 @@ def test_worker_guard_blocks_coordinator_zone_but_not_source_or_own_output(
             "tool_input": {"file_path": str(path)},
         }
 
-    assert denied(
-        run_guard(tmp_path, read(tmp_path / ".claude" / "workers.md"), **common)
-    )
+    result = run_guard(tmp_path, read(tmp_path / ".claude" / "workers.md"), **common)
+    assert denied(result)
+    output = result["hookSpecificOutput"]
+    assert isinstance(output, dict)
+    reason = output["permissionDecisionReason"]
+    assert "다른 방법으로도 막히면" in reason
+    assert "FAILED에 이유를" + " 쓰세요" not in reason
     assert denied(
         run_guard(
             tmp_path, read(workspace / "_outputs" / "other" / "WORKLOG.md"), **common
