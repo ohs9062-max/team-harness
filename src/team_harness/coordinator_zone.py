@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 from typing import Iterable
 
 WORKER_PROMPT_HEADER = (
@@ -170,13 +171,128 @@ def _command_text_and_patch_paths(command: str) -> tuple[str, list[str]]:
     return "".join(kept), patch_paths
 
 
+# Only discard arguments when the shell syntax and option arity are clear.
+_SHELL_WORD = re.compile(r"(?:[^\s;|&'\"\\]+|\\[^\n]|'[^']*'|\"(?:[^\"\\]|\\.)*\")+")
+_SEARCH_COMMANDS = {"rg", "grep", "egrep", "fgrep", "ag", "sed", "awk", "perl"}
+_SIMPLE_OPTIONS = {
+    "rg": set("nHiIilLsvwFxqocPhzuaU0N"),
+    "grep": set("nHiIilLsvwFxqocEhzZbUrR"),
+    "egrep": set("nHiIilLsvwFxqoczh"),
+    "fgrep": set("nHiIilLsvwFxqoczh"),
+    "ag": set("nHiIilLsvwFxqocQ"),
+    "sed": set("nEu"),
+    "awk": set(),
+    "perl": set("npal"),
+}
+
+
+def _without_search_patterns(command: str) -> str:
+    """Mask static pattern arguments; leave uncertain shell syntax untouched."""
+    chars = list(command)
+    parts = re.finditer(
+        r"(?:[^\s;|&'\"\\]+|\\[^\n]|'[^']*'|\"(?:[^\"\\]|\\.)*\")+|[;|&\n]+|\s+|.",
+        command,
+    )
+    segments: list[list[re.Match[str]]] = [[]]
+    for part in parts:
+        value = part.group()
+        if value.isspace() and "\n" not in value:
+            continue
+        if re.fullmatch(r"[;|&\n]+", value):
+            segments.append([])
+        else:
+            segments[-1].append(part)
+    for segment in segments:
+        if not segment or any(not _SHELL_WORD.fullmatch(m.group()) for m in segment):
+            continue
+        if any(any(c in m.group() for c in "$`<>\n") for m in segment):
+            continue
+        try:
+            words = [shlex.split(m.group())[0] for m in segment]
+        except (ValueError, IndexError):
+            continue
+        name = os.path.basename(words[0])
+        if name not in _SEARCH_COMMANDS:
+            continue
+        scripts: list[int] = []
+        has_script = False
+        end_options = False
+        valid = True
+        i = 1
+        while i < len(words):
+            word = words[i]
+            if not end_options and word == "--":
+                end_options = True
+            elif not end_options and word in ("-e", "--regexp", "--expression"):
+                if (
+                    i + 1 >= len(words)
+                    or (
+                        word == "--regexp"
+                        and name not in {"rg", "grep", "egrep", "fgrep", "ag"}
+                    )
+                    or (word == "--expression" and name != "sed")
+                ):
+                    valid = False
+                    break
+                i += 1
+                scripts.append(i)
+                has_script = True
+            elif (
+                not end_options
+                and name == "perl"
+                and word.startswith("-")
+                and word.endswith("e")
+                and set(word[1:-1]) <= _SIMPLE_OPTIONS[name]
+            ):
+                if i + 1 >= len(words):
+                    valid = False
+                    break
+                i += 1
+                scripts.append(i)
+                has_script = True
+            elif not end_options and word in ("-f", "--file"):
+                if i + 1 >= len(words):
+                    valid = False
+                    break
+                i += 1
+                has_script = True
+            elif (
+                not end_options
+                and word.startswith("--regexp=")
+                and name in {"rg", "grep", "egrep", "fgrep", "ag"}
+            ):
+                scripts.append(i)
+                has_script = True
+            elif (
+                not end_options
+                and word.startswith("-e")
+                and len(word) > 2
+                and name != "awk"
+            ):
+                scripts.append(i)
+                has_script = True
+            elif not end_options and word.startswith("-") and word != "-":
+                if word.startswith("--") or not set(word[1:]) <= _SIMPLE_OPTIONS[name]:
+                    valid = False
+                    break
+            elif not has_script:
+                scripts.append(i)
+                has_script = True
+            i += 1
+        if valid:
+            for index in scripts:
+                match = segment[index]
+                chars[match.start() : match.end()] = " " * (match.end() - match.start())
+    return "".join(chars)
+
+
 def coordinator_path_pairs_in_command(
     command: str, *, cwd: str | Path | None = None
 ) -> list[tuple[Path, Path]]:
     """Return cleaned paths alongside their original spelling for allowances."""
     command_text, patch_paths = _command_text_and_patch_paths(command)
     pairs = [(_resolved(path, cwd), _resolved(path, cwd)) for path in patch_paths]
-    for token in _PATH_TOKEN.findall(command_text):
+    for token in _PATH_TOKEN.findall(_without_search_patterns(command_text)):
         raw = re.split(r"\\[ntr]", token, maxsplit=1)[0]
         clean = raw
         while clean and clean[-1] in ".,;:!?)]}>'\"`\\":

@@ -364,3 +364,34 @@ def test_guard_allows_both_path_variants_and_denies_other(tmp_path: Path) -> Non
         },
     )
     assert check(workspace / "outputs" / "runs" / "other", **common)
+
+
+@pytest.mark.parametrize(
+    ("template", "blocked"),
+    [
+        (
+            "rg -n 'events.log|_outputs/|archive.last|\\\\.claude/archive' {own}/samples/*/task.md",
+            False,
+        ),
+        ("rg PAT {target}", True),
+        ("grep -e '{target}' {own}/file", False),
+        ("grep -e PAT {target}", True),
+        ("sed -n 's/{target}/y/p' {own}/file", False),
+        ("awk '/{target}/' {own}/file", False),
+        ("rg '{target}' {own}/file | grep -e '{target}' {own}/file", False),
+        ("rg '{target}' {own}/file | grep PAT {target}", True),
+        ("rg -f {target} {own}/file", True),
+        ("perl -ne 'print if /{target}/' {own}/file", False),
+        ("ag '{target}' {own}/file && fgrep '{target}' {own}/file", False),
+        ("rg --unknown '{target}' {own}/file", True),
+    ],
+)
+def test_search_pattern_arguments(tmp_path: Path, template: str, blocked: bool) -> None:
+    own = tmp_path / "_outputs" / "own"
+    target = tmp_path / "other" / ("." + "claude") / "archive"
+    command = template.format(own=own, target=target)
+    payload: dict[str, object] = {"tool_input": {"command": command}}
+    assert (
+        denied(run_guard(tmp_path, payload, TH_ROLE="worker", TH_OUTPUT_DIR=str(own)))
+        is blocked
+    )
