@@ -21,6 +21,7 @@ import time
 from typing import Any
 from typing import Iterable
 from typing import Iterator
+from typing import Literal
 from uuid import uuid4
 
 from team_harness.tracking.persistence import write_json_atomic
@@ -393,6 +394,24 @@ def _decision_with_current(
         worklog_path=worklog_path,
         generation=generation,
     )
+
+
+def rollover_decision(
+    input_tokens: int | None,
+    budget: int,
+    worklog_mtime: float | None,
+    last_check: float,
+    rollover_count: int,
+    progressed: bool,
+) -> Literal["continue", "rollover", "split_needed"]:
+    """Decide at a newly recorded work boundary, using current input tokens."""
+    if input_tokens is None or input_tokens <= budget:
+        return "continue"
+    if worklog_mtime is None or worklog_mtime <= last_check:
+        return "continue"
+    if rollover_count >= 3 or not progressed:
+        return "split_needed"
+    return "rollover"
 
 
 def decide(
