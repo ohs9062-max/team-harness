@@ -15,19 +15,22 @@ from typing import Any
 
 from team_harness.workspace_archive import watch_dir
 
-# Ordered precedence: a guard rejection is more specific than INCOMPLETE.
 CLASSIFICATION = (
+    ("스스로 멈춤", r"INCOMPLETE|미완료|남은"),
     ("가드 거부", r"PreToolUse|가드|guard|영역"),
     ("쿼터", r"quota|rate.limit|쿼터"),
-    ("인계 없음/중단", r"인계 없음|워커 중단|handoff|aborted"),
+    ("인계 없음", r"인계 없음|워커 중단|handoff|aborted"),
     ("멈춤", r"멈춤|stall"),
-    ("스스로 멈춤", r"INCOMPLETE|남은 작업"),
 )
 
 
 def classify(text: str) -> str:
     for name, pattern in CLASSIFICATION:
         if re.search(pattern, text, re.I):
+            if name == "스스로 멈춤" and re.search(
+                r"PreToolUse|가드|guard|영역", text, re.I
+            ):
+                return "스스로 멈춤 (가드 거부 후)"
             return name
     return "기타"
 
@@ -67,7 +70,9 @@ def _tokens(task: Path) -> int:
     )
 
 
-def collect(wd: Path, roots: set[Path], start: date, end: date) -> list[dict[str, Any]]:
+def collect(
+    wd: Path, roots: set[Path], start: date, end: date, *, details: bool = False
+) -> list[dict[str, Any]]:
     rows: dict[tuple[str, str], dict[str, Any]] = {}
     launches: dict[str, list[datetime]] = {}
     tasks: dict[str, tuple[str, str]] = {}
@@ -163,7 +168,10 @@ def collect(wd: Path, roots: set[Path], start: date, end: date) -> list[dict[str
         if key not in seen:
             events.append((stamp, root, task, match[2], match[4]))
     completed: set[str] = set()
+    statuses: dict[str, str] = {}
     for stamp, root, task, kind, event in sorted(events):
+        if stamp.date() <= end:
+            statuses[task] = kind
         if "완료" in kind:
             completed.add(task)
         if not start <= stamp.date() <= end:
@@ -179,7 +187,9 @@ def collect(wd: Path, roots: set[Path], start: date, end: date) -> list[dict[str
                 item["completion_seconds"][task] = seconds
         if any(x in kind for x in ("실패", "중단", "멈춤")):
             cause = classify(kind + " " + event)
-            if cause == "멈춤" and (task in completed or "DONE" in event):
+            done = Path(task) / "DONE"
+            done_before = done.is_file() and done.stat().st_mtime <= stamp.timestamp()
+            if "멈춤" in kind and (task in completed or "DONE" in event or done_before):
                 cause = "멈춤 오탐"
             item["causes"][cause] = item["causes"].get(cause, 0) + 1
     for task, (root, _) in tasks.items():
@@ -189,17 +199,72 @@ def collect(wd: Path, roots: set[Path], start: date, end: date) -> list[dict[str
             count = _tokens(Path(task))
             item["task_tokens"][task] = count
             item["tokens"] += count
+            if details:
+                status = statuses.get(task, "진행 중")
+                markers = [
+                    p
+                    for p in (Path(task) / "DONE", Path(task) / "FAILED")
+                    if p.is_file()
+                ]
+                if markers:
+                    status = max(markers, key=lambda p: p.stat().st_mtime).name
+                item.setdefault("task_details", {})[task] = {
+                    "attempts": len(stamps),
+                    "status": status,
+                }
     return [rows[k] for k in sorted(rows)]
 
 
 def render(rows: list[dict[str, Any]]) -> str:
     result = [
-        "| 날짜 | 프로젝트 | launch | 재실행 | 롤오버 | 자동 계속 | 토큰 | 작업별 토큰 | 원인 | 완료 시간(초) |",
-        "|---|---|---:|---:|---:|---:|---:|---|---|---|",
+        "| 날짜 | 프로젝트 | launch | 재실행 | 롤오버 | 자동 계속 | 토큰 | 원인 상위 3 |",
+        "|---|---|---:|---:|---:|---:|---:|---|",
     ]
+    tasks: dict[str, dict[str, Any]] = {}
     for r in rows:
+        counts = Counter(r["causes"])
+        guarded = counts.pop("스스로 멈춤 (가드 거부 후)", 0)
+        if guarded:
+            counts["스스로 멈춤"] += guarded
+        causes = (
+            ", ".join(
+                f"{name} {n}"
+                + (
+                    f" (가드 거부 후 {guarded})"
+                    if name == "스스로 멈춤" and guarded
+                    else ""
+                )
+                for name, n in counts.most_common(3)
+            )
+            or "없음"
+        )
         result.append(
-            f"| {r['date']} | {r['project']} | {r['launch']} | {r['retry']} | {r['rollover']} | {r['auto_continue']} | {r['tokens']} | {r['task_tokens']} | {r['causes']} | {r['completion_seconds']} |"
+            f"| {r['date']} | {r['project']} | {r['launch']} | {r['retry']} | {r['rollover']} | {r['auto_continue']} | {r['tokens']} | {causes} |"
+        )
+        for task, tokens in r["task_tokens"].items():
+            detail = r.get("task_details", {}).get(task, {})
+            item = tasks.setdefault(
+                task, {"tokens": 0, "attempts": 0, "status": "-", "seconds": None}
+            )
+            item["tokens"] += tokens
+            item["attempts"] += detail.get("attempts", 0)
+            item["status"] = detail.get("status", item["status"])
+        for task, seconds in r["completion_seconds"].items():
+            if task in tasks:
+                tasks[task]["seconds"] = seconds
+    result.extend(
+        [
+            "",
+            "| 작업 | 시도 수 | 토큰 | 완료까지 분 | 마지막 상태 |",
+            "|---|---:|---:|---:|---|",
+        ]
+    )
+    for task, item in sorted(
+        tasks.items(), key=lambda pair: (-pair[1]["tokens"], pair[0])
+    )[:15]:
+        minutes = f"{item['seconds'] / 60:.1f}" if item["seconds"] is not None else "-"
+        result.append(
+            f"| {Path(task).name} | {item['attempts']} | {item['tokens']} | {minutes} | {item['status']} |"
         )
     return "\n".join(result)
 
@@ -221,7 +286,7 @@ def daily(now: datetime, wd: Path | None = None) -> None:
             pass
         day = now.date() - timedelta(days=1)
         for root in sorted(owners(wd)):
-            rows = collect(wd, {root}, day, day)
+            rows = collect(wd, {root}, day, day, details=True)
             report = root / ".claude" / "reports" / f"loss_{day:%Y%m%d}.md"
             report.parent.mkdir(parents=True, exist_ok=True)
             report.write_text(
