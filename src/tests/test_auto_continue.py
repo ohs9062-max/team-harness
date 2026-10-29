@@ -1,0 +1,245 @@
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+import subprocess
+
+import pytest
+
+from team_harness import stop_policy
+from team_harness.stop_policy import classify_stop
+
+
+def test_incomplete_failed(tmp_path: Path) -> None:
+    (tmp_path / "FAILED").write_text("INCOMPLETE: work remains")
+    assert classify_stop(tmp_path) == "self_stop"
+
+
+def test_ambiguous_failed_continues(tmp_path: Path) -> None:
+    (tmp_path / "FAILED").write_text("작업을 마치지 못함")
+    assert classify_stop(tmp_path) == "self_stop"
+
+
+def test_quota_failed(tmp_path: Path) -> None:
+    (tmp_path / "FAILED").write_text("quota exhausted")
+    assert classify_stop(tmp_path) == "allowed_fail"
+
+
+def test_rate_limit_failed(tmp_path: Path) -> None:
+    (tmp_path / "FAILED").write_text("rate limit")
+    assert classify_stop(tmp_path) == "allowed_fail"
+
+
+def test_http_429_failed(tmp_path: Path) -> None:
+    (tmp_path / "FAILED").write_text("HTTP 429 Too Many Requests")
+    assert classify_stop(tmp_path) == "allowed_fail"
+
+
+def test_capacity_failed(tmp_path: Path) -> None:
+    (tmp_path / "FAILED").write_text("용량 부족")
+    assert classify_stop(tmp_path) == "allowed_fail"
+
+
+def test_permission_failed(tmp_path: Path) -> None:
+    (tmp_path / "FAILED").write_text("permission denied")
+    assert classify_stop(tmp_path) == "allowed_fail"
+
+
+def test_auth_failed(tmp_path: Path) -> None:
+    (tmp_path / "FAILED").write_text("인증 실패")
+    assert classify_stop(tmp_path) == "allowed_fail"
+
+
+def test_license_failed(tmp_path: Path) -> None:
+    (tmp_path / "FAILED").write_text("license error")
+    assert classify_stop(tmp_path) == "allowed_fail"
+
+
+def test_time_limit_failed(tmp_path: Path) -> None:
+    (tmp_path / "FAILED").write_text("시간 제한")
+    assert classify_stop(tmp_path) == "allowed_fail"
+
+
+def test_remaining_done(tmp_path: Path) -> None:
+    (tmp_path / "DONE").write_text("남은 작업이 있습니다")
+    assert classify_stop(tmp_path) == "self_stop"
+
+
+def test_verify_failed_done(tmp_path: Path) -> None:
+    (tmp_path / "DONE").write_text("completed")
+    (tmp_path / "VERIFY_FAILED").touch()
+    assert classify_stop(tmp_path) == "self_stop"
+
+
+def test_normal_done(tmp_path: Path) -> None:
+    (tmp_path / "DONE").write_text("completed")
+    assert classify_stop(tmp_path) == "ok"
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "같은 수정 2회 실패",
+        "동일 수정 실패 두 차례",
+        "설정 수정 3회 실패",
+        "setup failed three times",
+        "다른 방식 2회 거부",
+        "different approach denied twice",
+    ],
+)
+def test_allowed_guard_reasons(tmp_path: Path, reason: str) -> None:
+    (tmp_path / "FAILED").write_text(reason)
+    assert classify_stop(tmp_path) == "allowed_fail"
+
+
+def test_auto_continue_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "task.md").write_text("kind: code\n")
+    (tmp_path / "FAILED").write_text("INCOMPLETE")
+    calls: list[int] = []
+    monkeypatch.setattr(stop_policy, "launch_arguments", lambda *args: ["t", "codex"])
+    monkeypatch.setattr(
+        stop_policy, "relaunch_worker", lambda *args, **kwargs: calls.append(1)
+    )
+    for _ in range(2):
+        assert "자동 계속(" in stop_policy.continue_stopped_task(
+            tmp_path, tmp_path, tmp_path
+        )
+    assert "작업 분할 필요" in stop_policy.continue_stopped_task(
+        tmp_path, tmp_path, tmp_path
+    )
+    assert len(calls) == 2
+    assert "## 자동 계속 (2차)" in (tmp_path / "task.md").read_text()
+
+
+def test_killed_is_excluded(tmp_path: Path) -> None:
+    (tmp_path / "FAILED").write_text("INCOMPLETE")
+    (tmp_path / "KILLED").touch()
+    assert stop_policy.continue_stopped_task(tmp_path, tmp_path, tmp_path) == ""
+
+
+def test_research_without_verify_is_excluded(tmp_path: Path) -> None:
+    (tmp_path / "FAILED").write_text("INCOMPLETE")
+    (tmp_path / "task.md").write_text("kind: research\n")
+    assert stop_policy.continue_stopped_task(tmp_path, tmp_path, tmp_path) == ""
+
+
+def test_quota_lock_prevents_continue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "FAILED").write_text("INCOMPLETE")
+    (tmp_path / "task.md").write_text("kind: code\n")
+    (tmp_path / "quota_lock.codex").touch()
+    monkeypatch.setattr(stop_policy, "launch_arguments", lambda *args: ["t", "codex"])
+    assert stop_policy.continue_stopped_task(tmp_path, tmp_path, tmp_path) == ""
+    assert not (tmp_path / ".auto_continue_count").exists()
+
+
+def test_relaunch_error_is_reported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "FAILED").write_text("INCOMPLETE")
+    (tmp_path / "task.md").write_text("kind: code\n")
+    monkeypatch.setattr(stop_policy, "launch_arguments", lambda *args: ["t", "codex"])
+
+    def fail(*args: object, **kwargs: object) -> None:
+        raise OSError("launcher unavailable")
+
+    monkeypatch.setattr(stop_policy, "relaunch_worker", fail)
+    assert "자동 계속 실패" in stop_policy.continue_stopped_task(
+        tmp_path, tmp_path, tmp_path
+    )
+
+
+def test_verification_tail_in_continue_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "DONE").write_text("done")
+    (tmp_path / "VERIFY_FAILED").touch()
+    (tmp_path / "task.md").write_text("kind: code\n")
+    (tmp_path / ".th_verify_output.txt").write_text(
+        "\n".join(f"line-{i}" for i in range(25))
+    )
+    monkeypatch.setattr(stop_policy, "launch_arguments", lambda *args: ["t", "codex"])
+    monkeypatch.setattr(stop_policy, "relaunch_worker", lambda *args, **kwargs: None)
+    stop_policy.continue_stopped_task(tmp_path, tmp_path, tmp_path)
+    text = (tmp_path / "task.md").read_text()
+    assert "line-4\n" not in text
+    assert "line-5\n" in text
+    assert "line-24\n" in text
+
+
+def test_verification_marker_supplies_output_if_log_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "DONE").write_text("done")
+    (tmp_path / "VERIFY_FAILED").write_text("verification failed\n")
+    (tmp_path / "task.md").write_text("kind: code\n")
+    monkeypatch.setattr(stop_policy, "launch_arguments", lambda *args: ["t", "codex"])
+    monkeypatch.setattr(stop_policy, "relaunch_worker", lambda *args, **kwargs: None)
+    stop_policy.continue_stopped_task(tmp_path, tmp_path, tmp_path)
+    assert "verification failed" in (tmp_path / "task.md").read_text()
+
+
+def test_continue_relaunch_uses_rollover_accounting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from team_harness import worker_relaunch
+
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        worker_relaunch.subprocess, "run", lambda *args, **kwargs: calls.append(kwargs)
+    )
+    worker_relaunch.relaunch_worker(tmp_path, [], tmp_path, auto_continue=True)
+    assert calls[0]["env"]["TH_ROLLOVER"] == "1"
+    assert calls[0]["env"]["TH_AUTO_CONTINUE"] == "1"
+
+
+def test_watchd_routes_completed_task_to_shared_policy(tmp_path: Path) -> None:
+    task = tmp_path / "task"
+    task.mkdir()
+    (task / "DONE").write_text("남은 작업")
+    (task / ".th_daemon.done").touch()
+    (task / ".th_digest.done").touch()
+    (task / "VERIFIED").touch()
+    library = Path(__file__).resolve().parents[2] / "scripts" / "th-watch-lib.sh"
+    script = r"""
+source "$1"
+inspect_context_and_job() { :; }
+task_live_pids() { :; }
+worker_digest_program() { echo dummy; }
+python3() { echo DONE; }
+th_python() { [[ $1 == -m && $2 == team_harness.stop_policy ]] || return 1; printf '자동 계속(1/2): test'; }
+callback() { printf '%s\n' "$3"; }
+inspect_task_event "$2" "$3" .th_daemon 1 '' callback
+"""
+    result = subprocess.run(
+        ["bash", "-c", script, "test", str(library), str(task), str(tmp_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "자동 계속(1/2): test" in result.stdout
+
+
+def test_concurrent_watchers_start_only_one_relaunch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "FAILED").write_text("INCOMPLETE")
+    (tmp_path / "task.md").write_text("kind: code\n")
+    calls: list[int] = []
+    monkeypatch.setattr(stop_policy, "launch_arguments", lambda *args: ["t", "codex"])
+
+    def launch(*args: object, **kwargs: object) -> None:
+        calls.append(1)
+        (tmp_path / "FAILED").unlink()
+
+    monkeypatch.setattr(stop_policy, "relaunch_worker", launch)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(
+            executor.map(
+                lambda _: stop_policy.continue_stopped_task(
+                    tmp_path, tmp_path, tmp_path
+                ),
+                range(2),
+            )
+        )
+    assert len(calls) == 1
+    assert sum(bool(result) for result in results) == 1

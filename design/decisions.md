@@ -621,3 +621,23 @@ Codex의 sleep_tool과 multi_agent 기능을 끄고 PreToolUse/PostToolUse 가�
 | agy | 해당 없음 | Codex hook을 실행하지 않음 |
 
 **개정(2026-10-29).** `timeout` 상한 자체는 차단하지 않고 내부 sleep과 watch는 기존 기준을 적용한다. 사용자 메시지마다 해당 세션의 상태 확인 및 권한 거부 기록을 초기화한다. 작업 실행 시 대상 창 종류를 기록하여 Codex 창의 미확인은 일반 알림과 ℹ 표시로 구분하고 기존 작업과 Claude 창의 경고는 유지한다.
+
+## TH-D44. 자기 중단 자동 계속
+
+2026-10-29 Codex 워커 medium·high가 큰 작업에서 약 4분, 3~5만 토큰 사용 후 한 단계만 처리하고 미완료 FAILED 또는 남은 항목이 있는 DONE으로 끝나는 사례가 반복됐다. 워커 지시 문구만으로는 이를 막지 못했다. 공통 `classify_stop`으로 판정하고 같은 작업을 이어서 실행한다.
+
+| 표지와 내용 | 판정 |
+| --- | --- |
+| DONE 및 검수 실패, 또는 DONE에 남은 작업 표지 | self_stop |
+| FAILED에 허용되지 않은 이유, INCOMPLETE 포함 | self_stop |
+| 쿼터·rate limit·용량, 실제 권한·인증·라이선스 오류, 시간 제한 | allowed_fail |
+| 같은 수정 2회 실패, 설정 수정 3회 실패, 다른 방식 2회 가드 거부 | allowed_fail |
+| 정상 DONE | ok |
+
+모호하면 self_stop으로 판정한다. 사용자 kill과 쿼터 잠금, 검수가 없는 research 작업의 FAILED는 계속하지 않는다. 자동 계속은 작업당 최대 2회이며 일반 재시도 상한에 산입하지 않는다. 매번 기존 사유와 검수 실패 시 출력 마지막 20줄을 task.md에 덧붙이고 inbox에 통지한다. 소진 시 작업 분할을 요청한다. TH-D32에 따라 입력 맥락이 90,000 이하인 동일 작업의 세션은 재개하고, 그 외에는 요약을 사용해 새로 실행한다.
+
+| 경로 | 적용 지점 |
+| --- | --- |
+| th-launch / th-watchd | 완료·실패 사건과 검수 결과 처리 |
+| run / repl | 워커 프로세스 종료 처리 |
+| protocol mode A/B/C | 공통 mode C 워커 러너 종료 처리 |

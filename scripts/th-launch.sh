@@ -302,7 +302,9 @@ for item in list(registry.sessions()):
         except WorkerContextError:
             pass
 
-effective_follow_up = "normal" if force_fresh else follow_up
+effective_follow_up = "normal" if force_fresh else (
+    "short" if os.environ.get("TH_AUTO_CONTINUE") == "1" else follow_up
+)
 try:
     decision, registry = dispatch(
         workspace=workspace,
@@ -316,11 +318,12 @@ except WorkerContextError as exc:
     print(f"worker context error: {exc}", file=sys.stderr)
     sys.exit(1)
 
+is_auto_continue = os.environ.get("TH_AUTO_CONTINUE") == "1"
 is_handoff = should_prepare_handoff(
     task_key=task_key,
     sessions=registry.sessions(),
-    terminal=(task_dir / "DONE").is_file() or (task_dir / "FAILED").is_file(),
-    context_exit_requested=(task_dir / "context_exit_requested.json").is_file() or force_fresh,
+    terminal=not is_auto_continue and ((task_dir / "DONE").is_file() or (task_dir / "FAILED").is_file()),
+    context_exit_requested=is_auto_continue or (task_dir / "context_exit_requested.json").is_file() or force_fresh,
 )
 
 worklog_path = str((task_dir / "WORKLOG.md").resolve())
@@ -528,6 +531,9 @@ usage_record() {
   fi
 }
 usage_record
+# These flags describe this launch only; child workers must not exempt their
+# own later launches from normal retry accounting.
+unset TH_AUTO_CONTINUE TH_ROLLOVER
 rm -f "$task_dir"/DONE "$task_dir"/FAILED "$task_dir"/FAILED.* "$task_dir"/.th_* \
   "$task_dir"/VERIFIED "$task_dir"/VERIFY_FAILED "$task_dir"/verify_result.json \
   "$task_dir"/verify_result.txt "$task_dir"/digest.md "$task_dir"/context_exit_requested.json

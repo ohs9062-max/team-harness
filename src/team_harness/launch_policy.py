@@ -130,6 +130,7 @@ def retry_attempts(task_dir: Path, watch_dir: Path) -> int:
     ledger = watch_dir / "usage.jsonl"
     if ledger.is_file():
         attempts = 0
+        matching_records = False
         try:
             for line in ledger.read_text(
                 encoding="utf-8", errors="replace"
@@ -147,12 +148,14 @@ def retry_attempts(task_dir: Path, watch_dir: Path) -> int:
                     matches = Path(value).expanduser().resolve() == target
                 except OSError:
                     matches = Path(value).expanduser() == target
-                attempts += int(matches)
+                if matches:
+                    matching_records = True
+                    attempts += int(not record.get("rollover", False))
         except OSError:
             attempts = 0
         # A ledger exists only after the first launch.  A malformed/empty one
         # must not hide a pre-ledger STATUS history.
-        if attempts:
+        if matching_records:
             return attempts
     try:
         return sum(
@@ -350,7 +353,11 @@ def check(
     max_retries = _retry_limit(actual_env)
     total_allowed = max_retries + 1
     retry_reason = actual_env.get("TH_RETRY_REASON", "").strip()
-    if attempts >= total_allowed and not retry_reason:
+    if (
+        attempts >= total_allowed
+        and not retry_reason
+        and actual_env.get("TH_AUTO_CONTINUE") != "1"
+    ):
         violations.append(
             Violation(
                 "retry_cap",

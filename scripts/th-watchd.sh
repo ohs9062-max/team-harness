@@ -163,7 +163,7 @@ handle_daemon_event() {
     멈춤|'긴 실행 대기') digest_event=stall ;;
     *) digest_event=unknown ;;
   esac
-  queue_digest "$task" "$digest_event"
+  [[ $event_type == 자동\ 계속 ]] || queue_digest "$task" "$digest_event"
 
   local jev_suffix="" jev_advice=""
   if [[ $event_type == 실패 && ${TEAM_HARNESS_JEV:-} != 0 ]]; then

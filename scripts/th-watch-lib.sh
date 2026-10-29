@@ -465,6 +465,9 @@ inspect_task_event() {
   # Failures take precedence over a stale DONE marker.
   # 1. 완료 판정 (단, 분리된 긴 job.pid가 아직 실행 중이면 인계만으로 최종 DONE 처리하지 않음)
   if [[ $terminal == DONE && $distinct_job_alive != 1 ]]; then
+    if [[ $marker_prefix == .th_daemon && $current_worker_alive == 1 ]]; then
+      return 0
+    fi
     # A worker may rewrite DONE while finishing its report.  Its presence,
     # rather than its mtime, defines this attempt's completion event; th-launch
     # removes .th_* markers before a genuinely new attempt.
@@ -473,11 +476,21 @@ inspect_task_event() {
       touch "$marker.done"
       local v_res
       if [[ $marker_prefix == .th_daemon ]]; then
+        rm -f "$task/VERIFIED" "$task/VERIFY_FAILED"
         [[ -f $task/verify.sh ]] && v_res="대기" || v_res="없음"
       else
         v_res=$(run_verification "$task")
       fi
       "$callback_fn" "$task" "완료" "완료" "$v_res" "$owner"
+    fi
+    if [[ $marker_prefix == .th_daemon && $current_worker_alive == 0 && -f $task/.th_digest.done && ! -f $marker.auto_continue ]] && \
+       [[ -f $task/VERIFIED || -f $task/VERIFY_FAILED ]]; then
+      local continue_event
+      continue_event=$(th_python -m team_harness.stop_policy "$task" "$watch_dir" "$owner") || continue_event=""
+      if [[ -n $continue_event ]]; then
+        [[ $continue_event == 자동\ 계속\ 소진* || $continue_event == 자동\ 계속\ 실패* ]] && touch "$marker.auto_continue"
+        "$callback_fn" "$task" "자동 계속" "$continue_event" "-" "$owner"
+      fi
     fi
     rm -f "$marker".handoff_wait.*
     return 0
@@ -485,11 +498,15 @@ inspect_task_event() {
 
   # 2. 실패 판정
   if [[ $terminal == FAILED ]]; then
+    if [[ $marker_prefix == .th_daemon && $current_worker_alive == 1 ]]; then
+      return 0
+    fi
     # Keep the STATUS-only → concrete FAILED-file escalation: it supplies a
     # real failure reason after an earlier provisional status notice.
     if [[ ! -f $marker.failed || $failed_file -nt $marker.failed ]]; then
       rm -f "$marker.done"
       touch "$marker.failed"
+      [[ $marker_prefix == .th_daemon ]] && rm -f "$task/VERIFIED" "$task/VERIFY_FAILED"
       local reason
       if [[ -f $failed_file ]]; then
         reason=$(tail -n 5 "$failed_file" 2>/dev/null | tr '\n' ' ')
@@ -497,6 +514,15 @@ inspect_task_event() {
         reason=$(status_failure_reason "$task/STATUS")
       fi
       "$callback_fn" "$task" "실패" "실패 — $reason" "-" "$owner"
+    fi
+    if [[ $marker_prefix == .th_daemon && $current_worker_alive == 0 && $distinct_job_alive != 1 && -f $task/.th_digest.failed && ! -f $marker.auto_continue ]] && \
+       [[ -f $task/VERIFIED || -f $task/VERIFY_FAILED ]]; then
+      local continue_event
+      continue_event=$(th_python -m team_harness.stop_policy "$task" "$watch_dir" "$owner") || continue_event=""
+      if [[ -n $continue_event ]]; then
+        [[ $continue_event == 자동\ 계속\ 소진* || $continue_event == 자동\ 계속\ 실패* ]] && touch "$marker.auto_continue"
+        "$callback_fn" "$task" "자동 계속" "$continue_event" "-" "$owner"
+      fi
     fi
     rm -f "$marker".handoff_wait.*
     return 0

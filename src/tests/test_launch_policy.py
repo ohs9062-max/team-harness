@@ -143,6 +143,27 @@ def test_retry_reason_overrides_cap_and_is_audited(tmp_path: Path) -> None:
     assert collect_overrides(env) == ["TH_RETRY_REASON=새 스텁으로 원인 분리"]
 
 
+def test_auto_continue_is_excluded_from_retry_limit(tmp_path: Path) -> None:
+    watch_dir = tmp_path / "watch"
+    task = _make_task(tmp_path, "auto_continue")
+    _launch_records(watch_dir, task, 3)
+    env = _base_env(tmp_path, TH_AUTO_CONTINUE="1")
+    assert check(task, "codex", "gpt-6.1-terra", "medium", watch_dir, env) == []
+    ledger = watch_dir / "usage.jsonl"
+    with ledger.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps({"v": 1, "task": str(task), "rollover": True}) + "\n")
+    violations = check(
+        task, "codex", "gpt-6.1-terra", "medium", watch_dir, _base_env(tmp_path)
+    )
+    assert "시도 3/3" in violations[0].message
+    ledger.write_text(json.dumps({"v": 1, "task": str(task), "rollover": True}) + "\n")
+    (task / "STATUS").write_text("2026-10-29 10:00:00 LAUNCH worker=codex\n" * 5)
+    assert (
+        check(task, "codex", "gpt-6.1-terra", "medium", watch_dir, _base_env(tmp_path))
+        == []
+    )
+
+
 def test_parallel_pass_when_below_limit_and_dead_pids_ignored(tmp_path: Path) -> None:
     watch_dir = tmp_path / "watch"
     watch_dir.mkdir()

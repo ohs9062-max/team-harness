@@ -45,8 +45,15 @@ def terminate_worker_group(pid: int) -> None:
         pass
 
 
-def relaunch_worker(task: Path, args: list[str], owner: Path) -> None:
+def relaunch_worker(
+    task: Path, args: list[str], owner: Path, *, auto_continue: bool = False
+) -> None:
     """Use th-launch's existing STATUS recovery summary for the same task."""
     launcher = Path(__file__).resolve().parents[2] / "scripts" / "th-launch.sh"
     env = dict(os.environ, TH_ROLLOVER="1", TH_NO_DAEMON="1", TH_WORKSPACE=str(owner))
+    if auto_continue:
+        env["TH_AUTO_CONTINUE"] = "1"
+        session_file = task / ".th_session"
+        if session_file.is_file():
+            env["ORCA_PANE_KEY"] = session_file.read_text(encoding="utf-8").strip()
     subprocess.run([str(launcher), *args], env=env, check=True, capture_output=True)

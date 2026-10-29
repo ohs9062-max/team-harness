@@ -2038,7 +2038,7 @@ def test_th_watchd_does_not_auto_retry_unsafe_or_limited_cases(
         status = "2026-10-23 10:00:00 running\n"
     (task_dir / "STATUS").write_text(status, encoding="utf-8")
     if condition == "failed":
-        (task_dir / "FAILED").write_text("failed\n", encoding="utf-8")
+        (task_dir / "FAILED").write_text("permission denied\n", encoding="utf-8")
     (task_dir / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
     (task_dir / ".th_worktree").write_text(str(task_dir), encoding="utf-8")
     (task_dir / "worker.pid").write_text("999999\n", encoding="utf-8")
