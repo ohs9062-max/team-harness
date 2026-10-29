@@ -33,6 +33,8 @@ from team_harness.coordinator.system_prompt import DEFAULT_WORKER_FOOTER
 from team_harness.decisions.advisor import advise_failure
 from team_harness.decisions.advisor import advise_model_tier
 from team_harness.protocol.worker_output import extract_final_text
+from team_harness.rollover_paths import RolloverMonitor
+from team_harness.rollover_paths import wait_with_rollover
 from team_harness.stop_policy import classify_stop_text
 from team_harness.stop_policy import continuation_prompt
 from team_harness.tracking.models import AgentRecord
@@ -43,6 +45,7 @@ from team_harness.worker_context import ContextRequest
 from team_harness.worker_context import dispatch as dispatch_worker_context
 from team_harness.worker_context import measure_agent_context
 from team_harness.worker_context import RegistryConflictError
+from team_harness.worker_context import rollover_decision
 from team_harness.worker_context import WorkerContextRegistry
 
 if TYPE_CHECKING:
@@ -86,6 +89,7 @@ SPAWN_AGENT_KEYS = {
     "state_responsibility",
     "task_key",
     "follow_up",
+    "context_budget",
 }
 
 _READ_NEW_TRUNCATION_TEMPLATE = (
@@ -1191,6 +1195,11 @@ def spawn_agent_schema(
                         "minLength": 1,
                         "description": "Immutable worker-context key; enables shared rollover policy.",
                     },
+                    "context_budget": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Worker input context budget; defaults to the configured soft cap.",
+                    },
                     "follow_up": {
                         "type": "string",
                         "enum": ["short", "normal"],
@@ -1356,6 +1365,15 @@ def _confirm_worker_context_spawn(
     return context_session_id
 
 
+def _context_budget(kwargs: Mapping[str, object]) -> int | None:
+    value = kwargs.get("context_budget")
+    return (
+        value
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0
+        else None
+    )
+
+
 def _install_continuation(
     state: AgentState,
     *,
@@ -1367,8 +1385,28 @@ def _install_continuation(
     effort: str | None,
     flags: list[str] | None,
     agents: list[str] | None,
+    manager: "AgentManager | None" = None,
+    task_key: str | None = None,
+    worker_output_dir: Path | None = None,
+    context_budget: int | None = None,
 ) -> None:
     count = 0
+    monitor = RolloverMonitor(
+        worker_output_dir or run_dir,
+        context_budget or config.worker_context.soft_cap_tokens,
+        rollover_decision,
+    )
+    if (
+        manager is not None
+        and task_key
+        and config.worker_context.enabled
+        and not config.worker_context.agent_disabled(state.agent_type)
+    ):
+
+        async def wait_for_boundary(current: AgentState) -> bool:
+            return await wait_with_rollover(manager, current, monitor)
+
+        state.rollover_wait = wait_for_boundary
 
     async def continue_if_needed(current: AgentState) -> bool:
         nonlocal count
@@ -1383,21 +1421,24 @@ def _install_continuation(
             else ""
         )
         reason = extract_final_text(stdout)
-        if (
+        forced = current.rollover_triggered
+        current.rollover_triggered = False
+        if not forced and (
             current.status == "killed"
             or classify_agent_failure(stderr_text=stderr, stdout_text=stdout)
             is not None
             or classify_stop_text(reason) != "self_stop"
         ):
             return False
-        if count >= 2:
+        if not forced and count >= 2:
             current.continuation_exhausted = True
             current.failure_classification = {
                 "category": "auto_continue_exhausted",
                 "detail": "자동 계속 소진 — 작업 분할 필요",
             }
             return False
-        count += 1
+        if not forced:
+            count += 1
         sid = (
             extract_session_id(current.template, stdout.encode(), current.session_id)
             if current.template
@@ -1409,7 +1450,8 @@ def _install_continuation(
             else None
         )
         resume = bool(
-            sid
+            not forced
+            and sid
             and measurement
             and measurement.measurement_status == "measured"
             and measurement.input_tokens is not None
@@ -1418,7 +1460,9 @@ def _install_continuation(
         result = await spawner.spawn(
             agent_id=current.id,
             agent_type=current.agent_type,
-            prompt=continuation_prompt(full_prompt, reason, count),
+            prompt=monitor.prompt(full_prompt)
+            if forced
+            else continuation_prompt(full_prompt, reason, count),
             cwd=Path(current.cwd),
             config=config,
             log_dir=run_dir,
@@ -1434,6 +1478,8 @@ def _install_continuation(
         )
         current.proc, current.pgid = result.proc, result.pgid
         current.session_id = result.generated_uuid or (sid if resume else None)
+        current.pre_generated_uuid = result.generated_uuid
+        current.template = result.template
         return True
 
     state.continuation = continue_if_needed
@@ -1634,6 +1680,10 @@ async def spawn_agent(**kwargs: object) -> str:
         effort=effort,
         flags=flags,
         agents=agents,
+        manager=manager,
+        task_key=task_key,
+        worker_output_dir=assignment_path.parent,
+        context_budget=_context_budget(kwargs),
     )
     manager.register(state=state)
     record = AgentRecord(
@@ -2264,6 +2314,10 @@ def build_agent_tool_bindings(
             effort=effort_val,
             flags=flags,
             agents=agents_arg,
+            manager=manager,
+            task_key=task_key,
+            worker_output_dir=assignment_path.parent,
+            context_budget=_context_budget(kwargs),
         )
         manager.register(state=state)
         record = AgentRecord(

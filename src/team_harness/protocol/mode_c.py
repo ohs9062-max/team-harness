@@ -62,6 +62,8 @@ from team_harness.protocol.worktree import changed_files
 from team_harness.protocol.worktree import checkpoint_worktree
 from team_harness.protocol.worktree import create_worktree
 from team_harness.protocol.worktree import diff_worktree
+from team_harness.rollover_paths import RolloverMonitor
+from team_harness.rollover_paths import wait_with_rollover
 from team_harness.stop_policy import classify_stop_text
 from team_harness.stop_policy import continuation_prompt
 from team_harness.tracking.models import DecisionRecord
@@ -71,6 +73,7 @@ from team_harness.worker_context import ContextRequest
 from team_harness.worker_context import decide
 from team_harness.worker_context import measure_agent_context
 from team_harness.worker_context import registry_path_for_workspace
+from team_harness.worker_context import rollover_decision
 from team_harness.worker_context import WorkerContextRegistry
 
 
@@ -272,9 +275,14 @@ class TeamHarnessAgentRunner:
         current_prompt = prompt
         current_follow_up = follow_up
         rollover_generation = 0
-        max_rollovers = 5
+        max_rollovers = 3
         auto_continues = 0
         auto_resume_sid: str | None = None
+        monitor = RolloverMonitor(
+            Path(cwd),
+            context_budget or context_settings.soft_cap_tokens,
+            rollover_decision,
+        )
 
         context_registry = (
             WorkerContextRegistry(registry_path_for_workspace(cwd))
@@ -453,6 +461,8 @@ class TeamHarnessAgentRunner:
                 if context_registry
                 else None,
                 context_session_id=context_session_id,
+                template=spawn_result.template,
+                pre_generated_uuid=spawn_result.generated_uuid,
             )
             self.manager.register(agent_state)
             if self.tmux_viewer is not None:
@@ -461,8 +471,16 @@ class TeamHarnessAgentRunner:
                 )
 
             timed_out = False
+            forced_rollover = False
             try:
-                await asyncio.wait_for(spawn_result.proc.wait(), timeout=timeout_sec)
+                if use_context:
+                    forced_rollover = await wait_with_rollover(
+                        self.manager, agent_state, monitor, timeout_sec
+                    )
+                else:
+                    await asyncio.wait_for(
+                        spawn_result.proc.wait(), timeout=timeout_sec
+                    )
             except TimeoutError:
                 timed_out = True
                 if spawn_result.pgid:
@@ -607,7 +625,8 @@ class TeamHarnessAgentRunner:
                     }
 
                 if (
-                    success
+                    not forced_rollover
+                    and success
                     and boundary_decision.action == "rollover"
                     and rollover_generation < max_rollovers
                 ):
@@ -652,6 +671,7 @@ class TeamHarnessAgentRunner:
                     else:
                         is_rollover = True
                         rollover_generation += 1
+                        monitor.count = rollover_generation
                         current_follow_up = "normal"
                         if state_mgr is not None:
                             state_mgr.append_event(
@@ -667,6 +687,11 @@ class TeamHarnessAgentRunner:
                             "WORKLOG.md의 체크포인트와 다음 할 일부터 작업을 이어서 계속 진행하십시오."
                         )
 
+            if forced_rollover:
+                current_prompt = monitor.prompt(prompt)
+                current_follow_up = "normal"
+                rollover_generation += 1
+                continue
             if is_rollover:
                 continue
 
@@ -711,6 +736,13 @@ class TeamHarnessAgentRunner:
                     continue
                 success = False
                 error_msg = "자동 계속 소진 — 작업 분할 필요"
+
+            if (
+                agent_state.failure_classification
+                and agent_state.failure_classification.get("category") == "split_needed"
+            ):
+                error_msg = "작업 분할 필요"
+                classification = agent_state.failure_classification
 
             if self.verbose:
                 print(

@@ -65,6 +65,8 @@ class AgentState:
     context_parked: bool = False
     codex_sessions_root: Path | None = None
     continuation: Callable[["AgentState"], Awaitable[bool]] | None = None
+    rollover_wait: Callable[["AgentState"], Awaitable[bool]] | None = None
+    rollover_triggered: bool = False
     completion_task: asyncio.Task[int] | None = None
     continuation_exhausted: bool = False
 
@@ -230,7 +232,11 @@ class AgentManager:
 
     async def _wait_continuations(self, state: AgentState) -> int:
         while True:
-            exit_code = await state.proc.wait()
+            if state.rollover_wait is not None:
+                state.rollover_triggered = await state.rollover_wait(state)
+                exit_code = state.proc.returncode or 0
+            else:
+                exit_code = await state.proc.wait()
             if state.status == "killed" or state.continuation is None:
                 break
             if not await state.continuation(state):
