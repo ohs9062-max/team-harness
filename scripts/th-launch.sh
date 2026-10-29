@@ -106,7 +106,7 @@ quota_lock="$watch_dir/quota_lock.$worker_type"
 if [[ -f $quota_lock && ${TH_IGNORE_QUOTA_LOCK:-0} != 1 ]]; then
   lock_text=$(<"$quota_lock")
   lock_expiry=""
-  [[ $lock_text =~ (^|[[:space:]])expires=([0-9]+) ]] && lock_expiry=${BASH_REMATCH[2]}
+  [[ $lock_text =~ (^|[[:space:]])expires=([0-9]+)($|[[:space:]]) ]] && lock_expiry=${BASH_REMATCH[2]}
   if [[ -z $lock_expiry || $lock_expiry -gt $(date +%s) ]]; then
     echo "쿼터 잠금으로 $worker_type 실행 거부: $lock_text"
     echo "쿼터가 풀렸으면 rm '$quota_lock' 후 다시 실행"

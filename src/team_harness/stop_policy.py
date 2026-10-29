@@ -8,6 +8,7 @@ import re
 import subprocess
 from typing import Literal
 
+from team_harness.worker_digest import quota_lock_active
 from team_harness.worker_relaunch import launch_arguments
 from team_harness.worker_relaunch import relaunch_worker
 
@@ -112,7 +113,7 @@ def continue_stopped_task(task: Path, watch_dir: Path, owner: Path) -> str:
             args = launch_arguments(task, watch_dir)
         except (FileNotFoundError, ValueError):
             return ""
-        if (watch_dir / f"quota_lock.{args[1]}").exists():
+        if quota_lock_active(watch_dir / f"quota_lock.{args[1]}"):
             return ""
         count_path = task / ".auto_continue_count"
         count = int(count_path.read_text().strip()) if count_path.exists() else 0

@@ -25,6 +25,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 from typing import Any
 from typing import Iterator
 
@@ -43,6 +44,18 @@ GENERATED = {
     "VERIFIED",
     "VERIFY_FAILED",
 }
+
+
+def quota_lock_active(path: Path) -> bool:
+    """Match th-launch: an expired capacity lock no longer blocks launches."""
+    try:
+        contents = path.read_text(encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    match = re.search(r"(?:^|\s)expires=(\d+)(?=\s|$)", contents)
+    return match is None or int(match.group(1)) > time.time()
 
 
 def read(path: Path) -> str:
@@ -494,7 +507,7 @@ def summarize(task: Path, verification: str) -> str:
     watch = Path(
         os.environ.get("TH_WATCH_DIR", str(Path.home() / ".team-harness/watch"))
     )
-    if (watch / f"quota_lock.{worker}").exists():
+    if quota_lock_active(watch / f"quota_lock.{worker}"):
         return ""
     prompt = (
         FIXED_PROMPT

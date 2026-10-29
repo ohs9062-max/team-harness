@@ -3264,6 +3264,18 @@ def test_retired_task_is_registered_again_on_launch(test_env: dict):
     old = time.time() - 90000
     for path in task.iterdir():
         os.utime(path, (old, old))
+    subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; watch_task_signature "$2" > "$2/.th_daemon.settled"',
+            "bash",
+            str(SCRIPTS_DIR / "th-watch-lib.sh"),
+            str(task),
+        ],
+        check=True,
+    )
+    os.utime(task / ".th_daemon.settled", (old, old))
     watch = test_env["watch_dir"]
     (watch / "tasks.txt").write_text(f"{task}\n")
     retire = subprocess.run(

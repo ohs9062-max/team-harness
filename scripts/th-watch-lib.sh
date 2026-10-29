@@ -30,6 +30,30 @@ th_jev() {
   return 0
 }
 
+watch_quota_lock_active() {
+  local file=$1 lock_text expiry
+  [[ -e $file ]] || return 1
+  [[ -r $file ]] || return 0
+  lock_text=$(<"$file")
+  expiry=""
+  [[ $lock_text =~ (^|[[:space:]])expires=([0-9]+)($|[[:space:]]) ]] && expiry=${BASH_REMATCH[2]}
+  [[ -z $expiry || $expiry -gt $(date +%s) ]]
+}
+
+watch_task_signature() {
+  local task=$1 file files=()
+  for file in "$task/DONE" "$task/FAILED" "$task"/FAILED.* "$task/STATUS" \
+    "$task/task.md" "$task/verify.sh" "$task/VERIFIED" "$task/VERIFY_FAILED" \
+    "$task/KILLED" "$task/job.pid" "$task/worker.pid" \
+    "$task/.th_daemon.done" "$task/.th_daemon.failed" \
+    "$task/.th_digest.done" "$task/.th_digest.failed" "$task/.th_context.json" \
+    "$task/.th_session" "$task/codex.log" "$task/agy.log" "$task/claude.log"; do
+    [[ ! -e $file ]] || files+=("$file")
+  done
+  (( ${#files[@]} )) || return 1
+  stat -c '%n:%s:%y:%z' -- "${files[@]}"
+}
+
 watch_task_settled() {
   local task=$1 cutoff=${2:-} marker file pid terminal
   if [[ -f $task/FAILED ]]; then
@@ -37,14 +61,20 @@ watch_task_settled() {
   elif [[ -f $task/DONE ]]; then
     terminal=done
     for file in "$task"/FAILED.*; do [[ ! -f $file ]] || return 1; done
+  elif [[ -f $task/.th_daemon.dead ]] || compgen -G "$task/.th_daemon.handoff_stall.*" >/dev/null; then
+    terminal=""
   else
     return 1
   fi
-  [[ -f $task/.th_daemon.$terminal && -f $task/.th_digest.$terminal ]] || return 1
-  [[ -f $task/VERIFIED || -f $task/VERIFY_FAILED ]] || return 1
+  if [[ -n $terminal ]]; then
+    [[ -f $task/.th_daemon.$terminal && -f $task/.th_digest.$terminal ]] || return 1
+    [[ -f $task/VERIFIED || -f $task/VERIFY_FAILED ]] || return 1
+  fi
   marker="$task/.th_daemon.settled"
-  [[ -f $marker ]] || marker="$task/.th_daemon.auto_continue"
   [[ -f $marker && ! -e $task/context_exit_requested.json ]] || return 1
+  local signature
+  signature=$(watch_task_signature "$task") || return 1
+  [[ $(<"$marker") == "$signature" ]] || return 1
   for file in "$task"/.th_daemon.handoff_wait.*; do [[ ! -e $file ]] || return 1; done
   for file in "$task/worker.pid" "$task/job.pid"; do
     [[ -e $file ]] || continue
@@ -392,7 +422,7 @@ PY
 
   local worker model effort
   IFS=$'\t' read -r worker model effort <<< "$launch_meta"
-  [[ -f $watch_dir/quota_lock.$worker ]] && return 1
+  watch_quota_lock_active "$watch_dir/quota_lock.$worker" && return 1
 
   local max_retries=${TH_MAX_RETRIES:-2}
   [[ $max_retries =~ ^[0-9]+$ ]] || max_retries=2
@@ -444,7 +474,21 @@ PY
 inspect_task_event() {
   local task=$1 watch_dir=$2 marker_prefix=$3 stall_sec=$4 target_workspace=$5 callback_fn=$6
   [[ -n $task && -d $task ]] || return 0
-  local marker="$task/$marker_prefix"
+  local marker="$task/$marker_prefix" initial_signature=""
+  if [[ $marker_prefix == .th_daemon ]]; then
+    initial_signature=$(watch_task_signature "$task")
+    if [[ -f $marker.settled && $(<"$marker.settled") != "$initial_signature" ]]; then
+      rm -f "$marker.settled" "$marker.auto_continue"
+    elif [[ ! -f $marker.settled && -f $marker.auto_continue ]]; then
+      local changed_file
+      for changed_file in "$task/DONE" "$task/FAILED" "$task"/FAILED.* "$task/STATUS" "$task/task.md" "$task/verify.sh" "$task/VERIFIED" "$task/VERIFY_FAILED" "$task/worker.pid" "$task/job.pid"; do
+        if [[ -e $changed_file && $changed_file -nt $marker.auto_continue ]]; then
+          rm -f "$marker.auto_continue"
+          break
+        fi
+      done
+    fi
+  fi
 
   local owner owner_source
   owner=$(cat "$task/.th_owner" 2>/dev/null || true)
@@ -472,7 +516,7 @@ inspect_task_event() {
       [[ -f $cand ]] || continue
       log_is_from_current_worker "$task" "$cand" || continue
       local lock="$watch_dir/quota_lock.$(basename "$cand" .log)"
-      [[ -f $lock || -f $task/DONE || -f $task/FAILED ]] && continue
+      { watch_quota_lock_active "$lock" || [[ -f $task/DONE || -f $task/FAILED ]]; } && continue
       local qline
       qline=$(quota_error_line "$cand")
       if [[ -n $qline ]]; then
@@ -568,12 +612,29 @@ inspect_task_event() {
     fi
     if [[ $marker_prefix == .th_daemon && $current_worker_alive == 0 && -f $task/.th_digest.done && ! -f $marker.auto_continue ]] && \
        [[ -f $task/VERIFIED || -f $task/VERIFY_FAILED ]]; then
-      local continue_event
+      local continue_event before_signature after_signature
+      before_signature=$(watch_task_signature "$task")
+      rm -f "$marker.settled"
       continue_event=$(th_python -m team_harness.stop_policy "$task" "$watch_dir" "$owner") || continue_event=""
       if [[ -n $continue_event ]]; then
         [[ $continue_event == 자동\ 계속\ 소진* || $continue_event == 자동\ 계속\ 실패* ]] && touch "$marker.auto_continue"
         "$callback_fn" "$task" "자동 계속" "$continue_event" "-" "$owner"
       fi
+      if [[ ( -z $ctx_event || $ctx_event == none ) && ! -e $task/context_exit_requested.json ]] && [[ -f $marker.settled || $continue_event == 자동\ 계속\ 소진* || $continue_event == 자동\ 계속\ 실패* ]]; then
+        after_signature=$(watch_task_signature "$task")
+        if [[ -n $before_signature && $before_signature == "$after_signature" ]]; then
+          printf '%s\n' "$after_signature" > "$marker.settled"
+        else
+          rm -f "$marker.settled"
+        fi
+      else
+        rm -f "$marker.settled"
+      fi
+    fi
+    if [[ ( -z $ctx_event || $ctx_event == none ) && $marker_prefix == .th_daemon && -f $marker.auto_continue && -f $task/.th_digest.done ]] && [[ -f $task/VERIFIED || -f $task/VERIFY_FAILED ]] && [[ ! -e $task/context_exit_requested.json ]]; then
+      local legacy_signature
+      legacy_signature=$(watch_task_signature "$task")
+      [[ -z $initial_signature || $initial_signature != "$legacy_signature" ]] || printf '%s\n' "$legacy_signature" > "$marker.settled"
     fi
     rm -f "$marker".handoff_wait.*
     return 0
@@ -600,12 +661,29 @@ inspect_task_event() {
     fi
     if [[ $marker_prefix == .th_daemon && $current_worker_alive == 0 && $distinct_job_alive != 1 && -f $task/.th_digest.failed && ! -f $marker.auto_continue ]] && \
        [[ -f $task/VERIFIED || -f $task/VERIFY_FAILED ]]; then
-      local continue_event
+      local continue_event before_signature after_signature
+      before_signature=$(watch_task_signature "$task")
+      rm -f "$marker.settled"
       continue_event=$(th_python -m team_harness.stop_policy "$task" "$watch_dir" "$owner") || continue_event=""
       if [[ -n $continue_event ]]; then
         [[ $continue_event == 자동\ 계속\ 소진* || $continue_event == 자동\ 계속\ 실패* ]] && touch "$marker.auto_continue"
         "$callback_fn" "$task" "자동 계속" "$continue_event" "-" "$owner"
       fi
+      if [[ ( -z $ctx_event || $ctx_event == none ) && ! -e $task/context_exit_requested.json ]] && [[ -f $marker.settled || $continue_event == 자동\ 계속\ 소진* || $continue_event == 자동\ 계속\ 실패* ]]; then
+        after_signature=$(watch_task_signature "$task")
+        if [[ -n $before_signature && $before_signature == "$after_signature" ]]; then
+          printf '%s\n' "$after_signature" > "$marker.settled"
+        else
+          rm -f "$marker.settled"
+        fi
+      else
+        rm -f "$marker.settled"
+      fi
+    fi
+    if [[ ( -z $ctx_event || $ctx_event == none ) && $marker_prefix == .th_daemon && $distinct_job_alive != 1 && -f $marker.auto_continue && -f $task/.th_digest.failed ]] && [[ -f $task/VERIFIED || -f $task/VERIFY_FAILED ]] && [[ ! -e $task/context_exit_requested.json ]]; then
+      local legacy_signature
+      legacy_signature=$(watch_task_signature "$task")
+      [[ -z $initial_signature || $initial_signature != "$legacy_signature" ]] || printf '%s\n' "$legacy_signature" > "$marker.settled"
     fi
     rm -f "$marker".handoff_wait.*
     return 0
@@ -683,6 +761,12 @@ inspect_task_event() {
     else
       watch_event_log "$watch_dir" "$task" "job.pid(${job_pid:-?}) 인계 없음 사건은 이미 통지됨"
     fi
+    if [[ $marker_prefix == .th_daemon && ! -e $task/context_exit_requested.json ]]; then
+      rm -f "$wait_marker"
+      local final_signature
+      final_signature=$(watch_task_signature "$task")
+      [[ -z $initial_signature || $initial_signature != "$final_signature" ]] || printf '%s\n' "$final_signature" > "$marker.settled"
+    fi
     return 0
   fi
 
@@ -730,6 +814,11 @@ inspect_task_event() {
     if [[ ! -f $marker.dead ]]; then
       touch "$marker.dead"
       "$callback_fn" "$task" "중단" "중단 — 실행 중인 프로세스 없음, DONE/FAILED 없음$(open_step_detail "$task")" "-" "$owner"
+    fi
+    if [[ $marker_prefix == .th_daemon && -z $ctx_event && ! -e $task/context_exit_requested.json ]]; then
+      local final_signature
+      final_signature=$(watch_task_signature "$task")
+      [[ -z $initial_signature || $initial_signature != "$final_signature" ]] || printf '%s\n' "$final_signature" > "$marker.settled"
     fi
     return 0
   fi

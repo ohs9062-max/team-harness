@@ -359,3 +359,31 @@ async def test_direct_continuation_shared_wait_and_limit(
     assert await asyncio.gather(manager.wait_one("a"), manager.wait_one("a")) == [1, 1]
     assert len(calls) == 3
     assert state.continuation_exhausted and state.status == "failed"
+
+
+def test_expired_capacity_lock_allows_continue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "FAILED").write_text("INCOMPLETE")
+    (tmp_path / "task.md").write_text("kind: code\n")
+    (tmp_path / "quota_lock.codex").write_text("capacity | expires=1\n")
+    monkeypatch.setattr(stop_policy, "launch_arguments", lambda *args: ["t", "codex"])
+    calls: list[int] = []
+    monkeypatch.setattr(
+        stop_policy, "relaunch_worker", lambda *a, **kw: calls.append(1)
+    )
+    assert "자동 계속(" in stop_policy.continue_stopped_task(
+        tmp_path, tmp_path, tmp_path
+    )
+    assert calls == [1]
+
+
+def test_future_capacity_lock_prevents_continue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "FAILED").write_text("INCOMPLETE")
+    (tmp_path / "task.md").write_text("kind: code\n")
+    (tmp_path / "quota_lock.codex").write_text("capacity | expires=9999999999\n")
+    monkeypatch.setattr(stop_policy, "launch_arguments", lambda *args: ["t", "codex"])
+    assert stop_policy.continue_stopped_task(tmp_path, tmp_path, tmp_path) == ""
+    assert not (tmp_path / ".auto_continue_count").exists()
