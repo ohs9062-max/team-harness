@@ -41,6 +41,49 @@ def denied(value: dict[str, object]) -> bool:
     return isinstance(output, dict) and output.get("permissionDecision") == "deny"
 
 
+@pytest.mark.parametrize(
+    ("template", "blocked"),
+    [
+        ("cat >> design/decisions.md <<'EOF'\n{target}로 옮긴다\nEOF\n", False),
+        (
+            "*** Begin Patch\n*** Update File: design/decisions.md\n+{target}\n*** End Patch\n",
+            False,
+        ),
+        ("*** Begin Patch\n*** Add File: {target}\n+text\n*** End Patch\n", True),
+        (
+            "*** Begin Patch\n*** Update File: {target}\n-old\n+new\n*** End Patch\n",
+            True,
+        ),
+        ("*** Begin Patch\n*** Delete File: {target}\n*** End Patch\n", True),
+        (
+            "*** Begin Patch\n*** Update File: safe\n*** Move to: {target}\n*** End Patch\n",
+            True,
+        ),
+        ("cat > {target} <<EOF\ntext\nEOF\n", True),
+        ("python3 - <<PY\nopen('{target}')\nPY\n", True),
+        ("cat <<-EOF\n\t{target}\n\tEOF\necho safe\n", False),
+        ("tee {target} <<'END'\ntext\nEND\n", True),
+        ("bash <<EOF\ncat {target}\nEOF\n", True),
+        ("cat <<EOF\ntext\nEOF\ncat {target}\n", True),
+        (
+            "apply_patch <<'PATCH'\n*** Begin Patch\n*** Update File: safe\n+{target}\n*** End Patch\nPATCH\n",
+            False,
+        ),
+        (
+            "apply_patch <<'PATCH'\n*** Begin Patch\n*** Update File: {target}\n+x\n*** End Patch\nPATCH\n",
+            True,
+        ),
+    ],
+)
+def test_literal_bodies_and_patch_headers(
+    tmp_path: Path, template: str, blocked: bool
+) -> None:
+    target = tmp_path / "other" / ("." + "claude") / "archive"
+    command = template.format(target=target)
+    payload: dict[str, object] = {"tool_input": {"command": command}}
+    assert denied(run_guard(tmp_path, payload, TH_ROLE="worker")) is blocked
+
+
 def test_no_immediate_failed_advice_in_source_or_scripts() -> None:
     forbidden = "FAILED에 이유를" + " 쓰세요"
     for root in (REPO / "src", REPO / "scripts"):

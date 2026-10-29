@@ -114,13 +114,69 @@ _PATH_TOKEN = re.compile(
     r"(?:~[/\\][^\s'\";|&]+|/[^\s'\";|&]+|(?:\./)?(?:\.claude|_outputs|outputs/runs|skills)[/\\][^\s'\";|&]+|(?:\.\.?[/\\])+(?:[^\s'\";|&/\\]+[/\\])*(?:\.claude|_outputs|outputs[/\\]runs|skills)[/\\][^\s'\";|&]+)"
 )
 
+_HEREDOC = re.compile(r"(?<!<)<<(-?)[ \t]*(?:'([^'\n]+)'|\"([^\"\n]+)\"|([\w.-]+))")
+_EXECUTOR = re.compile(
+    r"(?:^|[\s;|&(])(?:\S*/)?(?:ba)?sh(?:\s|$)|(?:^|[\s;|&(])(?:\S*/)?(?:python3?|node)(?:\s|$)"
+)
+_PATCH_HEADER = re.compile(
+    r"^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+)$"
+)
+
+
+def _command_text_and_patch_paths(command: str) -> tuple[str, list[str]]:
+    """Exclude literal input bodies while retaining executable and patch paths."""
+    lines = command.splitlines(keepends=True)
+    kept: list[str] = []
+    patch_paths: list[str] = []
+    pending: list[tuple[str, bool, bool]] = []
+    in_patch = False
+    for line in lines:
+        stripped = line.rstrip("\r\n")
+        if pending:
+            delimiter, tabs, executable = pending[0]
+            if (stripped.lstrip("\t") if tabs else stripped) == delimiter:
+                pending.pop(0)
+                continue
+            if not executable:
+                if stripped == "*** Begin Patch":
+                    in_patch = True
+                elif in_patch and stripped == "*** End Patch":
+                    in_patch = False
+                elif in_patch and (header := _PATCH_HEADER.match(stripped)):
+                    patch_paths.append(header.group(1))
+                continue
+            kept.append(line)
+            continue
+        if stripped == "*** Begin Patch":
+            in_patch = True
+            continue
+        if in_patch:
+            if stripped == "*** End Patch":
+                in_patch = False
+            elif header := _PATCH_HEADER.match(stripped):
+                patch_paths.append(header.group(1))
+            continue
+        kept.append(line)
+        if not pending:
+            for match in _HEREDOC.finditer(line):
+                prefix = line[: match.start()]
+                pending.append(
+                    (
+                        match.group(2) or match.group(3) or match.group(4),
+                        bool(match.group(1)),
+                        bool(_EXECUTOR.search(prefix)),
+                    )
+                )
+    return "".join(kept), patch_paths
+
 
 def coordinator_path_pairs_in_command(
     command: str, *, cwd: str | Path | None = None
 ) -> list[tuple[Path, Path]]:
     """Return cleaned paths alongside their original spelling for allowances."""
-    pairs = []
-    for token in _PATH_TOKEN.findall(command):
+    command_text, patch_paths = _command_text_and_patch_paths(command)
+    pairs = [(_resolved(path, cwd), _resolved(path, cwd)) for path in patch_paths]
+    for token in _PATH_TOKEN.findall(command_text):
         raw = re.split(r"\\[ntr]", token, maxsplit=1)[0]
         clean = raw
         while clean and clean[-1] in ".,;:!?)]}>'\"`\\":
