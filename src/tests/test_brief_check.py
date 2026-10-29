@@ -3,6 +3,39 @@ from pathlib import Path
 from team_harness.brief_check import check_brief_text
 
 FIXTURES = Path(__file__).parent / "fixtures" / "brief_check"
+DATA = Path(__file__).parent / "data" / "brief_check"
+
+
+def test_real_briefs():
+    for task in sorted(DATA.glob("good_*")):
+        assert not [
+            f
+            for f in check_brief_text((task / "task.md").read_text(), task)
+            if f.level == "error"
+        ], task
+    task = DATA / "warn_rollover_fix"
+    findings = check_brief_text((task / "task.md").read_text(), task)
+    assert not [f for f in findings if f.level == "error"]
+    assert any(f.rule == "foreign_path" and f.level == "warn" for f in findings)
+    task = DATA / "bad_done_linger"
+    assert any(
+        f.rule == "foreign_path" and f.level == "error" and f.line == 25
+        for f in check_brief_text((task / "task.md").read_text(), task)
+    )
+
+
+def test_path_severity_and_shell_syntax():
+    findings = check_brief_text(
+        "## 배경\n`_outputs/other/report` 기록\n## 읽을 문서\n`_outputs/other/report`\n## 할 일\nread `_outputs/other/report`\n읽지 않는다 `_outputs/other/report`",
+        Path("/tmp/current"),
+    )
+    assert [(f.level, f.line) for f in findings if f.rule == "foreign_path"] == [
+        ("warn", 2),
+        ("error", 4),
+        ("error", 6),
+    ]
+    shell = "## 검수\n```bash\nS=foo && for d in $S/*; do ! true || { echo fail; exit 1; }; done && test ok && [[ -n $S ]]\n```"
+    assert not [f for f in check_brief_text(shell) if f.rule == "missing_command"]
 
 
 def rules(text: str) -> set[str]:

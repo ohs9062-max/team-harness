@@ -675,9 +675,11 @@ Codex의 sleep_tool과 multi_agent 기능을 끄고 PreToolUse/PostToolUse 가�
 
 워커 실행 전에 지시서의 위험한 경로와 검수 명령을 검사한다. 불확실한 품질 문제는 경고한다.
 
+2026-10-29 개정: 외부 경로는 읽기 지시만 오류로 처리하고 설명은 경고하며 셸 문법과 내장 명령은 누락 명령에서 제외한다.
+
 | 규칙 | 수준 | 내용 |
 | --- | --- | --- |
-| foreign_path | error | 다른 작업 폴더와 보호된 watch·기록 경로 |
+| foreign_path | error/warn | 외부 경로 읽기 지시는 오류, 기타 언급은 경고 |
 | missing_command | error | 검수 명령이 PATH에 없음 |
 | weak_acceptance | warn | 커밋 로그만 검사 |
 | escape_phrase | warn | 부분 완료를 허용하는 표현 |

@@ -41,6 +41,8 @@ def check_brief_text(text: str, task_dir: Path | None = None) -> list[Finding]:
     acceptance = False
     in_acceptance = False
     in_bash = False
+    in_read_section = False
+    in_design = False
     commands: list[str] = []
     own = task_dir.name if task_dir else None
     for i, line in enumerate(lines, 1):
@@ -48,6 +50,8 @@ def check_brief_text(text: str, task_dir: Path | None = None) -> list[Finding]:
             continue
         if re.match(r"^##\s+", line):
             in_acceptance = bool(re.match(r"^##\s+검수\s*$", line))
+            in_read_section = bool(re.match(r"^##\s+읽을\s*문서(?:\s|$|\()", line))
+            in_design = bool(re.match(r"^##\s+확정\s*설계", line))
             acceptance |= in_acceptance
             in_bash = False
         if in_acceptance and re.match(r"^```(?:bash|sh)\s*$", line):
@@ -65,6 +69,8 @@ def check_brief_text(text: str, task_dir: Path | None = None) -> list[Finding]:
                 except ValueError:
                     continue
                 while words and re.match(r"^[A-Za-z_][A-Za-z_0-9]*=", words[0]):
+                    words.pop(0)
+                while words and words[0] in {"{", "}", "(", ")", "!"}:
                     words.pop(0)
                 if not words or words[0] in {
                     "cd",
@@ -86,6 +92,25 @@ def check_brief_text(text: str, task_dir: Path | None = None) -> list[Finding]:
                     "return",
                     "exit",
                     "command",
+                    "[[",
+                    "]]",
+                    "while",
+                    "until",
+                    "case",
+                    "esac",
+                    "elif",
+                    "else",
+                    "in",
+                    "break",
+                    "continue",
+                    "readonly",
+                    "unset",
+                    "shift",
+                    "trap",
+                    "eval",
+                    "exec",
+                    "source",
+                    ".",
                 }:
                     continue
                 if words[0] == "uv" and len(words) > 1 and words[1] == "run":
@@ -109,10 +134,28 @@ def check_brief_text(text: str, task_dir: Path | None = None) -> list[Finding]:
             findings.append(
                 Finding("warn", "escape_phrase", i, "부분 완료 허용 문구를 확인하세요")
             )
-        if re.search(r"읽지\s*(?:않|말)|금지|건드리지\s*않|가드가\s*막", line):
+        if re.search(
+            r"읽지\s*(?:않|말)|금지|하지\s*않|건드리지\s*않|가드가\s*막", line
+        ):
             continue
         if "worktree add" in line:
             continue
+        level: Literal["error", "warn"] = (
+            "error"
+            if in_read_section
+            or re.search(
+                r"읽|\bread\b|\b(?:cat|tail|head|rg|grep)(?:\s|`)|\bsed\s+-n\b|\bopen\s*\(",
+                line,
+                re.I,
+            )
+            else "warn"
+        )
+        if in_design and "→" in line and not re.search(r"읽|\bread\b", line, re.I):
+            level = "warn"
+        if re.search(r"\bcat\s*>>?", line) and not re.search(
+            r"읽|\bread\b|\b(?:tail|head|rg|grep)\s", line, re.I
+        ):
+            level = "warn"
         paths = re.findall(
             r"(?:~\/|[\w./<>-]*/)?\.team-harness/watch(?:/[\w.*/-]+)?|(?:[\w./<>-]*/)?_outputs/([^/\s`]+)(?:/[^\s`]*)?|(?:<[^>]+>|/[^\s`]*)/\.claude/[^\s`]*",
             line,
@@ -125,13 +168,13 @@ def check_brief_text(text: str, task_dir: Path | None = None) -> list[Finding]:
                     sibling = True
         if sibling:
             findings.append(
-                Finding("error", "foreign_path", i, "다른 작업 폴더를 확인하세요")
+                Finding(level, "foreign_path", i, "다른 작업 폴더를 확인하세요")
             )
             continue
         # References to job-output paths in examples are not necessarily read requests.
         if re.search(r"(?:\.team-harness/watch|(?:<[^>]+>|/[^\s`]*)/\.claude/)", line):
             findings.append(
-                Finding("error", "foreign_path", i, "보호된 외부 경로를 확인하세요")
+                Finding(level, "foreign_path", i, "보호된 외부 경로를 확인하세요")
             )
         elif paths:
             names = [p for p in paths if p and p not in {"*", "<실제 작업>"}]
@@ -139,7 +182,7 @@ def check_brief_text(text: str, task_dir: Path | None = None) -> list[Finding]:
                 r"(?:TH_JOB_TASK|TH_WORKER_OUTPUT_DIR)\s*=", line
             ):
                 findings.append(
-                    Finding("error", "foreign_path", i, "다른 작업 폴더를 확인하세요")
+                    Finding(level, "foreign_path", i, "다른 작업 폴더를 확인하세요")
                 )
     if code and not acceptance:
         findings.append(Finding("warn", "missing_acceptance", 1, "검수 절이 없습니다"))
