@@ -39,6 +39,40 @@ def test_finished_task_is_skipped(tmp_path: Path) -> None:
     assert run_bash('watch_task_settled "$1"', task).returncode == 0
 
 
+def test_legacy_registry_first_and_second_pass_are_fast(tmp_path: Path) -> None:
+    registry = tmp_path / "tasks.txt"
+    tasks = []
+    for index in range(250):
+        task = tmp_path / str(index)
+        task.mkdir()
+        for name in ("DONE", ".th_daemon.done", ".th_digest.done", "VERIFIED"):
+            (task / name).touch()
+        (task / ".th_daemon.settled").touch()
+        tasks.append(task)
+    registry.write_text("".join(f"{task}\n" for task in tasks))
+    code = (
+        'while IFS= read -r task; do watch_task_settled "$task" || exit 1; done < "$1"'
+    )
+    for limit in (10, 1):
+        start = time.monotonic()
+        result = run_bash(code, registry)
+        assert result.returncode == 0, result.stderr
+        assert time.monotonic() - start <= limit
+
+
+def test_legacy_marker_does_not_skip_rollover_or_changed_log(tmp_path: Path) -> None:
+    task = tmp_path / "task"
+    settled(task)
+    marker = task / ".th_daemon.settled"
+    marker.write_text("")
+    (task / "context_exit_requested.json").touch()
+    assert run_bash('watch_task_settled "$1"', task).returncode != 0
+    (task / "context_exit_requested.json").unlink()
+    (task / "codex.log").touch()
+    os.utime(marker, (1, 1))
+    assert run_bash('watch_task_settled "$1"', task).returncode != 0
+
+
 def test_active_or_unnotified_task_is_not_skipped(tmp_path: Path) -> None:
     task = tmp_path / "task"
     settled(task)

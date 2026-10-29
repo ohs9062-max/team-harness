@@ -156,7 +156,11 @@ else:
             start = time.monotonic()
             once()
             elapsed = time.monotonic() - start
-            return (elapsed < 30, f"500 registrations {elapsed:.2f}s (limit 30s)")
+            start = time.monotonic()
+            once()
+            second = time.monotonic() - start
+            return (elapsed <= 10 and second <= 1,
+                    f"500 registrations first {elapsed:.2f}s (limit 10s), second {second:.2f}s (limit 1s)")
 
         def report():
             shutil.copyfile(fixture / "events.log", watch / "events.log")

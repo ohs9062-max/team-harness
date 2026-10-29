@@ -2,7 +2,6 @@
 
 import os
 from pathlib import Path
-import subprocess
 import sys
 import time
 
@@ -17,13 +16,6 @@ for index in range(500):
             path.touch()
             os.utime(path, (old, old))
         marker = task / ".th_daemon.settled"
-        files = [
-            task / name
-            for name in ("DONE", "VERIFIED", ".th_daemon.done", ".th_digest.done")
-        ]
-        signature = subprocess.check_output(
-            ["stat", "-c", "%n:%s:%y:%z", "--", *map(str, files)], text=True
-        )
-        marker.write_text(signature)
+        marker.touch()
         os.utime(marker, (old + 1, old + 1))
     print(task)

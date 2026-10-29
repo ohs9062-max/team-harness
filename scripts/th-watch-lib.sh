@@ -72,9 +72,14 @@ watch_task_settled() {
   fi
   marker="$task/.th_daemon.settled"
   [[ -f $marker && ! -e $task/context_exit_requested.json ]] || return 1
-  local signature
-  signature=$(watch_task_signature "$task") || return 1
-  [[ $(<"$marker") == "$signature" ]] || return 1
+  local signature marker_value
+  marker_value=$(<"$marker")
+  # Empty markers predate signatures and only certify terminal tasks.
+  [[ -n $marker_value || -n $terminal ]] || return 1
+  if [[ -n $marker_value ]]; then
+    signature=$(watch_task_signature "$task") || return 1
+    [[ $marker_value == "$signature" ]] || return 1
+  fi
   for file in "$task"/.th_daemon.handoff_wait.*; do [[ ! -e $file ]] || return 1; done
   for file in "$task/worker.pid" "$task/job.pid"; do
     [[ -e $file ]] || continue
@@ -86,7 +91,9 @@ watch_task_settled() {
   for file in "$task/DONE" "$task/FAILED" "$task"/FAILED.* "$task/STATUS" \
     "$task/task.md" "$task/verify.sh" "$task/VERIFIED" "$task/VERIFY_FAILED" \
     "$task/KILLED" "$task/job.pid" "$task/worker.pid" \
-    "$task/.th_daemon.$terminal" "$task/.th_digest.$terminal"; do
+    "$task/.th_daemon.$terminal" "$task/.th_digest.$terminal" \
+    "$task/.th_context.json" "$task/.th_session" "$task/codex.log" \
+    "$task/agy.log" "$task/claude.log"; do
     [[ -e $file ]] || continue
     [[ ! $file -nt $marker ]] || return 1
     [[ -z $cutoff || $file -ot $cutoff ]] || return 1
