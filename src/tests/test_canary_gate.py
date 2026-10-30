@@ -12,6 +12,7 @@ def test_quick_accepts_candidate_and_rejects_broken_report(tmp_path: Path) -> No
     candidate = tmp_path / "candidate"
     shutil.copytree(ROOT / "src/team_harness", candidate / "src/team_harness")
     shutil.copytree(ROOT / "src/tests/data", candidate / "src/tests/data")
+    shutil.copytree(ROOT / "scripts", candidate / "scripts")
     (candidate / ".venv").symlink_to(ROOT / ".venv", target_is_directory=True)
     command = [str(ROOT / "scripts/th-canary.sh"), str(candidate), "--quick"]
     assert subprocess.run(command, capture_output=True, check=False).returncode == 0

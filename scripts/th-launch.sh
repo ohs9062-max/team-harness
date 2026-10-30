@@ -529,7 +529,6 @@ else
     parent=$(awk '{print $4}' "/proc/$parent/stat" 2>/dev/null || printf 0)
   done
 fi
-printf '%s\n' "$session_agent" > "$task_dir/.th_session_agent"
 journal_append
 if [[ $session_agent != codex ]] && ! inbox_waiter_registered "$journal_workspace"; then
   printf '[th-launch] 경고: %s 코디네이터 inbox 대기 없음 — 사건이 전달되지 않을 수 있음\n' "$journal_workspace" >&2
@@ -556,7 +555,11 @@ usage_record
 # These flags describe this launch only; child workers must not exempt their
 # own later launches from normal retry accounting.
 unset TH_AUTO_CONTINUE TH_ROLLOVER
-rm -f "$task_dir"/DONE "$task_dir"/FAILED "$task_dir"/FAILED.* "$task_dir"/.th_* \
+# Attempt markers are reset, but policy overrides must survive every relaunch.
+for marker in "$task_dir"/.th_*; do
+  [[ $marker == "$task_dir/.th_launch_env" ]] || rm -f "$marker"
+done
+rm -f "$task_dir"/DONE "$task_dir"/FAILED "$task_dir"/FAILED.* \
   "$task_dir"/VERIFIED "$task_dir"/VERIFY_FAILED "$task_dir"/verify_result.json \
   "$task_dir"/verify_result.txt "$task_dir"/digest.md "$task_dir"/context_exit_requested.json
 if [[ $preserve_job_pid != 1 ]]; then
@@ -567,6 +570,7 @@ fi
 printf '%s LAUNCH worker=%s model=%s effort=%s\n' \
   "$(date '+%F %T')" "$worker_type" "$model" "$effort" >> "$task_dir/STATUS"
 # 이 작업을 띄운 작업 공간. th-watch는 소유자 작업만 알린다(다른 코디네이터 사건을 가로채지 않게).
+printf '%s\n' "$session_agent" > "$task_dir/.th_session_agent"
 printf '%s\n' "$journal_workspace" > "$task_dir/.th_owner"
 session_key=$(th_session_key)
 if [[ -n $session_key ]]; then

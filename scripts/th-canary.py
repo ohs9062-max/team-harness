@@ -101,6 +101,36 @@ else:
                 raise RuntimeError(f"launch rc={r.returncode}: {r.stdout[-300:]}")
             return task
 
+        def launch_env_rollovers():
+            task = base / "launch-env"
+            task.mkdir()
+            tasks.append(task)
+            (task / "mode").write_text("done")
+            (task / "task.md").write_text("---\nkind: code\ntask_key: canary-env\n---\nComplete the synthetic task.\n")
+            (task / "WORKLOG.md").write_text("progress\n")
+            launch_env = dict(env, TH_HIGH_REASON="canary high", TH_BRIEF_OK="synthetic canary")
+            command = [str(root / "scripts/th-launch.sh"), str(task), "codex", "gpt-6.1-terra", "high", str(root)]
+            for attempt in range(1, 4):
+                if attempt > 1:
+                    launch_env.pop("TH_HIGH_REASON", None)
+                    launch_env.pop("TH_BRIEF_OK", None)
+                    launch_env["TH_ROLLOVER"] = "1"
+                result = run(command, launch_env)
+                if result.returncode:
+                    return False, f"attempt {attempt}: {result.stdout[-300:]}"
+                saved = task / ".th_launch_env"
+                if not saved.is_file() or "canary high" not in saved.read_text():
+                    return False, f"attempt {attempt}: overrides missing"
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline:
+                    count = task / "canary-attempts"
+                    if count.exists() and int(count.read_text()) >= attempt:
+                        break
+                    time.sleep(0.05)
+                else:
+                    return False, f"attempt {attempt}: fake codex did not start"
+            return True, "high override survived two rollover launches"
+
         def once():
             r = run([str(root / "scripts/th-watchd.sh")], env, 120)
             if r.returncode:
@@ -196,6 +226,7 @@ sys.exit(bool(bad))'''
 
         try:
             if not args.live:
+                check("launch env rollovers", launch_env_rollovers)
                 check("brief", brief)
                 check("report", report)
                 if not args.quick:
