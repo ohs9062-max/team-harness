@@ -41,6 +41,7 @@ def scenario(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: Any):
     )
     calls = []
     monkeypatch.setattr(watch_inspect, "launch_arguments", lambda *args: ["launch"])
+    monkeypatch.setattr(watch_inspect, "preflight_relaunch", lambda *args: None)
     monkeypatch.setattr(
         watch_inspect, "terminate_worker_group", lambda pid: calls.append(("stop", pid))
     )
@@ -57,6 +58,20 @@ def test_boundary_rollover(scenario: Any):
     watch_inspect.main(task)
     assert calls == [("stop", 12345), ("launch", ["launch"])]
     assert "롤오버(1/3)" in output.readouterr().out
+
+
+def test_denied_rollover_preserves_worker(
+    scenario: Any, monkeypatch: pytest.MonkeyPatch
+):
+    task, calls, output = scenario
+
+    def deny(*args: Any) -> None:
+        raise ValueError("policy refusal original reason")
+
+    monkeypatch.setattr(watch_inspect, "preflight_relaunch", deny)
+    watch_inspect.main(task)
+    assert calls == []
+    assert "policy refusal original reason" in output.readouterr().out
 
 
 def test_no_boundary_does_nothing(scenario: Any):

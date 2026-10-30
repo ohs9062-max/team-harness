@@ -467,14 +467,14 @@ PY
   [[ -n $worktree ]] || return 1
   launch_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/th-launch.sh"
   retry_no=$attempts
-  retry_output=$(TH_NO_DAEMON=1 "$launch_script" "$task" "$worker" "$model" "$effort" "$worktree" 2>&1) || rc=$?
+  retry_output=$(TH_RELAUNCH=1 TH_NO_DAEMON=1 "$launch_script" "$task" "$worker" "$model" "$effort" "$worktree" 2>&1) || rc=$?
   if [[ ${rc:-0} -eq 0 ]]; then
     printf '%s\t%s\t%s\n' "$now_epoch" "$task" "$step" >> "$auto_log"
     touch "$marker.dead"
     "$callback_fn" "$task" "자동 재시도" "자동 재시도 $retry_no/$max_retries — 단계=$step" "-" "$owner"
     return 0
   fi
-  "$callback_fn" "$task" "자동 재시도 실패" "자동 재시도 실패 — ${retry_output:0:200}" "-" "$owner"
+  "$callback_fn" "$task" "자동 재시도 실패" "자동 재시도 실패 — $retry_output" "-" "$owner"
   return 0
 }
 
@@ -544,6 +544,9 @@ inspect_task_event() {
   }
   if [[ -n $ctx_line ]]; then
     IFS=$'\t' read -r ctx_event distinct_job_alive ctx_detail <<< "$ctx_line"
+    if [[ $ctx_line == *$'\n'* ]]; then
+      ctx_detail+=$'\n'${ctx_line#*$'\n'}
+    fi
   fi
 
   # A resumed worker or replacement detached job cancels any earlier handoff

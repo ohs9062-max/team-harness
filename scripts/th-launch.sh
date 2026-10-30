@@ -38,6 +38,11 @@ journal_append() {
 
 (( $# >= 1 )) || { echo '사용: th-launch.sh <작업폴더> [codex|agy|claude] <모델> <effort> <작업트리> [추가 인자]'; exit 2; }
 task_dir=$(realpath "$1"); shift
+py_src=$(cd "$script_dir/../src" && pwd)
+if [[ ${TH_ROLLOVER:-0} == 1 || ${TH_AUTO_CONTINUE:-0} == 1 || ${TH_RELAUNCH:-0} == 1 ]]; then
+  unset TH_RETRY_REASON
+  eval "$(PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" th_python -m team_harness.launch_env load "$task_dir")"
+fi
 
 worker_type="codex"
 if (( $# >= 1 )) && [[ "$1" == "codex" || "$1" == "agy" || "$1" == "claude" ]]; then
@@ -114,7 +119,6 @@ if [[ -f $quota_lock && ${TH_IGNORE_QUOTA_LOCK:-0} != 1 ]]; then
   fi
 fi
 [[ -f $task_dir/task.md ]] || { echo "task.md 없음: $task_dir"; exit 1; }
-py_src=$(cd "$script_dir/../src" && pwd)
 # worker_context imports the project dependency graph (including httpx).  Do
 # not use the system interpreter here: th-launch may be started outside an
 # activated development shell.
@@ -122,9 +126,10 @@ context_python=(th_python)
 policy_rc=0
 policy_out=$(PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" "${context_python[@]}" -m team_harness.launch_policy check "$task_dir" "$worker_type" "$model" "$effort" "$watch_dir") || policy_rc=$?
 if (( policy_rc != 0 )); then
+  printf '%s\n' "$policy_out" >&2
   exit "$policy_rc"
 fi
-if [[ $worker_type == codex && ${TEAM_HARNESS_JEV:-} != 0 ]]; then
+if [[ $worker_type == codex && ${TEAM_HARNESS_JEV:-} != 0 && ${TH_PREFLIGHT_ONLY:-0} != 1 ]]; then
   th_jev -m team_harness.decisions.advisor tier --task "$task_dir/task.md" --worker "$worker_type" --model "$model" --effort "$effort"
 fi
 brief_rc=0
@@ -134,6 +139,12 @@ if (( brief_rc != 0 )); then
     echo '지시서 점검 실패: 수정하거나 TH_BRIEF_OK에 우회 사유를 지정하세요' >&2
     exit "$brief_rc"
   fi
+fi
+if [[ ${TH_PREFLIGHT_ONLY:-0} == 1 ]]; then
+  exit 0
+fi
+if [[ ${TH_ROLLOVER:-0} != 1 && ${TH_AUTO_CONTINUE:-0} != 1 && ${TH_RELAUNCH:-0} != 1 ]]; then
+  PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" th_python -m team_harness.launch_env save "$task_dir"
 fi
 policy_override=""
 if (( brief_rc == 2 )); then
@@ -643,11 +654,14 @@ if [[ "$worker_type" == "codex" ]]; then
     project_doc_args=()
   fi
   if [[ "$spawn_mode" == "resume" && -n "$resume_session_id" ]]; then
-    worker_cmd=(codex exec resume -m "$model" -c "model_reasoning_effort=$effort" -c "mcp_servers={}" "${project_doc_args[@]}" --dangerously-bypass-approvals-and-sandbox -C "$worktree" "$resume_session_id")
+    worker_cmd=(codex exec resume -m "$model" -c "model_reasoning_effort=$effort" -c "mcp_servers={}" "${project_doc_args[@]}" --dangerously-bypass-approvals-and-sandbox "$resume_session_id")
   else
     worker_cmd=(codex exec -m "$model" -c "model_reasoning_effort=$effort" -c "mcp_servers={}" "${project_doc_args[@]}" --dangerously-bypass-approvals-and-sandbox -C "$worktree")
   fi
-  env -u TH_JOB_TASK "${worker_env[@]}" setsid nohup "${worker_cmd[@]}" "$@" -- "$prompt" < /dev/null > codex.log 2>&1 &
+  (
+    if [[ "$spawn_mode" == "resume" && -n "$resume_session_id" ]]; then cd "$worktree"; fi
+    exec env -u TH_JOB_TASK "${worker_env[@]}" setsid nohup "${worker_cmd[@]}" "$@" -- "$prompt"
+  ) < /dev/null > codex.log 2>&1 &
   printf '%s\n' "$!" > "$task_dir/worker.pid"
 elif [[ "$worker_type" == "agy" ]]; then
   add_dir_args=("--add-dir" "$task_dir")

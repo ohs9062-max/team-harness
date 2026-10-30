@@ -51,13 +51,20 @@ def main():
                    TH_WORKER_SUFFIX=str(suffix), TH_NO_DAEMON="1", TH_ONCE="1",
                    TEAM_HARNESS_JEV="0", TH_DIGEST_COMMAND="/bin/true",
                    PATH=f"{bin_dir}:{os.environ.get('PATH', '')}", PYTHONPATH=str(root / "src"),
-                   CANARY_FIXTURE=str(fixture), CANARY_HOME=str(home))
+                   CANARY_FIXTURE=str(fixture), CANARY_HOME=str(home),
+                   CANARY_WORKTREE=str(root))
         (watch / "report.last").write_text(str(time.time()))
         (watch / "archive.last").write_text(str(time.time()))
         fake = bin_dir / "codex"
         fake.write_text('''#!/usr/bin/env python3
 import os, pathlib, shutil, signal, sys, time
-p = pathlib.Path.cwd()
+p = pathlib.Path(os.environ["TH_WORKER_OUTPUT_DIR"])
+if len(sys.argv) > 2 and sys.argv[1:3] == ["exec", "resume"]:
+    if "-C" in sys.argv[3:] or "--cd" in sys.argv[3:]:
+        sys.exit("error: unexpected argument '-C' found")
+    if pathlib.Path.cwd() != pathlib.Path(os.environ["CANARY_WORKTREE"]):
+        sys.exit("wrong resume working directory")
+    (p/"resume-observed").write_text(" ".join(sys.argv[1:]))
 f = pathlib.Path(os.environ["CANARY_FIXTURE"])
 s = pathlib.Path(os.environ["CANARY_HOME"])/".codex/sessions"
 s.mkdir(parents=True, exist_ok=True)
@@ -104,7 +111,7 @@ else:
             return p.read_text(errors="replace") if p.exists() else ""
 
         def done():
-            task = launch("done")
+            launch("done")
             time.sleep(1)
             once()
             text = events()
@@ -125,7 +132,9 @@ else:
             time.sleep(1)
             once()
             count = int((task / "canary-attempts").read_text())
-            return ("[자동 계속]" in events() and count >= 2, f"relaunches={count - 1}")
+            resumed = (task / "resume-observed").exists()
+            return ("[자동 계속]" in events() and count >= 2 and resumed,
+                    f"relaunches={count - 1}, resume={resumed}")
 
         def stale_failures():
             stale_tasks = []

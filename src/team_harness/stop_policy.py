@@ -207,7 +207,19 @@ def continue_stopped_task(task: Path, watch_dir: Path, owner: Path) -> str:
         try:
             relaunch_worker(task, args, owner, auto_continue=True)
         except (OSError, subprocess.CalledProcessError) as exc:
-            return f"자동 계속 실패: {exc}"
+            detail = str(exc)
+            if isinstance(exc, subprocess.CalledProcessError):
+                detail = (
+                    b"".join(
+                        part
+                        for part in (exc.stdout, exc.stderr)
+                        if isinstance(part, bytes)
+                    )
+                    .decode(errors="replace")
+                    .strip()
+                    or detail
+                )
+            return f"자동 계속 실패: {detail}"
         event_reason = " ".join(reason.splitlines()).strip()
         return f"자동 계속({count + 1}/2): {event_reason}"
 

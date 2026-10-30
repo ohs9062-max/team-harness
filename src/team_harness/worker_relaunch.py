@@ -57,3 +57,20 @@ def relaunch_worker(
         if session_file.is_file():
             env["ORCA_PANE_KEY"] = session_file.read_text(encoding="utf-8").strip()
     subprocess.run([str(launcher), *args], env=env, check=True, capture_output=True)
+
+
+def preflight_relaunch(task: Path, args: list[str], owner: Path) -> None:
+    """Check launcher policy while the existing worker is still running."""
+    launcher = Path(__file__).resolve().parents[2] / "scripts" / "th-launch.sh"
+    env = dict(
+        os.environ,
+        TH_ROLLOVER="1",
+        TH_NO_DAEMON="1",
+        TH_WORKSPACE=str(owner),
+        TH_PREFLIGHT_ONLY="1",
+    )
+    result = subprocess.run(
+        [str(launcher), *args], env=env, text=True, capture_output=True
+    )
+    if result.returncode:
+        raise ValueError((result.stdout + result.stderr).strip())

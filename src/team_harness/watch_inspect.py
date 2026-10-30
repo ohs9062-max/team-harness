@@ -36,6 +36,7 @@ from team_harness.worker_context import WorkerContextRegistry
 from team_harness.worker_context import write_minimal_worklog
 from team_harness.worker_digest import pid_alive
 from team_harness.worker_relaunch import launch_arguments
+from team_harness.worker_relaunch import preflight_relaunch
 from team_harness.worker_relaunch import relaunch_worker
 from team_harness.worker_relaunch import terminate_worker_group
 
@@ -273,6 +274,7 @@ def main(task: Path) -> None:
                                 )
                             )
                             args = launch_arguments(task, watch_dir)
+                            preflight_relaunch(task, args, workspace)
                             terminate_worker_group(worker_pid)
                             park_worker_if_needed("context_cap_exceeded")
                             state.update(
