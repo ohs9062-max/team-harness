@@ -2,6 +2,7 @@ from concurrent.futures import ThreadPoolExecutor
 import os
 from pathlib import Path
 import subprocess
+import sys
 import time
 
 import pytest
@@ -472,3 +473,160 @@ def test_launch_evidence_from_ledger_and_status(
         + " LAUNCH worker=codex\n"
     )
     assert stop_policy._last_launch_time(tmp_path, tmp_path) == now - 10
+
+
+def test_verified_done_overrides_auxiliary_failure(tmp_path: Path) -> None:
+    import json
+
+    (tmp_path / "DONE").write_text("completed")
+    (tmp_path / "verify.sh").write_text("exit 0\n")
+    (tmp_path / "VERIFY_FAILED").write_text("- 산출물: [FAIL] missing\n")
+    (tmp_path / "verify_result.json").write_text(
+        json.dumps(
+            {"items": {"verify": {"verdict": "PASS"}, "산출물": {"verdict": "FAIL"}}}
+        )
+    )
+    assert classify_stop(tmp_path) == "ok"
+    assert stop_policy.classify_stop_text("DONE: remaining", tmp_path) == "ok"
+
+
+def test_done_unchanged_does_not_relaunch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "task.md").write_text("kind: code\n")
+    (tmp_path / "DONE").write_text("remaining")
+    (tmp_path / "result.csv").write_text("result")
+    monkeypatch.setattr(stop_policy, "launch_arguments", lambda *args: ["t", "codex"])
+    calls: list[int] = []
+    monkeypatch.setattr(
+        stop_policy, "relaunch_worker", lambda *args, **kwargs: calls.append(1)
+    )
+    assert "자동 계속(" in stop_policy.continue_stopped_task(
+        tmp_path, tmp_path, tmp_path
+    )
+    (tmp_path / "DONE").write_text("remaining")
+    assert not stop_policy.continue_stopped_task(tmp_path, tmp_path, tmp_path)
+    assert calls == [1]
+    (tmp_path / "result.csv").write_text("changed")
+    assert "자동 계속(" in stop_policy.continue_stopped_task(
+        tmp_path, tmp_path, tmp_path
+    )
+
+
+def test_watchd_done_while_worker_alive_then_exits(tmp_path: Path) -> None:
+    from team_harness.worker_digest import verify
+
+    task = tmp_path / "task"
+    task.mkdir()
+    (task / "task.md").write_text("kind: code\n")
+    (task / "verify.sh").write_text("exit 0\n")
+    worker = subprocess.Popen(
+        [
+            "python3",
+            "-c",
+            "import pathlib,sys; pathlib.Path(sys.argv[1]).write_text('complete'); print('ready', flush=True); sys.stdin.read()",
+            str(task / "DONE"),
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+    )
+    try:
+        assert worker.stdout is not None
+        assert worker.stdout.readline() == b"ready\n"
+        assert (task / "DONE").exists()
+        (task / "worker.pid").write_text(str(worker.pid))
+        result, _ = verify(task, "done")
+        assert result["items"]["verify"]["verdict"] == "PASS"
+        assert classify_stop(task) == "ok"
+        (task / ".th_digest.done").touch()
+        library = Path(__file__).resolve().parents[2] / "scripts" / "th-watch-lib.sh"
+        script = r"""
+source "$1"
+inspect_context_and_job() { :; }
+task_live_pids() { :; }
+worker_digest_program() { echo dummy; }
+python3() { echo DONE; }
+th_python() { command "$4" -m team_harness.stop_policy "$2" "$3" "$3"; }
+callback() { printf '%s\n' "$3"; }
+inspect_task_event "$2" "$3" .th_daemon 1 '' callback
+"""
+        # The shell function has its own argument list, so pass Python via environment.
+        script = script.replace(
+            'command "$4" -m team_harness.stop_policy "$2" "$3" "$3"',
+            'command "$TEST_PYTHON" "$@"',
+        )
+        env = dict(os.environ, TEST_PYTHON=sys.executable)
+        before = subprocess.run(
+            ["bash", "-c", script, "test", str(library), str(task), str(tmp_path)],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert "자동 계속" not in before.stdout
+        worker.communicate(timeout=5)
+        (task / ".th_daemon.done").touch()
+        proc = subprocess.run(
+            ["bash", "-c", script, "test", str(library), str(task), str(tmp_path)],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert "자동 계속" not in proc.stdout
+        assert not (task / ".auto_continue_count").exists()
+    finally:
+        if worker.poll() is None:
+            worker.communicate(timeout=5)
+
+
+def test_transient_state_failure_is_rechecked_after_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+
+    (tmp_path / "DONE").write_text("complete")
+    (tmp_path / "VERIFY_FAILED").write_text(
+        "- 상태: [FAIL] 작업 미완료 (생존 PID: [123])\n"
+    )
+    (tmp_path / "verify_result.json").write_text(
+        json.dumps(
+            {
+                "items": {
+                    "상태": {
+                        "verdict": "FAIL",
+                        "reason": "작업 미완료 (생존 PID: [123])",
+                    },
+                    "verify": {"verdict": "SKIP"},
+                }
+            }
+        )
+    )
+    monkeypatch.setattr(stop_policy, "live_pids", lambda _: [123])
+    assert classify_stop(tmp_path) == "ok"
+    monkeypatch.setattr(stop_policy, "live_pids", lambda _: [])
+
+    def reverify(task: Path, event: str) -> tuple[dict, str]:
+        (task / "VERIFY_FAILED").unlink()
+        return {
+            "items": {"상태": {"verdict": "PASS"}, "verify": {"verdict": "SKIP"}}
+        }, ""
+
+    monkeypatch.setattr(stop_policy, "verify", reverify)
+    assert classify_stop(tmp_path) == "ok"
+
+
+def test_auto_continue_event_includes_verification_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "task.md").write_text("kind: code\n")
+    (tmp_path / "DONE").write_text("complete")
+    (tmp_path / "VERIFY_FAILED").write_text("- 산출물: [FAIL] missing report\n")
+    monkeypatch.setattr(stop_policy, "launch_arguments", lambda *args: ["t", "codex"])
+
+    def relaunch(task: Path, *args: object, **kwargs: object) -> None:
+        (task / "VERIFY_FAILED").unlink()
+
+    monkeypatch.setattr(stop_policy, "relaunch_worker", relaunch)
+    event = stop_policy.continue_stopped_task(tmp_path, tmp_path, tmp_path)
+    assert "산출물: [FAIL] missing report" in event

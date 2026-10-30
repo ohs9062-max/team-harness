@@ -136,6 +136,12 @@ else:
             return ("[자동 계속]" in events() and count >= 2 and resumed,
                     f"relaunches={count - 1}, resume={resumed}")
 
+        def done_live_worker():
+            test_env = dict(env, PYTEST_DISABLE_PLUGIN_AUTOLOAD="1")
+            result = run([str(python), "-m", "pytest", "-q",
+                          str(root / "src/tests/test_auto_continue.py") + "::test_watchd_done_while_worker_alive_then_exits"], test_env, 60)
+            return result.returncode == 0, result.stdout[-250:]
+
         def stale_failures():
             stale_tasks = []
             old = time.time() - 7200
@@ -196,6 +202,7 @@ sys.exit(bool(bad))'''
                     check("done", done)
                     check("rollover", rollover)
                     check("auto-continue", auto_continue)
+                    check("done with live worker", done_live_worker)
                     check("stale failures", stale_failures)
                     check("registry", registry)
             else:

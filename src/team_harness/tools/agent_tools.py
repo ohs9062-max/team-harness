@@ -37,6 +37,7 @@ from team_harness.rollover_paths import RolloverMonitor
 from team_harness.rollover_paths import wait_with_rollover
 from team_harness.stop_policy import classify_stop_text
 from team_harness.stop_policy import continuation_prompt
+from team_harness.stop_policy import remember_done
 from team_harness.tracking.models import AgentRecord
 from team_harness.tracking.models import RateLimitedFamilyRecord
 from team_harness.tracking.persistence import write_json_atomic
@@ -1427,7 +1428,16 @@ def _install_continuation(
             current.status == "killed"
             or classify_agent_failure(stderr_text=stderr, stdout_text=stdout)
             is not None
-            or classify_stop_text(reason) != "self_stop"
+            or (
+                classify_stop_text(reason, worker_output_dir)
+                if worker_output_dir is not None
+                and (
+                    (worker_output_dir / "DONE").is_file()
+                    or (worker_output_dir / "FAILED").is_file()
+                )
+                else classify_stop_text(reason)
+            )
+            != "self_stop"
         ):
             return False
         if not forced and count >= 2:
@@ -1439,6 +1449,8 @@ def _install_continuation(
             return False
         if not forced:
             count += 1
+            if worker_output_dir is not None:
+                remember_done(worker_output_dir)
         sid = (
             extract_session_id(current.template, stdout.encode(), current.session_id)
             if current.template

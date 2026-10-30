@@ -67,6 +67,7 @@ from team_harness.rollover_paths import RolloverMonitor
 from team_harness.rollover_paths import wait_with_rollover
 from team_harness.stop_policy import classify_stop_text
 from team_harness.stop_policy import continuation_prompt
+from team_harness.stop_policy import remember_done
 from team_harness.tracking.models import DecisionRecord
 from team_harness.tracking.run_log import RunLogWriter
 from team_harness.worker_context import ContextMeasurement
@@ -706,10 +707,17 @@ class TeamHarnessAgentRunner:
             if (
                 not timed_out
                 and failure is None
-                and classify_stop_text(final_text) == "self_stop"
+                and (
+                    classify_stop_text(final_text, Path(cwd))
+                    if (Path(cwd) / "DONE").is_file()
+                    or (Path(cwd) / "FAILED").is_file()
+                    else classify_stop_text(final_text)
+                )
+                == "self_stop"
             ):
                 if auto_continues < 2:
                     auto_continues += 1
+                    remember_done(Path(cwd))
                     current_prompt = continuation_prompt(
                         prompt, final_text, auto_continues
                     )

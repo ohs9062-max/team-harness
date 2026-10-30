@@ -6,6 +6,7 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 import fcntl
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -13,7 +14,9 @@ import subprocess
 import time
 from typing import Literal
 
+from team_harness.worker_digest import live_pids
 from team_harness.worker_digest import quota_lock_active
+from team_harness.worker_digest import verify
 from team_harness.worker_relaunch import launch_arguments
 from team_harness.worker_relaunch import relaunch_worker
 
@@ -59,8 +62,12 @@ def _allowed_failure(reason: str) -> bool:
     )
 
 
-def classify_stop_text(text: str) -> StopClassification:
+def classify_stop_text(text: str, task_dir: Path | None = None) -> StopClassification:
     """Classify an explicit terminal result card when no marker directory exists."""
+    if task_dir is not None and (
+        (task_dir / "DONE").is_file() or (task_dir / "FAILED").is_file()
+    ):
+        return classify_stop(task_dir)
     match = re.search(
         r"(?im)^\s*(?:\*\*)?(FAILED|DONE)(?:\*\*)?\s*[:：-]?\s*(.*)$", text
     )
@@ -88,11 +95,93 @@ def classify_stop(task_dir: Path) -> StopClassification:
         reason = failed.read_text(encoding="utf-8", errors="replace")
         return "allowed_fail" if _allowed_failure(reason) else "self_stop"
     if done.is_file():
+        result_path = task_dir / "verify_result.json"
+        if (task_dir / "verify.sh").is_file() and (
+            not result_path.is_file()
+            or result_path.stat().st_mtime_ns < done.stat().st_mtime_ns
+        ):
+            verify(task_dir, "done")
+        try:
+            result = json.loads(result_path.read_text())
+            failures = [
+                name
+                for name, item in result["items"].items()
+                if item["verdict"] == "FAIL"
+            ]
+            state = result["items"].get("상태", {})
+            if failures == ["상태"] and "작업 미완료" in state.get("reason", ""):
+                if live_pids(task_dir):
+                    return "ok"
+                result, _ = verify(task_dir, "done")
+            script = result["items"]["verify"]
+            if (
+                (task_dir / "verify.sh").is_file()
+                and (task_dir / "verify_result.json").stat().st_mtime_ns
+                >= done.stat().st_mtime_ns
+                and (
+                    script.get("script_exit_code") == "0"
+                    or (
+                        "script_exit_code" not in script
+                        and script["verdict"] in {"PASS", "WARN"}
+                    )
+                )
+            ):
+                return "ok"
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+        fingerprint_path = task_dir / ".auto_continue_done_fingerprint"
+        if (
+            fingerprint_path.is_file()
+            and fingerprint_path.read_text().strip() == _done_fingerprint(task_dir)
+        ):
+            return "ok"
         if (task_dir / "VERIFY_FAILED").is_file():
             return "self_stop"
         body = done.read_text(encoding="utf-8", errors="replace")
         return "self_stop" if _REMAINING.search(body) else "ok"
     return "ok"
+
+
+def _done_fingerprint(task: Path) -> str:
+    """Hash DONE and task outputs, excluding harness bookkeeping and logs."""
+    digest = hashlib.sha256((task / "DONE").read_bytes())
+    excluded = {
+        "DONE",
+        "STATUS",
+        "WORKLOG.md",
+        "task.md",
+        "verify.sh",
+        "VERIFIED",
+        "VERIFY_FAILED",
+        "verify_result.json",
+        "verify_result.txt",
+        "digest.md",
+        "worker.pid",
+        "job.pid",
+    }
+    for path in sorted(task.rglob("*")):
+        relative = path.relative_to(task)
+        if (
+            any(part.startswith(".") for part in relative.parts)
+            or path.name in excluded
+            or path.suffix == ".log"
+            or not path.is_file()
+            or path.is_symlink()
+        ):
+            continue
+        digest.update(str(relative).encode())
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
+
+
+def remember_done(task: Path) -> None:
+    """Record the result before a continuation, for every execution path."""
+    if (task / "DONE").is_file() and not (task / "FAILED").is_file():
+        (task / ".auto_continue_done_fingerprint").write_text(
+            _done_fingerprint(task) + "\n"
+        )
 
 
 # TH-D44 was deployed at 10:33 Asia/Seoul on 2026-10-29.
@@ -159,6 +248,19 @@ def continue_stopped_task(task: Path, watch_dir: Path, owner: Path) -> str:
         if (task / "KILLED").exists() or classify_stop(task) != "self_stop":
             (task / ".th_daemon.settled").touch()
             return ""
+        fingerprint_path = task / ".auto_continue_done_fingerprint"
+        fingerprint = (
+            _done_fingerprint(task)
+            if (task / "DONE").is_file() and not (task / "FAILED").is_file()
+            else None
+        )
+        if (
+            fingerprint
+            and fingerprint_path.exists()
+            and fingerprint_path.read_text().strip() == fingerprint
+        ):
+            (task / ".th_daemon.settled").touch()
+            return ""
         signature = _eligible_signature(task, watch_dir)
         if signature is None:
             return ""
@@ -185,6 +287,11 @@ def continue_stopped_task(task: Path, watch_dir: Path, owner: Path) -> str:
             return "자동 계속 소진 — 작업 분할 필요"
         reason_path = task / ("FAILED" if (task / "FAILED").is_file() else "DONE")
         reason = reason_path.read_text(encoding="utf-8", errors="replace")
+        evidence = ""
+        if (task / "VERIFY_FAILED").is_file():
+            evidence = (task / "VERIFY_FAILED").read_text(
+                encoding="utf-8", errors="replace"
+            )
         section = f"\n\n## 자동 계속 ({count + 1}차)\n\n직전 사유:\n{reason}\n"
         section += "\n남은 항목을 이어서 끝까지 하라, 이미 된 것은 다시 하지 마라.\n"
         if (task / "VERIFY_FAILED").exists():
@@ -201,6 +308,8 @@ def continue_stopped_task(task: Path, watch_dir: Path, owner: Path) -> str:
         (task / ".auto_continue_signature").write_text(
             signature + "\n", encoding="utf-8"
         )
+        if fingerprint:
+            fingerprint_path.write_text(fingerprint + "\n")
         with task_file.open("a", encoding="utf-8") as stream:
             stream.write(section)
         count_path.write_text(str(count + 1), encoding="utf-8")
@@ -221,6 +330,13 @@ def continue_stopped_task(task: Path, watch_dir: Path, owner: Path) -> str:
                 )
             return f"자동 계속 실패: {detail}"
         event_reason = " ".join(reason.splitlines()).strip()
+        if evidence:
+            event_reason += " | 검수 근거: " + (
+                " ".join(
+                    line.strip() for line in evidence.splitlines() if "[FAIL]" in line
+                )
+                or " ".join(evidence.splitlines())[:500]
+            )
         return f"자동 계속({count + 1}/2): {event_reason}"
 
 

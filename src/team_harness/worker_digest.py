@@ -321,7 +321,11 @@ def check_script(task: Path) -> dict[str, str]:
     worktree = Path(read(task / ".th_worktree").strip() or task)
     if not worktree.is_dir():
         worktree = task
-    key = hashlib.sha256(script.read_bytes() + str(worktree).encode()).hexdigest()
+    done = task / "DONE"
+    generation = str(done.stat().st_mtime_ns) if done.is_file() else "no-done"
+    key = hashlib.sha256(
+        script.read_bytes() + str(worktree).encode() + generation.encode()
+    ).hexdigest()
     cache = task / ".th_verify_script.json"
     try:
         saved = json.loads(read(cache))
@@ -359,6 +363,7 @@ def check_script(task: Path) -> dict[str, str]:
         "FAIL" if failures else "WARN" if warnings else "PASS",
         "; ".join(failures + warnings) or "verify.sh 통과",
     )
+    result["script_exit_code"] = str(code)
     atomic_write(cache, json.dumps({"key": key, "item": result}, ensure_ascii=False))
     return result
 
