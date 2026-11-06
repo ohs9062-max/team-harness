@@ -57,9 +57,23 @@ wait_registry="$inbox_dir/.inbox_wait.d"
 wait_registration="$wait_registry/$$"
 mkdir -p "$wait_registry"
 touch "$inbox_dir/inbox.md"
+exec 9>"$inbox_dir/.inbox_wait.lock"
+flock -x 9
+cleanup_inbox_waiter_registry "$owner"
+for entry in "$wait_registry"/*; do
+  [[ -f $entry ]] || continue
+  key=$(sed -n '2p' "$entry")
+  if [[ $key == "$session" ]]; then
+    echo '[th-inbox-wait] 이 세션에 이미 대기 중인 waiter가 있습니다.' >&2
+    exit 3
+  fi
+done
+# Initialize before publishing registration; a later append remains unread.
+python3 "$script_dir/th-inbox-read.py" "$owner" 1 init || exit 2
 trap 'rm -f "$wait_registration"' EXIT
 trap 'exit 0' TERM INT HUP
 printf '%s\n%s\n' "$$" "$session" > "$wait_registration"
+flock -u 9
 # Session cursors are .claude/.inbox_cursor.d/<session>; the reader manages them.
 check_inbox() {
   python3 "$script_dir/th-inbox-read.py" "$owner" 1 wait

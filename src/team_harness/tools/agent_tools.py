@@ -314,6 +314,11 @@ def _prepare_agent_assignment(
     output_dir, assignment_path = _agent_output_paths(
         run_dir=run_dir, agent_id=agent_id, session_output_dir=session_output_dir
     )
+    # Both legacy and bound protocol dispatch use this assignment directory.
+    from team_harness.coordinator_identity import capture_current
+
+    identity = capture_current(run_log.run_id, config.model)
+    write_json_atomic(path=output_dir / ".th_coordinator.json", payload=identity)
     automatic_footer = _build_direct_spawn_footer(
         assignment_path=assignment_path,
         output_dir=output_dir,
@@ -1487,6 +1492,8 @@ def _install_continuation(
             stderr_path=current.stderr_log,
             mode="resume" if resume else "fresh",
             resume_session_id=sid if resume else None,
+            status_task_dir=worker_output_dir,
+            status_session=run_dir.name,
         )
         current.proc, current.pgid = result.proc, result.pgid
         current.session_id = result.generated_uuid or (sid if resume else None)
@@ -1644,6 +1651,8 @@ async def spawn_agent(**kwargs: object) -> str:
             mode=spawn_mode,
             resume_session_id=resume_session_id,
             generated_uuid=context_session_id,
+            status_task_dir=assignment_path.parent,
+            status_session=run_log.run_id,
         )
     except BaseException:
         if context_registry is not None and context_session_id is not None:
@@ -2281,6 +2290,8 @@ def build_agent_tool_bindings(
                 mode=spawn_mode,
                 resume_session_id=resume_session_id,
                 generated_uuid=context_session_id,
+                status_task_dir=assignment_path.parent,
+                status_session=run_log.run_id,
             )
         except BaseException:
             if context_registry is not None and context_session_id is not None:

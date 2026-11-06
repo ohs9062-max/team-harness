@@ -33,7 +33,7 @@ done
 render() {
   # The heredoc imports team_harness (httpx etc.); the system python3 lacks them.
   th_python - "$script_dir/../src/team_harness/worker_digest.py" "$all_mode" "${1:-0}" << 'EOF'
-import sys, os, time, subprocess, re, unicodedata
+import sys, os, time, subprocess, re, unicodedata, json
 from datetime import datetime
 from pathlib import Path
 import importlib.util
@@ -95,6 +95,46 @@ def _scan_latest_mtime(root_path, max_depth=3):
 
 def get_latest_output(task):
     return _scan_latest_mtime(task, max_depth=3)
+
+def event_time(rec, kind):
+    """Use the files that record the classified event, not unrelated outputs."""
+    task = Path(rec["path"])
+    paths = []
+    if kind == "done":
+        paths = [task / "DONE"]
+    else:
+        if rec["terminal"] == "FAILED":
+            paths.extend(task.glob("FAILED*"))
+        if rec["v_status"] in ("실패", "VERIFY_FAILED"):
+            paths.append(task / "VERIFY_FAILED")
+        if rec["is_stalled"]:
+            paths.extend([task / ".th_daemon.stall", task / ".th_watch.stall"])
+        if rec["has_handoff_stall"]:
+            paths.extend(task.glob(".th_daemon.handoff_stall.*"))
+            paths.extend(task.glob(".th_notified.handoff_stall.*"))
+        if rec["is_quota_err"]:
+            quota_ts = quota_event_time(task)
+            if quota_ts is not None:
+                times_from_quota = quota_ts
+            else:
+                times_from_quota = 0
+                paths.extend(task / name for name in ("codex.log", "agy.log", "claude.log", "worker.log"))
+    times = [times_from_quota] if kind != "done" and rec["is_quota_err"] and times_from_quota else []
+    for path in paths:
+        try:
+            if path.is_file():
+                times.append(path.stat().st_mtime)
+        except OSError:
+            pass
+    if times:
+        return max(times)
+    if (rec.get("observation") or {}).get("finished"):
+        return rec["observation"]["finished"]
+    # STATUS-only terminal events and interrupted workers have no event marker.
+    try:
+        return (task / "STATUS").stat().st_mtime
+    except OSError:
+        return rec["latest_ts"] or 0
 
 def format_rel_time(ts, now_ts, include_ago=True):
     if ts is None:
@@ -660,39 +700,30 @@ def get_footer_line(w_dir):
 
     return f"{quota_summary} · {watchd_summary}"
 
-if not os.path.isfile(registry):
-    if all_mode:
-        print(now_str)
-        print("등록 작업 없음")
-    else:
-        print(f"작업 현황 {now_hm}  실행 0 · 주의 0 · 끝남 0 · 오래된 미정리 0 (숨김)")
-        if unread_inbox_line():
-            print(unread_inbox_line())
-        print()
-        print(get_footer_line(watch_dir))
-    print_notice()
-    sys.exit(0)
-
 try:
     with open(registry, "r", encoding="utf-8", errors="replace") as f:
         raw_tasks = [l.strip() for l in f if l.strip()]
 except Exception:
     raw_tasks = []
 
+# Latest spawn wins; a late exit from an older PID must not replace it.
+observed = {}
+try:
+    with open(os.path.join(watch_dir, "status_tasks.jsonl"), encoding="utf-8") as f:
+        for line in f:
+            try:
+                entry = json.loads(line)
+                path = entry["path"]
+                old = observed.get(path)
+                if old is None or entry["time"] >= old["time"]:
+                    observed[path] = entry
+            except (ValueError, KeyError, TypeError):
+                continue
+except OSError:
+    pass
+legacy_tasks = set(raw_tasks)
+raw_tasks = list(dict.fromkeys(raw_tasks + list(observed)))
 valid_tasks = [t for t in raw_tasks if os.path.isdir(t)]
-if not valid_tasks:
-    if all_mode:
-        print(now_str)
-        print("등록 작업 없음")
-    else:
-        print(f"작업 현황 {now_hm}  실행 0 · 주의 0 · 끝남 0 · 오래된 미정리 0 (숨김)")
-        if unread_inbox_line():
-            print(unread_inbox_line())
-        print()
-        print(get_footer_line(watch_dir))
-    print_notice()
-    sys.exit(0)
-
 def get_verify_status(task_dir):
     verified_file = os.path.join(task_dir, "VERIFIED")
     failed_file = os.path.join(task_dir, "VERIFY_FAILED")
@@ -778,6 +809,24 @@ def check_task_quota_error(task_dir):
         except Exception:
             pass
     return False
+
+def quota_event_time(task_dir):
+    stamps = []
+    for name in ("codex.log", "agy.log", "claude.log", "worker.log"):
+        try:
+            with open(Path(task_dir) / name, encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    if not is_cli_quota_error_line(line):
+                        continue
+                    match = re.search(r"\b(\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)?)", line)
+                    if match:
+                        try:
+                            stamps.append(datetime.fromisoformat(match.group(1).replace("Z", "+00:00")).timestamp())
+                        except ValueError:
+                            pass
+        except OSError:
+            pass
+    return max(stamps) if stamps else None
 
 # Scan /proc once for live agy processes and worker command lines
 _PROC_BY_PID = {}
@@ -1159,8 +1208,19 @@ now_ts = time.time()
 for task in valid_tasks:
     tpath = Path(task)
     pids, inferred = fast_live_pids(task)
+    entry = observed.get(task)
+    if entry and task not in legacy_tasks:
+        try:
+            raw = Path(f"/proc/{int(entry['pid'])}/stat").read_text().rsplit(")", 1)[1].split()
+            boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+            alive = raw[19] == str(entry["start"]) and raw[0] != "Z" and boot == entry["boot"]
+        except (OSError, KeyError, ValueError, IndexError, TypeError):
+            alive = False
+        pids, inferred = ([entry["pid"]] if alive else []), False
     is_alive = bool(pids)
     terminal = liveness.effective_terminal(tpath, observer.terminal_status(tpath), pids)
+    if entry and task not in legacy_tasks and not is_alive and not terminal and "exit_code" in entry:
+        terminal = "DONE" if entry["exit_code"] == 0 else "FAILED"
     is_quota_err = False
     has_handoff_stall = bool(
         list(tpath.glob(".th_daemon.handoff_stall.*"))
@@ -1186,6 +1246,8 @@ for task in valid_tasks:
         state = '실행(추정)' if inferred else '실행'
 
     latest_ts = get_latest_output(task)
+    if entry and task not in legacy_tasks:
+        latest_ts = max(latest_ts or 0, entry.get("finished", entry["time"]))
     if latest_ts is not None:
         age_min = max(0, int((now_ts - latest_ts) // 60))
         age_str = f"{age_min}분 전"
@@ -1210,6 +1272,7 @@ for task in valid_tasks:
         )
         task_records.append({
             "path": task,
+            "observation": entry,
             "name": task_name,
             "is_alive": is_alive,
             "terminal": terminal,
@@ -1248,8 +1311,42 @@ if not all_mode:
             else:
                 done_recs.append(rec)
 
-    attention_recs.sort(key=lambda r: r["latest_ts"] or 0, reverse=True)
-    done_recs.sort(key=lambda r: r["latest_ts"] or 0, reverse=True)
+    attention_recs.sort(key=lambda r: (-event_time(r, "attention"), r["path"]))
+    done_recs.sort(key=lambda r: (-event_time(r, "done"), r["path"]))
+    attention_total, done_total = len(attention_recs), len(done_recs)
+    attention_recs, done_recs = attention_recs[:5], done_recs[:5]
+
+    from team_harness.coordinator_identity import alive as coordinator_alive, live_coordinators, session_owner
+    live = live_coordinators()
+    groups = {}
+    unknown = []
+    identities = {}
+    for meta in live:
+        key = (Path(meta["cwd"]).name or meta["cwd"], meta["session"], str(meta["pid"]), str(meta["start"]), meta["model"] or "모델 미확인")
+        groups[key] = []
+        identities[(str(meta["pid"]), str(meta["start"]), meta["boot"])] = key
+    for rec in running_recs:
+        try:
+            meta = (rec.get("observation") or {}).get("coordinator")
+            metadata_exists = bool(meta)
+            if not meta:
+                meta_file = Path(rec["path"]) / ".th_coordinator.json"
+                metadata_exists = meta_file.exists()
+                if metadata_exists:
+                    meta = json.loads(meta_file.read_text())
+            if not metadata_exists:
+                meta = session_owner(rec["path"], live)
+            if not isinstance(meta, dict) or not coordinator_alive(meta):
+                raise ValueError("unknown or dead coordinator")
+            identity = (str(meta["pid"]), str(meta["start"]), meta["boot"])
+            key = identities.get(identity)
+            if key is None:
+                owner_file = Path(rec["path"]) / ".th_owner"
+                owner = owner_file.read_text().strip() if owner_file.is_file() else (rec.get("observation") or {}).get("owner", get_project_short_name(rec["path"]))
+                key = (owner, str(meta.get("session") or ""), str(meta["pid"]), str(meta["start"]), str(meta.get("model") or "모델 미확인"))
+            groups.setdefault(key, []).append(rec)
+        except (OSError, ValueError, TypeError, KeyError):
+            unknown.append(rec)
 
     term_cols = 110
     env_cols = os.environ.get("COLUMNS", "").strip()
@@ -1278,7 +1375,9 @@ if not all_mode:
     def build_display_row(rec, section_kind):
         proj = get_project_short_name(rec["path"])
         tname = rec["name"]
-        wm = get_worker_and_model(rec["path"], rec["ctx_info"])
+        obs = rec.get("observation") or {}
+        wm = (shorten_model(obs.get("worker", ""), obs.get("model", ""), "")
+              if obs and rec["path"] not in legacy_tasks else get_worker_and_model(rec["path"], rec["ctx_info"]))
         updated = format_rel_time(rec["latest_ts"], now_ts, include_ago=True)
         stage = rec["prog"] if rec["state"] == "실행(추정)" else get_stage_summary(rec["path"], rec["state"])
         if rec["state"] in ("실행", "실행(추정)"):
@@ -1294,6 +1393,8 @@ if not all_mode:
         elif section_kind == "attention":
             if rec["is_quota_err"]:
                 elapsed = "쿼터오류"
+                if quota_event_time(rec["path"]) is None:
+                    stage = f"{stage} (시각 근사)"
             elif rec["has_handoff_stall"]:
                 elapsed = "인계 없음"
             elif rec["terminal"] == "FAILED":
@@ -1383,18 +1484,36 @@ if not all_mode:
 
     print(
         f"작업 현황 {now_hm}  "
-        f"실행 {len(run_rows)} · 주의 {len(att_rows)} · 끝남 {len(done_rows)} · "
+        f"실행 {len(run_rows)} · 주의 {attention_total} (표시 {len(att_rows)}) · 끝남 {done_total} (표시 {len(done_rows)}) · "
         f"오래된 미정리 {old_uncleaned_count} (숨김)"
     )
     if unread_inbox_line():
         print(unread_inbox_line())
 
     sections = [
-        ("▶ 실행 중", "32", run_rows, True, "running"),
         ("⚠ 주의 필요", "33", att_rows, False, "attention"),
         ("✓ 최근 끝남 (24h)", "90", done_rows, False, "done"),
     ]
     printed_header = False
+    if run_rows or groups:
+        print()
+        print(colorize("▶ 실행 중", "32"))
+        if run_rows or any(records for _, records in groups.items()):
+            print(format_section_header("running"))
+            printed_header = True
+        for index, (key, records) in enumerate(sorted(groups.items())):
+            if index:
+                print()
+            owner, session, pid, start, model = key
+            print(fit_width(f"  {owner} / {model} (PID {pid})", term_cols).rstrip())
+            for rec in records:
+                print(format_section_row(build_display_row(rec, "running"), "running"))
+        if unknown:
+            if groups:
+                print()
+            print("  코디네이터 미확인 (기록 없음 또는 종료)")
+            for rec in unknown:
+                print(format_section_row(build_display_row(rec, "running"), "running"))
     for title_txt, color_code, srows, show_cols, section_kind in sections:
         if not srows:
             continue

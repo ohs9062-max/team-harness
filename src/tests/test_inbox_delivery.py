@@ -48,45 +48,40 @@ def test_resolve_launch_owner_uses_task_repo_and_reports_pwd_mismatch(
     assert str(repo_a.resolve()) in result.stderr
 
 
-def test_multiple_waiters_keep_independent_registrations(tmp_path: Path) -> None:
+def test_duplicate_waiter_and_stale_cleanup(tmp_path: Path) -> None:
     owner = tmp_path / "owner"
     _init_repo(owner)
-    env = {**os.environ, "TH_POLL_SEC": "1"}
+    root = owner / ".claude"
+    registry = root / ".inbox_wait.d"
+    registry.mkdir(parents=True)
+    (registry / "99999999").write_text("99999999\nsession-a\n")
+    env = _waiter_env("session-a")
     first = subprocess.Popen(
         [str(SCRIPTS / "th-inbox-wait.sh"), "30"],
         cwd=owner,
         env=env,
-        text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        text=True,
     )
     try:
-        time.sleep(0.2)
-        second = subprocess.Popen(
-            [str(SCRIPTS / "th-inbox-wait.sh"), "30"],
+        deadline = time.monotonic() + 5
+        while not (registry / str(first.pid)).exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert (registry / str(first.pid)).exists()
+        assert not (registry / "99999999").exists()
+        duplicate = subprocess.run(
+            [str(SCRIPTS / "th-inbox-wait.sh"), "0"],
             cwd=owner,
             env=env,
+            capture_output=True,
             text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
         )
-        try:
-            time.sleep(0.2)
-            registry = owner / ".claude" / ".inbox_wait.d"
-            assert (registry / str(first.pid)).is_file()
-            assert (registry / str(second.pid)).is_file()
-
-            first.terminate()
-            first.wait(timeout=3)
-            assert not (registry / str(first.pid)).exists()
-            assert (registry / str(second.pid)).is_file()
-        finally:
-            second.terminate()
-            second.wait(timeout=3)
+        assert duplicate.returncode == 3
     finally:
-        if first.poll() is None:
-            first.terminate()
-            first.wait(timeout=3)
+        first.terminate()
+        first.wait(timeout=3)
+    assert not (registry / str(first.pid)).exists()
 
 
 def test_watchd_realerts_only_when_cursor_has_not_reached_recorded_size(

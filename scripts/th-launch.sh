@@ -573,6 +573,10 @@ printf '%s LAUNCH worker=%s model=%s effort=%s\n' \
 printf '%s\n' "$session_agent" > "$task_dir/.th_session_agent"
 printf '%s\n' "$journal_workspace" > "$task_dir/.th_owner"
 session_key=$(th_session_key)
+python3 "$script_dir/th-coordinator.py" "$PPID" "$session_key" "$task_dir/.th_coordinator.json"
+mkdir -p "$journal_workspace/.claude"
+touch "$journal_workspace/.claude/inbox.md"
+python3 "$script_dir/th-inbox-read.py" "$journal_workspace" 1 init || exit 2
 if [[ -n $session_key ]]; then
   printf '%s\n' "$session_key" > "$task_dir/.th_session"
 else
@@ -786,6 +790,11 @@ fi
   flock -x 200
   grep -qxF "$task_dir" "$watch_dir/tasks.txt" 2>/dev/null || printf '%s\n' "$task_dir" >> "$watch_dir/tasks.txt"
 ) 200>"$watch_dir/tasks.lock"
+
+# Independent observational registry; watchd still consumes tasks.txt only.
+PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" th_python -m team_harness.status_registry \
+  "$task_dir" "$(<"$task_dir/worker.pid")" "$worker_type" "$model" \
+  "$task_dir/$worker_type.log" "$journal_workspace" || true
 
 # 상시 감시 데몬: 데몬이 없으면 setsid nohup으로 띄움
 if [[ ${TH_NO_DAEMON:-0} != 1 && -x "$script_dir/th-watchd.sh" ]]; then

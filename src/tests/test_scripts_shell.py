@@ -1188,8 +1188,14 @@ def test_th_status_default_hides_old_completed_tasks_but_all_shows_them(test_env
     tasks_txt.write_text("\n".join(map(str, tasks)) + "\n", encoding="utf-8")
     status_script = SCRIPTS_DIR / "th-status.sh"
 
+    site = test_env["tmp_path"] / "sitecustomize.py"
+    site.write_text(
+        "import team_harness.coordinator_identity as i\ni.live_coordinators = lambda: []\n"
+    )
+    isolated_env = {**test_env["env"], "PYTHONPATH": str(test_env["tmp_path"])}
+
     compact = subprocess.run(
-        [str(status_script)], env=test_env["env"], capture_output=True, text=True
+        [str(status_script)], env=isolated_env, capture_output=True, text=True
     )
     assert compact.returncode == 0
     assert len(compact.stdout.splitlines()) <= 12
@@ -1197,7 +1203,7 @@ def test_th_status_default_hides_old_completed_tasks_but_all_shows_them(test_env
     assert "다시 출력" in compact.stdout.splitlines()[-1]
 
     full = subprocess.run(
-        [str(status_script), "-a"], env=test_env["env"], capture_output=True, text=True
+        [str(status_script), "-a"], env=isolated_env, capture_output=True, text=True
     )
     assert full.returncode == 0
     assert len(full.stdout.splitlines()) > 12
@@ -1821,19 +1827,25 @@ def test_th_inbox_wait_rejects_unresolved_owner(test_env: dict):
 
 
 def test_th_inbox_wait_instances_coexist(test_env: dict):
-    """Concurrent waiters retain independent registrations for one owner."""
+    """Concurrent waiters retain independent registrations for different sessions of one owner."""
     owner = test_env["tmp_path"] / "one-waiter-owner"
     (owner / ".claude").mkdir(parents=True)
     script = SCRIPTS_DIR / "th-inbox-wait.sh"
     env = {**test_env["env"], "TH_INBOX_OWNER": str(owner), "TH_POLL_SEC": "1"}
 
     first = subprocess.Popen(
-        [str(script), "30"], env=env, stdout=subprocess.PIPE, text=True
+        [str(script), "30"],
+        env={**env, "ORCA_PANE_KEY": "session-first"},
+        stdout=subprocess.PIPE,
+        text=True,
     )
     try:
         time.sleep(0.1)
         second = subprocess.Popen(
-            [str(script), "1"], env=env, stdout=subprocess.PIPE, text=True
+            [str(script), "1"],
+            env={**env, "ORCA_PANE_KEY": "session-second"},
+            stdout=subprocess.PIPE,
+            text=True,
         )
         assert second.wait(timeout=3) == 0
         assert first.poll() is None
@@ -2927,7 +2939,9 @@ def test_th_status_sectioned_table_and_formatting(test_env: dict):
         assert "\033[" not in out
 
         # Header counts: 실행 1 · 주의 1 · 끝남 2 · 오래된 미정리 1 (숨김)
-        assert "실행 1 · 주의 1 · 끝남 2 · 오래된 미정리 1 (숨김)" in out
+        assert (
+            "실행 1 · 주의 1 (표시 1) · 끝남 2 (표시 2) · 오래된 미정리 1 (숨김)" in out
+        )
         assert "▶ 실행 중" in out
         assert "⚠ 주의 필요" in out
         assert "✓ 최근 끝남 (24h)" in out

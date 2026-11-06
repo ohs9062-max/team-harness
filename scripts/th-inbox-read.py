@@ -28,12 +28,18 @@ with lock.open('a') as lock_file:
     try:
         start = int(cursor.read_text().strip())
     except (OSError, ValueError):
+        if mode == 'init':
+            cursor.parent.mkdir(parents=True, exist_ok=True)
+            cursor.write_text(f'{len(data)}\n')
+            sys.exit(0)
         if mode == 'wait':
             if ack == '1':
                 cursor.parent.mkdir(parents=True, exist_ok=True)
                 cursor.write_text(f'{len(data)}\n')
             sys.exit(1)
         start = 0
+    if mode == 'init':
+        sys.exit(0)
     if start < 0 or start > len(data):
         start = 0
     routes = {}

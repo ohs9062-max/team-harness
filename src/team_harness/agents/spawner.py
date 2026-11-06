@@ -54,6 +54,8 @@ async def spawn(
     mode: str = "fresh",
     resume_session_id: str | None = None,
     generated_uuid: str | None = None,
+    status_task_dir: Path | None = None,
+    status_session: str | None = None,
 ) -> SpawnResult:
     """Launch one worker in its own process group with durable output files.
 
@@ -160,6 +162,37 @@ async def spawn(
     starttime = capture_starttime(pid=proc.pid)
     if starttime is None and proc.returncode is None:
         starttime = capture_starttime(pid=proc.pid)
+    # Observational only: this registry is never read by the retry daemon.
+    from team_harness.coordinator_identity import capture_current
+    from team_harness.status_registry import append
+    from team_harness.status_registry import register
+
+    status_dir = status_task_dir or (log_dir / "status_tasks" / agent_id)
+    identity = capture_current(status_session or str(os.getpid()), config.model)
+    try:
+        status_record = register(
+            status_dir,
+            proc.pid,
+            agent_type,
+            effective_model,
+            stdout_path,
+            cwd,
+            identity,
+        )
+
+        async def record_exit():
+            rc = await proc.wait()
+            append(
+                {
+                    **status_record,
+                    "exit_code": rc,
+                    "finished": __import__("time").time(),
+                }
+            )
+
+        asyncio.create_task(record_exit())
+    except OSError:
+        pass  # Status observation must not prevent a worker from running.
     return SpawnResult(
         proc=proc,
         command=command,
