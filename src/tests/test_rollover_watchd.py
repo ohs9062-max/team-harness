@@ -218,3 +218,39 @@ def test_unknown_measurement_records_reason(
         "no token_count for session s"
         in (tmp_path / "watch" / "events.log").read_text()
     )
+
+
+def test_rollover_failure_deduplication_and_recovery(
+    scenario: Any, monkeypatch: pytest.MonkeyPatch
+):
+    from team_harness.worker_relaunch import RelaunchPreflightError
+
+    task, calls, output = scenario
+    failure: list[tuple[str, str] | None] = [("policy:budget", "90/100")]
+
+    def preflight(*args: Any) -> None:
+        if failure[0] is not None:
+            kind, message = failure[0]
+            raise RelaunchPreflightError(message, kind)
+
+    monkeypatch.setattr(watch_inspect, "preflight_relaunch", preflight)
+    events = []
+    for amount in ("90/100", "95/100", "99/100"):
+        failure[0] = ("policy:budget", amount)
+        watch_inspect.main(task)
+        events.append(output.readouterr().out)
+    assert sum("rollover_failed" in event for event in events) == 1
+    assert calls == []
+    failure[0] = ("policy:kind", "another refusal")
+    watch_inspect.main(task)
+    assert "rollover_failed" in output.readouterr().out
+    failure[0] = None
+    watch_inspect.main(task)
+    assert "rollover\t" in output.readouterr().out
+    assert not (task / ".th_rollover_failure").exists()
+    (task / "rollover_state.json").write_text(
+        json.dumps({"last_check": 0, "count": 0, "last_hash": None})
+    )
+    failure[0] = ("policy:budget", "91/100")
+    watch_inspect.main(task)
+    assert "rollover_failed" in output.readouterr().out

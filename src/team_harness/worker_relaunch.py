@@ -59,6 +59,14 @@ def relaunch_worker(
     subprocess.run([str(launcher), *args], env=env, check=True, capture_output=True)
 
 
+class RelaunchPreflightError(ValueError):
+    """A launcher preflight failure with a stable, message-independent kind."""
+
+    def __init__(self, message: str, kind: str) -> None:
+        super().__init__(message)
+        self.kind = kind
+
+
 def preflight_relaunch(task: Path, args: list[str], owner: Path) -> None:
     """Check launcher policy while the existing worker is still running."""
     launcher = Path(__file__).resolve().parents[2] / "scripts" / "th-launch.sh"
@@ -68,9 +76,20 @@ def preflight_relaunch(task: Path, args: list[str], owner: Path) -> None:
         TH_NO_DAEMON="1",
         TH_WORKSPACE=str(owner),
         TH_PREFLIGHT_ONLY="1",
+        TH_PREFLIGHT_FAILURE_CODES="1",
     )
     result = subprocess.run(
         [str(launcher), *args], env=env, text=True, capture_output=True
     )
     if result.returncode:
-        raise ValueError((result.stdout + result.stderr).strip())
+        lines = (result.stdout + result.stderr).splitlines()
+        codes = sorted(
+            line.removeprefix("TH_POLICY_CODE=")
+            for line in lines
+            if line.startswith("TH_POLICY_CODE=")
+        )
+        message = "\n".join(
+            line for line in lines if not line.startswith("TH_POLICY_CODE=")
+        ).strip()
+        kind = "policy:" + ",".join(codes) if codes else f"exit:{result.returncode}"
+        raise RelaunchPreflightError(message, kind)

@@ -176,6 +176,8 @@ def test_launch_rejects_and_overrides(tmp_path: Path):
         "TH_WATCH_DIR": str(tmp_path / "watch"),
         "TH_WORKER_SUFFIX": str(suffix),
         "TH_NO_DAEMON": "1",
+        "TH_CODEX_5H_BUDGET": "1000000",
+        "TH_CODEX_SESSIONS_DIR": str(tmp_path / "empty_sessions"),
         "TH_DIGEST_COMMAND": "/bin/true",
         "TEAM_HARNESS_JEV": "0",
     }

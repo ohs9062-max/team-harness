@@ -493,6 +493,8 @@ def main(
     violations = check(task_dir, worker_type, model, effort, watch_dir, actual_env)
     if violations:
         for violation in violations:
+            if actual_env.get("TH_PREFLIGHT_FAILURE_CODES") == "1":
+                print(f"TH_POLICY_CODE={violation.code}", file=sys.stderr)
             print(violation.message, file=sys.stderr)
         return 3 if any(item.code == "retry_cap" for item in violations) else 4
     for warning in check_warnings(worker_type, actual_env):

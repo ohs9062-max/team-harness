@@ -1,5 +1,7 @@
 # 변경 로그 (Changelog)
 
+- Suppress repeated rollover failure events by failure kind and isolate brief-check tests from real Codex usage.
+
 - 작업별 실행 잠금과 프로세스 식별자로 동시 워커 중복 기동을 방지합니다.
 
 - ths에 코디네이터 그룹, 최근 사건 정렬 및 SDK·protocol 워커 관찰 등록부를 추가하고 Claude waiter의 세션별 중복을 방지한다. Codex 코디네이터는 기각하고 Orca 사건 전송은 제외하며 Codex 워커는 유지한다.

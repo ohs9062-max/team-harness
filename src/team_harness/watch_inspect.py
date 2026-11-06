@@ -38,6 +38,7 @@ from team_harness.worker_digest import pid_alive
 from team_harness.worker_relaunch import launch_arguments
 from team_harness.worker_relaunch import preflight_relaunch
 from team_harness.worker_relaunch import relaunch_worker
+from team_harness.worker_relaunch import RelaunchPreflightError
 from team_harness.worker_relaunch import terminate_worker_group
 
 
@@ -266,6 +267,8 @@ def main(task: Path) -> None:
                         print("split_needed\t0\t작업 분할 필요")
                         return
                     if action == "rollover" and worker_pid is not None:
+                        failure_marker = task / ".th_rollover_failure"
+                        stage = "launch_arguments"
                         try:
                             watch_dir = Path(
                                 os.environ.get(
@@ -274,9 +277,13 @@ def main(task: Path) -> None:
                                 )
                             )
                             args = launch_arguments(task, watch_dir)
+                            stage = "preflight"
                             preflight_relaunch(task, args, workspace)
+                            stage = "terminate"
                             terminate_worker_group(worker_pid)
+                            stage = "park"
                             park_worker_if_needed("context_cap_exceeded")
+                            stage = "relaunch"
                             relaunch_worker(task, args, workspace)
                             state.update(
                                 last_check=mtime,
@@ -290,8 +297,22 @@ def main(task: Path) -> None:
                                 and exc.returncode == 75
                             ):
                                 return
-                            print(f"rollover_failed\t0\t롤오버 실패: {exc}")
+                            kind = (
+                                f"{stage}:{exc.kind}"
+                                if isinstance(exc, RelaunchPreflightError)
+                                else f"{stage}:{type(exc).__name__}:"
+                                f"{getattr(exc, 'errno', None)}:"
+                                f"{getattr(exc, 'returncode', None)}"
+                            )
+                            try:
+                                previous = failure_marker.read_text(encoding="utf-8")
+                            except FileNotFoundError:
+                                previous = ""
+                            if previous != kind:
+                                failure_marker.write_text(kind, encoding="utf-8")
+                                print(f"rollover_failed\t0\t롤오버 실패: {exc}")
                             return
+                        failure_marker.unlink(missing_ok=True)
                         print(f"rollover\t0\t롤오버({state['count']}/3)")
                         return
                 elif (
