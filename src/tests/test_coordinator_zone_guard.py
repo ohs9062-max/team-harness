@@ -27,7 +27,11 @@ def run_guard(
         check=True,
         cwd=tmp_path,
         env={
-            **{k: v for k, v in os.environ.items() if k != "TH_WORKER_ALLOW_PATHS"},
+            **{
+                k: v
+                for k, v in os.environ.items()
+                if k not in {"TH_WORKER_ALLOW_PATHS", "TH_WORKSPACE"}
+            },
             "HOME": str(tmp_path),
             "TH_HARNESS_SRC": str(REPO / "src"),
             **env,
