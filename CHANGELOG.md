@@ -1,5 +1,7 @@
 # 변경 로그 (Changelog)
 
+- 이미지 가드의 Bash 판정을 실제 바이트 읽기 중심으로 수정해 출력·스크립트 작성 오차단을 줄입니다.
+
 - Suppress repeated rollover failure events by failure kind and isolate brief-check tests from real Codex usage.
 
 - 작업별 실행 잠금과 프로세스 식별자로 동시 워커 중복 기동을 방지합니다.

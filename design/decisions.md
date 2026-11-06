@@ -453,6 +453,12 @@ exceeded`, `RESOURCE_EXHAUSTED` 등은 여전히 전역 잠금과 알림을 만�
 
 ## TH-D33. 이미지 모델 입력은 사용자 명시 요청이 있는 현재 턴으로 제한한다
 
+**2026-11-06 변경 — 맥락.** Bash 명령에 실행어와 이미지 확장자가 함께 있다는 이유만으로 실제 읽기가 아닌 명령도 차단됐다.
+
+**결정.** 이미지 바이트 읽기 명령과 인라인 코드의 읽기를 판정하고 출력 경로 및 스크립트 작성은 허용한다.
+
+**결과와 한계.** 불필요한 차단을 줄이지만 `python3 script.py`가 스크립트 안에서 이미지를 출력하는 경우와 `xargs base64`는 막지 못한다.
+
 **결정.** 이미지 파일(`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.bmp`, `.tif`,
 `.tiff`)은 코디네이터와 모든 worker에서 기본 차단한다. Claude Code에는 전역
 `~/.claude/settings.json`의 `UserPromptSubmit`·`PreToolUse(Read/Bash)`·`Stop` 훅을
