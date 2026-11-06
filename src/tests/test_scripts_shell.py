@@ -2522,8 +2522,8 @@ def test_th_launch_and_watch_context_rollover_resume_and_status(test_env: dict):
         capture_output=True,
         text=True,
     )
-    assert res_conflict.returncode != 0
-    assert "already has an active worker" in res_conflict.stderr
+    assert res_conflict.returncode == 75
+    assert res_conflict.stdout.strip() == "이미 실행 중"
 
     # Check th-status shows active context tag on running row in default view and full line in -a
     status_active = subprocess.run(
@@ -3322,3 +3322,80 @@ def test_retired_task_is_registered_again_on_launch(test_env: dict):
     assert result.returncode == 0, result.stderr
     assert (watch / "tasks.txt").read_text().splitlines() == [str(task)]
     assert not (task / ".th_daemon.auto_continue").exists()
+
+
+def test_launch_serializes_same_task_and_releases_lock(test_env: dict) -> None:
+    task = _create_task_dir(test_env["tmp_path"], "dedupe")
+    codex = test_env["bin_dir"] / "codex"
+    codex.write_text("#!/usr/bin/env bash\nexec sleep 60\n")
+    codex.chmod(0o755)
+    cmd = [str(SCRIPTS_DIR / "th-launch.sh"), str(task)]
+    first = subprocess.Popen(
+        cmd, env=test_env["env"], stdout=subprocess.PIPE, stderr=subprocess.PIPE
+    )
+    second = subprocess.Popen(
+        cmd,
+        env={**test_env["env"], "TH_AUTO_CONTINUE": "1"},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    first.communicate(timeout=40)
+    second.communicate(timeout=40)
+    assert sorted([first.returncode, second.returncode]) == [0, 75]
+    pid = int((task / "worker.pid").read_text())
+    before = [(task / name).read_bytes() for name in ("worker.pid", "STATUS")]
+    assert (
+        sum(" LAUNCH " in line for line in (task / "STATUS").read_text().splitlines())
+        == 1
+    )
+    result = subprocess.run(
+        cmd, env=test_env["env"], capture_output=True, text=True, timeout=10
+    )
+    assert result.returncode == 75 and result.stdout.strip() == "이미 실행 중"
+    assert before == [(task / name).read_bytes() for name in ("worker.pid", "STATUS")]
+    assert (
+        subprocess.run(
+            ["flock", "-n", str(task / ".th_launch.lock"), "true"]
+        ).returncode
+        == 0
+    )
+    with (task / "STATUS").open("a") as stream:
+        stream.write(
+            time.strftime("%Y-%m-%d %H:%M:%S") + " START step=collect replay=safe\n"
+        )
+    ledger = (test_env["watch_dir"] / "usage.jsonl").read_bytes()
+    shell = 'source "$1"; callback() { echo "$*"; }; safe_step_auto_retry "$2" "$3" "$2/.th_daemon" callback "$4"'
+    retry = subprocess.run(
+        [
+            "bash",
+            "-c",
+            shell,
+            "_",
+            str(SCRIPTS_DIR / "th-watch-lib.sh"),
+            str(task),
+            str(test_env["watch_dir"]),
+            str(test_env["workspace"]),
+        ],
+        env=test_env["env"],
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert retry.returncode == 0 and not retry.stdout
+    assert (test_env["watch_dir"] / "usage.jsonl").read_bytes() == ledger
+    assert not (test_env["watch_dir"] / "auto_retries.tsv").exists()
+    os.killpg(pid, signal.SIGTERM)
+    dead_restart = subprocess.run(
+        cmd, env=test_env["env"], capture_output=True, text=True, timeout=40
+    )
+    assert dead_restart.returncode == 0, dead_restart.stderr
+    os.killpg(int((task / "worker.pid").read_text()), signal.SIGTERM)
+    # A changed start token represents a reused PID and must not block a launch.
+    (task / "worker.pid.start").write_text(
+        json.dumps({"pid": os.getpid(), "start": "old"})
+    )
+    (task / "worker.pid").write_text(str(os.getpid()))
+    again = subprocess.run(
+        cmd, env=test_env["env"], capture_output=True, text=True, timeout=40
+    )
+    assert again.returncode == 0, again.stderr

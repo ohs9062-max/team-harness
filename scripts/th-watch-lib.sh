@@ -474,6 +474,7 @@ PY
     "$callback_fn" "$task" "자동 재시도" "자동 재시도 $retry_no/$max_retries — 단계=$step" "-" "$owner"
     return 0
   fi
+  [[ ${rc:-0} -eq 75 ]] && return 0
   "$callback_fn" "$task" "자동 재시도 실패" "자동 재시도 실패 — $retry_output" "-" "$owner"
   return 0
 }

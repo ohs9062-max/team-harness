@@ -305,6 +305,15 @@ def continue_stopped_task(task: Path, watch_dir: Path, owner: Path) -> str:
                     ]
                 )
                 section += f"\n검수 출력 마지막 20줄:\n{tail}\n"
+        previous_signature = (
+            (task / ".auto_continue_signature").read_bytes()
+            if (task / ".auto_continue_signature").exists()
+            else None
+        )
+        previous_fingerprint = (
+            fingerprint_path.read_bytes() if fingerprint_path.exists() else None
+        )
+        had_count = count_path.exists()
         (task / ".auto_continue_signature").write_text(
             signature + "\n", encoding="utf-8"
         )
@@ -316,6 +325,21 @@ def continue_stopped_task(task: Path, watch_dir: Path, owner: Path) -> str:
         try:
             relaunch_worker(task, args, owner, auto_continue=True)
         except (OSError, subprocess.CalledProcessError) as exc:
+            if isinstance(exc, subprocess.CalledProcessError) and exc.returncode == 75:
+                task_file.write_text(text, encoding="utf-8")
+                for path, previous in (
+                    (task / ".auto_continue_signature", previous_signature),
+                    (fingerprint_path, previous_fingerprint),
+                ):
+                    if previous is None:
+                        path.unlink(missing_ok=True)
+                    else:
+                        path.write_bytes(previous)
+                if had_count:
+                    count_path.write_text(str(count), encoding="utf-8")
+                else:
+                    count_path.unlink(missing_ok=True)
+                return ""
             detail = str(exc)
             if isinstance(exc, subprocess.CalledProcessError):
                 detail = (

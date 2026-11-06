@@ -630,3 +630,22 @@ def test_auto_continue_event_includes_verification_failure(
     monkeypatch.setattr(stop_policy, "relaunch_worker", relaunch)
     event = stop_policy.continue_stopped_task(tmp_path, tmp_path, tmp_path)
     assert "산출물: [FAIL] missing report" in event
+
+
+def test_continue_duplicate_does_not_consume_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    task_file = tmp_path / "task.md"
+    task_file.write_text("kind: code\n")
+    (tmp_path / "FAILED").write_text("INCOMPLETE")
+    (tmp_path / ".auto_continue_count").write_text("1")
+    monkeypatch.setattr(stop_policy, "launch_arguments", lambda *args: ["t", "codex"])
+
+    def duplicate(*args: object, **kwargs: object) -> None:
+        raise subprocess.CalledProcessError(75, "th-launch")
+
+    monkeypatch.setattr(stop_policy, "relaunch_worker", duplicate)
+    assert stop_policy.continue_stopped_task(tmp_path, tmp_path, tmp_path) == ""
+    assert (tmp_path / ".auto_continue_count").read_text() == "1"
+    assert task_file.read_text() == "kind: code\n"
+    assert not (tmp_path / ".auto_continue_signature").exists()

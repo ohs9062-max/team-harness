@@ -277,14 +277,19 @@ def main(task: Path) -> None:
                             preflight_relaunch(task, args, workspace)
                             terminate_worker_group(worker_pid)
                             park_worker_if_needed("context_cap_exceeded")
+                            relaunch_worker(task, args, workspace)
                             state.update(
                                 last_check=mtime,
                                 last_hash=digest,
                                 count=int(state["count"]) + 1,
                             )
                             write_json_atomic(path=state_file, payload=state)
-                            relaunch_worker(task, args, workspace)
                         except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                            if (
+                                isinstance(exc, subprocess.CalledProcessError)
+                                and exc.returncode == 75
+                            ):
+                                return
                             print(f"rollover_failed\t0\t롤오버 실패: {exc}")
                             return
                         print(f"rollover\t0\t롤오버({state['count']}/3)")

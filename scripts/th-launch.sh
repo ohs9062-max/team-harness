@@ -39,6 +39,16 @@ journal_append() {
 (( $# >= 1 )) || { echo '사용: th-launch.sh <작업폴더> [codex|agy|claude] <모델> <effort> <작업트리> [추가 인자]'; exit 2; }
 task_dir=$(realpath "$1"); shift
 py_src=$(cd "$script_dir/../src" && pwd)
+# Preflight must remain usable while a worker is alive. Real launches serialize
+# all checks and mutations for the task until the new identity is registered.
+if [[ ${TH_PREFLIGHT_ONLY:-0} != 1 ]]; then
+  exec {launch_lock_fd}>"$task_dir/.th_launch.lock"
+  flock -x "$launch_lock_fd"
+  if python3 "$script_dir/th-launch-identity.py" check "$task_dir"; then
+    echo '이미 실행 중'
+    exit 75
+  fi
+fi
 if [[ ${TH_ROLLOVER:-0} == 1 || ${TH_AUTO_CONTINUE:-0} == 1 || ${TH_RELAUNCH:-0} == 1 ]]; then
   unset TH_RETRY_REASON
   eval "$(PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" th_python -m team_harness.launch_env load "$task_dir")"
@@ -557,7 +567,7 @@ usage_record
 unset TH_AUTO_CONTINUE TH_ROLLOVER
 # Attempt markers are reset, but policy overrides must survive every relaunch.
 for marker in "$task_dir"/.th_*; do
-  [[ $marker == "$task_dir/.th_launch_env" ]] || rm -f "$marker"
+  [[ $marker == "$task_dir/.th_launch_env" || $marker == "$task_dir/.th_launch.lock" ]] || rm -f "$marker"
 done
 rm -f "$task_dir"/DONE "$task_dir"/FAILED "$task_dir"/FAILED.* \
   "$task_dir"/VERIFIED "$task_dir"/VERIFY_FAILED "$task_dir"/verify_result.json \
@@ -668,6 +678,7 @@ if [[ "$worker_type" == "codex" ]]; then
   fi
   (
     if [[ "$spawn_mode" == "resume" && -n "$resume_session_id" ]]; then cd "$worktree"; fi
+    exec {launch_lock_fd}>&-
     exec env -u TH_JOB_TASK "${worker_env[@]}" setsid nohup "${worker_cmd[@]}" "$@" -- "$prompt"
   ) < /dev/null > codex.log 2>&1 &
   printf '%s\n' "$!" > "$task_dir/worker.pid"
@@ -676,7 +687,7 @@ elif [[ "$worker_type" == "agy" ]]; then
   if [[ -n "$worktree" && "$worktree" != "$task_dir" && -d "$worktree" ]]; then
     add_dir_args+=("--add-dir" "$worktree")
   fi
-  env -u TH_JOB_TASK "${worker_env[@]}" setsid nohup agy --dangerously-skip-permissions --model "$model" "${add_dir_args[@]}" "$@" --print="$prompt" < /dev/null > agy.log 2>&1 &
+  env -u TH_JOB_TASK "${worker_env[@]}" setsid nohup agy --dangerously-skip-permissions --model "$model" "${add_dir_args[@]}" "$@" --print="$prompt" < /dev/null > agy.log 2>&1 {launch_lock_fd}>&- &
   init_pid=$!
 
   # agy는 실행 직후 별도 PID로 재부모화될 수 있다. 최초 nohup PID는
@@ -713,9 +724,11 @@ elif [[ "$worker_type" == "claude" ]]; then
   else
     worker_cmd=(claude -p --dangerously-skip-permissions --model "$model" --strict-mcp-config)
   fi
-  env -u TH_JOB_TASK "${worker_env[@]}" setsid nohup "${worker_cmd[@]}" "$@" -- "$prompt" < /dev/null > claude.log 2>&1 &
+  env -u TH_JOB_TASK "${worker_env[@]}" setsid nohup "${worker_cmd[@]}" "$@" -- "$prompt" < /dev/null > claude.log 2>&1 {launch_lock_fd}>&- &
   printf '%s\n' "$!" > "$task_dir/worker.pid"
 fi
+
+python3 "$script_dir/th-launch-identity.py" record "$task_dir"
 
 if [[ $ctx_enabled == 1 ]]; then
   if ! PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" "${context_python[@]}" - "$ctx_prep_file" "$task_dir" << 'PYEOF'
@@ -804,6 +817,8 @@ if [[ ${TH_NO_DAEMON:-0} != 1 && -x "$script_dir/th-watchd.sh" ]]; then
   fi
 fi
 
+flock -u "$launch_lock_fd"
+exec {launch_lock_fd}>&-
 printf 'launched [%s] pid %s → %s\n' "$worker_type" "$(<"$task_dir/worker.pid")" "$task_dir"
 
 inbox_owner="$journal_workspace"
