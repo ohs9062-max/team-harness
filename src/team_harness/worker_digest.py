@@ -177,7 +177,15 @@ def check_artifacts(task: Path) -> dict[str, str]:
     paths = re.findall(r"`([^`\n]+)`", section)
     if not paths:
         paths = re.findall(r"(?m)^\s*[-*]\s+(\S+)", section)
-    paths = list(dict.fromkeys(paths))
+    paths = list(
+        dict.fromkeys(
+            p
+            for p in paths
+            if not re.fullmatch(
+                r"VERDICT: (?:PASS|FAIL|INSUFFICIENT_EVIDENCE|UNAVAILABLE)", p
+            )
+        )
+    )
     if not paths:
         return item(
             "WARN", "기대 산출물 경로를 해석할 수 없음 (백틱 경로 또는 목록 필요)"

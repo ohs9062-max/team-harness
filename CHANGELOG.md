@@ -1,5 +1,6 @@
 # 변경 로그 (Changelog)
 
+- 독립 반증 검증과 새 아키텍처 결정 push 검사를 추가했다.
 - 이미지 가드의 Bash 판정을 실제 바이트 읽기 중심으로 수정해 출력·스크립트 작성 오차단을 줄입니다.
 
 - Suppress repeated rollover failure events by failure kind and isolate brief-check tests from real Codex usage.
