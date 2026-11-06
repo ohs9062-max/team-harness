@@ -63,7 +63,8 @@ def run_hook(
 )
 def test_detect(tmp_path: Path, command: str):
     result = run_hook(tmp_path, command)
-    assert result["hookSpecificOutput"]["permissionDecision"] == "ask"
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert '"ask"' not in json.dumps(result)
     assert len((tmp_path / "guard.log").read_text().splitlines()) == 1
 
 
@@ -100,10 +101,33 @@ def test_pass(tmp_path: Path, command: str):
     assert not (tmp_path / "guard.log").exists()
 
 
-def test_modes_and_invalid_input(tmp_path: Path):
-    result = run_hook(tmp_path, "kill 3", {"TH_GUARD_MODE": "deny"})
-    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert "승인받을 것" in result["hookSpecificOutput"]["permissionDecisionReason"]
+def test_exceptions_and_invalid_input(tmp_path: Path):
     for env in ({"TH_GUARD": "off"}, {"TH_ROLE": "worker"}, {"TH_JOB_TASK": ""}):
         assert run_hook(tmp_path, "kill 3", env) is None
     assert run_hook(tmp_path, raw="{") is None
+
+
+def test_approved_command_is_logged(tmp_path: Path):
+    command = 'TH_GUARD_APPROVED="사용자가 중단 승인" kill 3'
+    assert run_hook(tmp_path, command) is None
+    record = json.loads((tmp_path / "guard.log").read_text())
+    assert record == {
+        "pattern": "kill",
+        "command": command,
+        "approved": "사용자가 중단 승인",
+    }
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "TH_GUARD_APPROVED= kill 3",
+        'TH_GUARD_APPROVED="   " kill 3',
+        "echo hi; TH_GUARD_APPROVED=x kill 3",
+    ],
+)
+def test_invalid_approval_is_denied(tmp_path: Path, command: str):
+    result = run_hook(tmp_path, command)
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert '"ask"' not in json.dumps(result)
+    assert "approved" not in json.loads((tmp_path / "guard.log").read_text())

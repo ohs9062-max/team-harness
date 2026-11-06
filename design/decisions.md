@@ -618,7 +618,9 @@ Claude와 Codex가 함께 실행될 때 Codex waiter가 Claude가 띄운 작업�
 
 ## TH-D42 — Destructive-command guard and worker failure rule
 
-A Claude Code PreToolUse Bash hook requests approval for destructive coordinator commands; `TH_GUARD_MODE=deny` denies them, while workers bypass it. It fails open on errors and records detections in the watch directory. Registration and testing in Claude settings are performed separately by the coordinator. Worker instructions distinguish correctable mechanical errors and known fixes from genuine failure conditions, and require conservative decisions.
+A Claude Code PreToolUse Bash hook guards destructive coordinator commands, while workers bypass it. It fails open on errors and records detections in the watch directory. Registration and testing in Claude settings are performed separately by the coordinator. Worker instructions distinguish correctable mechanical errors and known fixes from genuine failure conditions, and require conservative decisions.
+
+2026-11-06: ask 제거, 창 없는 명령 단위 승인. **맥락:** 승인 창이 작업을 지연하고 긴 명령을 가렸다. **결정:** 위험 명령은 거부하고 사용자가 이번 대화에서 승인한 내용은 명령 첫 `TH_GUARD_APPROVED` 대입과 로그에 기록한다. **결과:** 창 없이 재실행할 수 있지만 이 기록은 사용자 승인을 강제하지 않으며 모델이 접두를 스스로 붙일 수 있다.
 
 2026-10-29 revision: Worker context grew from 19,000 to 65,000–113,000 tokens, with 65–77% of the increase from tool output; one call returned 32,000 characters and one file was reread seven times. Of 98 robot3 failures, 51 were INCOMPLETE self-stops; three on October 29 followed guard denials that could have been retried with smaller commands. Limit reads and output, remove self-stop exits, and retry guard denials using a different approach before reporting repeated denial.
 

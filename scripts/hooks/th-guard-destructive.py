@@ -33,11 +33,16 @@ def without_heredocs(command):
     return '\n'.join(result)
 
 
-def find_pattern(command):
-    lexer = shlex.shlex(without_heredocs(command), posix=False, punctuation_chars=';&|()<>\n')
+def command_lexer(command, posix=False, strip_heredocs=True):
+    source = without_heredocs(command) if strip_heredocs else command
+    lexer = shlex.shlex(source, posix=posix, punctuation_chars=';&|()<>\n')
     lexer.whitespace = ' \t\r'
     lexer.whitespace_split = True
-    tokens = list(lexer)
+    return lexer
+
+
+def find_pattern(command):
+    tokens = list(command_lexer(command))
     segments = [[]]
     for token in tokens:
         if token and all(c in ';&|()\n' for c in token):
@@ -85,21 +90,33 @@ def main():
         return
     try:
         payload = json.load(sys.stdin)
-        pattern = find_pattern(payload['tool_input']['command'])
+        command = payload['tool_input']['command']
+        lexer = command_lexer(command, posix=True, strip_heredocs=False)
+        first = lexer.get_token()
+        approved = None
+        detection_command = command
+        if first and first.startswith('TH_GUARD_APPROVED='):
+            approved = first.partition('=')[2]
+            # Preserve the existing detector's handling of quoted assignment values.
+            detection_command = 'TH_GUARD_APPROVED=x ' + lexer.instream.read()
+        pattern = find_pattern(detection_command)
         if not pattern:
             return
         try:
             watch = Path(os.getenv('TH_WATCH_DIR', str(Path.home() / '.team-harness' / 'watch')))
             watch.mkdir(parents=True, exist_ok=True)
             with (watch / 'guard.log').open('a', encoding='utf-8') as log:
-                log.write(json.dumps({'pattern': pattern, 'command': payload['tool_input']['command']}, ensure_ascii=False) + '\n')
+                record = {'pattern': pattern, 'command': command}
+                if approved and approved.strip():
+                    record['approved'] = approved
+                log.write(json.dumps(record, ensure_ascii=False) + '\n')
         except OSError:
             pass
-        deny = os.getenv('TH_GUARD_MODE') == 'deny'
-        reason = '[가드] 실행 중 작업 중단·결과 삭제/이동은 사용자 승인 필요: ' + pattern
-        if deny:
-            reason += ' — 사용자에게 이유를 말하고 승인받을 것'
-        print(json.dumps({'hookSpecificOutput': {'hookEventName': 'PreToolUse', 'permissionDecision': 'deny' if deny else 'ask', 'permissionDecisionReason': reason}}, ensure_ascii=False))
+        if approved and approved.strip():
+            return
+        reason = ('[가드] 실행 중 작업 중단·결과 삭제/이동은 사용자 승인 필요: ' + pattern
+                  + ' — 사용자에게 이유를 말하고, 이번 대화에서 승인받은 경우에만 명령 맨 앞에 TH_GUARD_APPROVED="<사용자가 승인한 내용>"을 붙여 다시 실행할 것')
+        print(json.dumps({'hookSpecificOutput': {'hookEventName': 'PreToolUse', 'permissionDecision': 'deny', 'permissionDecisionReason': reason}}, ensure_ascii=False))
     except Exception:
         return
 
