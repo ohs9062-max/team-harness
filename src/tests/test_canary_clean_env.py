@@ -19,9 +19,13 @@ def test_canary_entry_clears_worker_environment(tmp_path: Path) -> None:
         "TH_ROLE": "worker",
         "TH_WATCH_DIR": "/inherited/watch",
         "TEAM_HARNESS_CANARY_TEST": "1",
+        "GIT_DIR": "/inherited/git",
+        "GIT_INDEX_FILE": "/inherited/index",
     }
     subprocess.run([str(root / "scripts/th-canary.sh"), str(root)], env=env, check=True)
     captured = dict(line.split("=", 1) for line in capture.read_text().splitlines())
     assert not any(k.startswith(("TH_", "TEAM_HARNESS_")) for k in captured)
+    assert "GIT_DIR" not in captured
+    assert "GIT_INDEX_FILE" not in captured
     assert captured["HOME"] == env["HOME"]
     assert captured["PATH"] == env["PATH"]
