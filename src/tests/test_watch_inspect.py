@@ -12,6 +12,14 @@ from team_harness.worker_context import WorkerContextRegistry
 from team_harness.worker_context import WorkerContextSettings
 
 
+@pytest.fixture
+def isolated_watch_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("TH_WATCH_ROLLOVER", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("TH_WATCH_DIR", str(tmp_path / "watch"))
+
+
+@pytest.mark.usefixtures("isolated_watch_environment")
 def test_watcher_requests_rollover_from_current_codex_context(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -50,6 +58,7 @@ def test_watcher_requests_rollover_from_current_codex_context(
     assert capsys.readouterr().out.startswith("none\t")
 
 
+@pytest.mark.usefixtures("isolated_watch_environment")
 @pytest.mark.parametrize(
     ("tokens", "requested"),
     [(0, False), (59999, False), (60000, False), (60001, True), (113090, True)],
@@ -95,7 +104,6 @@ def test_live_watcher_resolves_session_and_measures_rollout(
         )
         + "\n"
     )
-    monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(watch_inspect, "pid_alive", lambda pid: pid == os.getpid())
     monkeypatch.setattr(
         watch_inspect, "load_worker_context_settings", lambda _: WorkerContextSettings()
