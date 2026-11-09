@@ -410,6 +410,63 @@ def test_th_launch_passes_terra_model_and_effort_to_codex(
     ]
 
 
+def test_th_launch_resolves_relative_worktree_before_chdir(test_env: dict):
+    root = test_env["tmp_path"]
+    task_dir = _create_task_dir(root, "relative_task")
+    worktree = root / "relative_worktree"
+    worktree.mkdir()
+    captured_args = root / "codex-relative-args.txt"
+    stub = test_env["bin_dir"] / "codex"
+    stub.write_text(
+        f'#!/usr/bin/env bash\nprintf "%s\\n" "$@" > "{captured_args}"\n',
+        encoding="utf-8",
+    )
+    stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+
+    result = subprocess.run(
+        [
+            str(SCRIPTS_DIR / "th-launch.sh"),
+            task_dir.name,
+            "codex",
+            "gpt-6.1-terra",
+            "medium",
+            worktree.name,
+        ],
+        cwd=root,
+        env=test_env["env"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    deadline = time.time() + 3
+    while not captured_args.exists() and time.time() < deadline:
+        time.sleep(0.05)
+    argv = captured_args.read_text(encoding="utf-8").splitlines()
+    assert argv[argv.index("-C") + 1] == str(worktree.resolve())
+
+
+def test_th_launch_rejects_missing_worktree(test_env: dict):
+    root = test_env["tmp_path"]
+    task_dir = _create_task_dir(root, "missing_worktree_task")
+    result = subprocess.run(
+        [
+            str(SCRIPTS_DIR / "th-launch.sh"),
+            task_dir.name,
+            "codex",
+            "gpt-6.1-terra",
+            "medium",
+            "missing_worktree",
+        ],
+        cwd=root,
+        env=test_env["env"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "error: worktree not found: missing_worktree" in result.stderr
+    assert not (task_dir / "worker.pid").exists()
+
+
 def test_th_launch_marks_codex_as_worker_and_ends_option_parsing(test_env: dict):
     task_dir = _create_task_dir(test_env["tmp_path"], "task_role_codex")
     captured_args = test_env["tmp_path"] / "codex-args.txt"

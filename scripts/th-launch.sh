@@ -102,6 +102,14 @@ elif [[ "$worker_type" == "claude" ]]; then
   fi
 fi
 
+if [[ ! -d "$worktree" ]]; then
+  printf "error: worktree not found: %s\n" "$worktree" >&2
+  exit 1
+fi
+if [[ "$worktree" != /* ]]; then
+  worktree=$(realpath "$worktree")
+fi
+
 pwd_workspace=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null || true)
 journal_workspace=${TH_WORKSPACE:-}
 if [[ -z $journal_workspace ]]; then
