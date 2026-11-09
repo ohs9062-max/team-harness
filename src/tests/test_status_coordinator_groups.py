@@ -148,7 +148,7 @@ def test_repository_adoption_display(tmp_path: Any):
         "PYTHONPATH": os.pathsep.join([str(tmp_path), str(repo / "src")]),
     }
 
-    def output(paths: Any):
+    def output(paths: Any, models: Any = None):
         shim.write_text(
             "import team_harness.coordinator_identity as i\n"
             + "i.live_coordinators = lambda: "
@@ -160,7 +160,7 @@ def test_repository_adoption_display(tmp_path: Any):
                         pid=100 + n,
                         start="1",
                         boot="boot",
-                        model="model",
+                        model=models[n] if models else "model",
                     )
                     for n, path in enumerate(paths)
                 ]
@@ -175,8 +175,16 @@ def test_repository_adoption_display(tmp_path: Any):
             check=True,
         ).stdout
 
+    headers = output(
+        [worktree, main, other, tmp_path],
+        ["claude-opus-5-5", "claude-sonnet-5", "unrecognized", ""],
+    )
+    assert "project · worktree · Opus 5.5 (PID 100)" in headers
+    assert "project · Sonnet 5 (PID 101)" in headers
+    assert "other · unrecognized (PID 102)" in headers
+    assert f"{tmp_path.name} · 모델 미확인 (PID 103)" in headers
     one = output([worktree])
-    assert "worktree / model (PID 100)" in one and "인수됨" in one
+    assert "project · worktree · model (PID 100)" in one and "인수됨" in one
     zero = output([other])
     assert "코디네이터 종료 — project (이전 PID 99999999)" in zero
     assert "인수됨" not in zero
@@ -185,6 +193,16 @@ def test_repository_adoption_display(tmp_path: Any):
     assert "인수됨" not in two
     (task / ".th_coordinator.json").unlink()
     assert "코디네이터 불명 — project 후보 0개" in output([])
+    (task / ".th_owner").unlink()
+    nested = main / "outputs" / "job"
+    nested.mkdir(parents=True)
+    (nested / "STATUS").write_text("working\n")
+    (nested / "job.pid").write_text(str(os.getpid()))
+    (watch / "tasks.txt").write_text(str(nested))
+    assert "인수됨" in output([worktree])
+    ambiguous = output([main, worktree])
+    assert "후보 2개" in ambiguous
+    assert "인수됨" not in ambiguous
 
 
 def test_empty_coordinator_groups(tmp_path: Any):
@@ -211,7 +229,7 @@ def test_empty_coordinator_groups(tmp_path: Any):
     }
     command = [str(repo / "scripts/th-status.sh")]
     expected = "\n\n".join(
-        f"  {name} / actual-model (PID {pid})"
+        f"  {name} · actual-model (PID {pid})"
         for name, pid in [("alpha", 101), ("beta", 202), ("gamma", 303)]
     )
     result = subprocess.run(
@@ -301,10 +319,10 @@ def test_groups_and_recent_five(tmp_path: Any):
         assert len(headers) == 1
         assert lines[1] == headers[0]
         for index, line in enumerate(lines):
-            if " / " in line and "(PID " in line or "코디네이터 종료" in line:
+            if " · " in line and "(PID " in line or "코디네이터 종료" in line:
                 has_workers = (
-                    f"프로젝트 / astra (PID {pid})" in line
-                    or f"프로젝트 / 모델 미확인 (PID {pid})" in line
+                    f"프로젝트 · astra (PID {pid})" in line
+                    or f"프로젝트 · 모델 미확인 (PID {pid})" in line
                     or "코디네이터 종료" in line
                 )
                 if has_workers:
@@ -315,10 +333,10 @@ def test_groups_and_recent_five(tmp_path: Any):
 
     assert_running_header(out)
     assert "주의 6 (표시 5)" in out and "끝남 6 (표시 5)" in out
-    assert f"프로젝트 / astra (PID {pid})" in out
-    assert f"프로젝트 / 모델 미확인 (PID {pid})" in out
+    assert f"프로젝트 · astra (PID {pid})" in out
+    assert f"프로젝트 · 모델 미확인 (PID {pid})" in out
     assert "session0" not in out and "session1" not in out
-    assert "\n\n  프로젝트 /" in out
+    assert "\n\n  프로젝트 ·" in out
     assert "코디네이터 종료" in out
     assert "주의05" not in out and "끝남11" not in out
     assert out.index("주의09") < out.index("주의10")
@@ -338,8 +356,8 @@ def test_groups_and_recent_five(tmp_path: Any):
             watched.wait()
     assert "주의 6 (표시 5)" in watch_out
     assert_running_header(watch_out)
-    assert "프로젝트 / astra" in watch_out
-    assert "\n\n  프로젝트 /" in watch_out
+    assert "프로젝트 · astra" in watch_out
+    assert "\n\n  프로젝트 ·" in watch_out
     assert "session0" not in watch_out and "session1" not in watch_out
     sample = os.environ.get("TH_SAMPLE_OUTPUT")
     if sample:

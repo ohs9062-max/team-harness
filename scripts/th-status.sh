@@ -1323,8 +1323,23 @@ if not all_mode:
     identities = {}
     repositories = [(meta, git_common_dir(meta["cwd"])) for meta in live]
     owner_repositories = {}
-    for meta in live:
-        key = (Path(meta["cwd"]).name or meta["cwd"], meta["session"], str(meta["pid"]), str(meta["start"]), meta["model"] or "모델 미확인")
+    def coordinator_label(cwd, common):
+        worktree = Path(cwd).name or cwd
+        if common is None:
+            return worktree
+        project = common.parent.name
+        return project if project == worktree else f"{project} · {worktree}"
+
+    def short_model(model):
+        model = model or "모델 미확인"
+        match = re.fullmatch(r"claude-(opus|sonnet)-(\d+)(?:-(\d+))?", model)
+        if not match:
+            return model
+        name, major, minor = match.groups()
+        return f"{name.title()} {major}" + (f".{minor}" if minor else "")
+
+    for meta, common in repositories:
+        key = (coordinator_label(meta["cwd"], common), meta["session"], str(meta["pid"]), str(meta["start"]), meta["model"] or "모델 미확인")
         groups[key] = []
         identities[(str(meta["pid"]), str(meta["start"]), meta["boot"])] = key
     for rec in running_recs:
@@ -1346,7 +1361,7 @@ if not all_mode:
                 owner = owner_file.read_text().strip() if owner_file.is_file() else ""
                 if owner and owner not in owner_repositories:
                     owner_repositories[owner] = git_common_dir(owner)
-                common = owner_repositories.get(owner)
+                common = owner_repositories.get(owner) if owner else git_common_dir(rec["path"])
                 matches = [c for c, repo in repositories if common is not None and repo == common]
                 count = sum(2 if c.get("ambiguous") else 1 for c in matches)
                 if count == 1:
@@ -1531,7 +1546,7 @@ if not all_mode:
             if index:
                 print()
             owner, session, pid, start, model = key
-            print(fit_width(f"  {owner} / {model} (PID {pid})", term_cols).rstrip())
+            print(fit_width(f"  {owner} · {short_model(model)} (PID {pid})", term_cols).rstrip())
             for rec in records:
                 print(format_section_row(build_display_row(rec, "running"), "running"))
         if unknown:
