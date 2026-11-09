@@ -1316,11 +1316,13 @@ if not all_mode:
     attention_total, done_total = len(attention_recs), len(done_recs)
     attention_recs, done_recs = attention_recs[:5], done_recs[:5]
 
-    from team_harness.coordinator_identity import alive as coordinator_alive, live_coordinators, session_owner
+    from team_harness.coordinator_identity import alive as coordinator_alive, live_coordinators, session_owner, git_common_dir
     live = live_coordinators()
     groups = {}
-    unknown = []
+    unknown = {}
     identities = {}
+    repositories = [(meta, git_common_dir(meta["cwd"])) for meta in live]
+    owner_repositories = {}
     for meta in live:
         key = (Path(meta["cwd"]).name or meta["cwd"], meta["session"], str(meta["pid"]), str(meta["start"]), meta["model"] or "모델 미확인")
         groups[key] = []
@@ -1333,11 +1335,32 @@ if not all_mode:
                 meta_file = Path(rec["path"]) / ".th_coordinator.json"
                 metadata_exists = meta_file.exists()
                 if metadata_exists:
-                    meta = json.loads(meta_file.read_text())
+                    try:
+                        meta = json.loads(meta_file.read_text())
+                    except (OSError, ValueError):
+                        meta = None
             if not metadata_exists:
                 meta = session_owner(rec["path"], live)
             if not isinstance(meta, dict) or not coordinator_alive(meta):
-                raise ValueError("unknown or dead coordinator")
+                owner_file = Path(rec["path"]) / ".th_owner"
+                owner = owner_file.read_text().strip() if owner_file.is_file() else ""
+                if owner and owner not in owner_repositories:
+                    owner_repositories[owner] = git_common_dir(owner)
+                common = owner_repositories.get(owner)
+                matches = [c for c, repo in repositories if common is not None and repo == common]
+                count = sum(2 if c.get("ambiguous") else 1 for c in matches)
+                if count == 1:
+                    candidate = matches[0]
+                    key = identities[(str(candidate["pid"]), str(candidate["start"]), candidate["boot"])]
+                    rec["adopted"] = True
+                    groups[key].append(rec)
+                else:
+                    project = get_project_short_name(rec["path"])
+                    old_pid = meta.get("pid") if isinstance(meta, dict) else None
+                    label = (f"코디네이터 종료 — {project} (이전 PID {old_pid})"
+                             if count == 0 and old_pid else f"코디네이터 불명 — {project} 후보 {count}개")
+                    unknown.setdefault(label, []).append(rec)
+                continue
             identity = (str(meta["pid"]), str(meta["start"]), meta["boot"])
             key = identities.get(identity)
             if key is None:
@@ -1346,7 +1369,8 @@ if not all_mode:
                 key = (owner, str(meta.get("session") or ""), str(meta["pid"]), str(meta["start"]), str(meta.get("model") or "모델 미확인"))
             groups.setdefault(key, []).append(rec)
         except (OSError, ValueError, TypeError, KeyError):
-            unknown.append(rec)
+            project = get_project_short_name(rec["path"])
+            unknown.setdefault(f"코디네이터 불명 — {project} 후보 0개", []).append(rec)
 
     term_cols = 110
     env_cols = os.environ.get("COLUMNS", "").strip()
@@ -1385,6 +1409,8 @@ if not all_mode:
         eta = rec["eta"] if section_kind == "running" else "-"
 
         if section_kind == "running":
+            if rec.get("adopted"):
+                stage = f"인수됨 · {stage}"
             start_ts = get_task_start_ts(rec["path"]) or rec["latest_ts"]
             elapsed = format_rel_time(start_ts, now_ts, include_ago=False)
             ctx_tag = rec["ctx_info"].get("context_tag", "") if rec["ctx_info"] else ""
@@ -1511,9 +1537,10 @@ if not all_mode:
         if unknown:
             if groups:
                 print()
-            print("  코디네이터 미확인 (기록 없음 또는 종료)")
-            for rec in unknown:
-                print(format_section_row(build_display_row(rec, "running"), "running"))
+            for label, records in sorted(unknown.items()):
+                print(fit_width(f"  {label}", term_cols).rstrip())
+                for rec in records:
+                    print(format_section_row(build_display_row(rec, "running"), "running"))
     for title_txt, color_code, srows, show_cols, section_kind in sections:
         if not srows:
             continue

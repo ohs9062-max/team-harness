@@ -3044,11 +3044,15 @@ def test_th_status_running_section_shows_eta_column(test_env: dict):
             assert "예정" not in done_block
             for task_name in ("eta_speed", "eta_epoch"):
                 row = next(
-                    line for line in running_block.splitlines() if task_name in line
+                    line
+                    for line in running_block.splitlines()
+                    if task_name in line and "코디네이터" not in line
                 )
                 assert re.search(r"\b\d{2}:\d{2}\b", row)
             no_eta_row = next(
-                line for line in running_block.splitlines() if "eta_none" in line
+                line
+                for line in running_block.splitlines()
+                if "eta_none" in line and "코디네이터" not in line
             )
             assert re.search(r"방금\s+-\s+", no_eta_row)
     finally:
@@ -3071,7 +3075,11 @@ def test_th_status_ignores_future_status_timestamp_for_eta(test_env: dict):
             text=True,
         )
         assert result.returncode == 0, result.stderr
-        row = next(line for line in result.stdout.splitlines() if "eta_future" in line)
+        row = next(
+            line
+            for line in result.stdout.splitlines()
+            if "eta_future" in line and "코디네이터" not in line
+        )
         assert re.search(r"방금\s+-\s+", row)
     finally:
         proc.terminate()

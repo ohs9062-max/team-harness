@@ -11,12 +11,26 @@ _UUID = re.compile(r"^[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$")
 _TAIL = 256 * 1024
 
 
-def session_for(vendor: Any, args: Any, env: Any):
+def session_for(vendor: Any, args: Any, env: Any, pid: Any = None, start: Any = None):
     if vendor.startswith("codex"):
         return env.get(b"CODEX_THREAD_ID", b"").decode(errors="ignore") or env.get(
             b"CODEX_SESSION_ID", b""
         ).decode(errors="ignore")
     if vendor == "claude":
+        if pid is not None and start is not None:
+            try:
+                data = json.loads(
+                    (Path.home() / ".claude/sessions" / f"{pid}.json").read_text()
+                )
+                sid = data.get("sessionId")
+                if (
+                    str(data.get("procStart")) == str(start)
+                    and isinstance(sid, str)
+                    and _UUID.fullmatch(sid)
+                ):
+                    return sid
+            except (OSError, ValueError, TypeError, AttributeError):
+                pass
         for i, arg in enumerate(args):
             if arg in ("--resume", "-r", "--session-id") and i + 1 < len(args):
                 return args[i + 1]

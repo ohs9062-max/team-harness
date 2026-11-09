@@ -61,6 +61,132 @@ def test_bound_transcript_model_and_cache(tmp_path: Any, monkeypatch: Any):
     )
 
 
+def test_claude_process_session_file(tmp_path: Any, monkeypatch: Any):
+    from team_harness.coordinator_models import resolve_model
+    from team_harness.coordinator_models import session_for
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    sid = "12345678-1234-1234-1234-123456789abc"
+    old = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    sessions = tmp_path / ".claude" / "sessions"
+    sessions.mkdir(parents=True)
+    session_file = sessions / "123.json"
+    transcript = tmp_path / ".claude" / "projects" / "project"
+    transcript.mkdir(parents=True)
+    (transcript / f"{sid}.jsonl").write_text(
+        json.dumps(
+            {"type": "assistant", "sessionId": sid, "message": {"model": "opus"}}
+        )
+        + "\n"
+    )
+    session_file.write_text(json.dumps({"sessionId": sid, "procStart": 456}))
+    actual = session_for("claude", ["claude"], {}, 123, "456")
+    assert actual == sid
+    assert (
+        resolve_model("claude", actual, 123, "456", home=tmp_path, persist_cache=False)
+        == "opus"
+    )
+    assert session_for("claude", ["claude", "--resume", old], {}, 123, "456") == sid
+    assert session_for("claude", ["claude", "-r", old], {}, 123, "457") == old
+    session_file.write_text("{")
+    assert (
+        session_for(
+            "claude", ["claude"], {b"CLAUDE_CODE_SESSION_ID": old.encode()}, 123, "456"
+        )
+        == old
+    )
+    session_file.unlink()
+    assert session_for("claude", ["claude", "-r", old], {}, 123, "456") == old
+
+
+def test_repository_adoption_display(tmp_path: Any):
+    repo = Path(__file__).resolve().parents[2]
+    main = tmp_path / "project"
+    main.mkdir()
+    subprocess.run(["git", "init", "-q", str(main)], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(main),
+            "-c",
+            "user.name=test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "init",
+        ],
+        check=True,
+    )
+    worktree = tmp_path / "worktree"
+    subprocess.run(
+        ["git", "-C", str(main), "worktree", "add", "-q", "--detach", str(worktree)],
+        check=True,
+    )
+    other = tmp_path / "other"
+    other.mkdir()
+    subprocess.run(["git", "init", "-q", str(other)], check=True)
+    watch = tmp_path / "watch"
+    watch.mkdir()
+    task = tmp_path / "task"
+    task.mkdir()
+    (task / "STATUS").write_text("working\n")
+    (task / "worker.pid").write_text(str(os.getpid()))
+    (task / ".th_owner").write_text(str(main))
+    (task / ".th_coordinator.json").write_text(
+        json.dumps({"pid": 99999999, "start": "1", "boot": "boot"})
+    )
+    (watch / "tasks.txt").write_text(str(task))
+    shim = tmp_path / "sitecustomize.py"
+    env = {
+        **os.environ,
+        "TH_WATCH_DIR": str(watch),
+        "COLUMNS": "160",
+        "NO_COLOR": "1",
+        "PYTHONPATH": os.pathsep.join([str(tmp_path), str(repo / "src")]),
+    }
+
+    def output(paths: Any):
+        shim.write_text(
+            "import team_harness.coordinator_identity as i\n"
+            + "i.live_coordinators = lambda: "
+            + repr(
+                [
+                    dict(
+                        cwd=str(path),
+                        session=f"s{n}",
+                        pid=100 + n,
+                        start="1",
+                        boot="boot",
+                        model="model",
+                    )
+                    for n, path in enumerate(paths)
+                ]
+            )
+            + "\n"
+        )
+        return subprocess.run(
+            [str(repo / "scripts/th-status.sh")],
+            env=env,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout
+
+    one = output([worktree])
+    assert "worktree / model (PID 100)" in one and "인수됨" in one
+    zero = output([other])
+    assert "코디네이터 종료 — project (이전 PID 99999999)" in zero
+    assert "인수됨" not in zero
+    two = output([main, worktree])
+    assert "코디네이터 불명 — project 후보 2개" in two
+    assert "인수됨" not in two
+    (task / ".th_coordinator.json").unlink()
+    assert "코디네이터 불명 — project 후보 0개" in output([])
+
+
 def test_empty_coordinator_groups(tmp_path: Any):
     repo = Path(__file__).resolve().parents[2]
     watch = tmp_path / "watch"
@@ -175,11 +301,11 @@ def test_groups_and_recent_five(tmp_path: Any):
         assert len(headers) == 1
         assert lines[1] == headers[0]
         for index, line in enumerate(lines):
-            if " / " in line and "(PID " in line or "코디네이터 미확인" in line:
+            if " / " in line and "(PID " in line or "코디네이터 종료" in line:
                 has_workers = (
                     f"프로젝트 / astra (PID {pid})" in line
                     or f"프로젝트 / 모델 미확인 (PID {pid})" in line
-                    or "코디네이터 미확인" in line
+                    or "코디네이터 종료" in line
                 )
                 if has_workers:
                     assert index + 1 < len(lines)
@@ -193,7 +319,7 @@ def test_groups_and_recent_five(tmp_path: Any):
     assert f"프로젝트 / 모델 미확인 (PID {pid})" in out
     assert "session0" not in out and "session1" not in out
     assert "\n\n  프로젝트 /" in out
-    assert "코디네이터 미확인" in out
+    assert "코디네이터 종료" in out
     assert "주의05" not in out and "끝남11" not in out
     assert out.index("주의09") < out.index("주의10")
     watched = subprocess.Popen(

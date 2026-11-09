@@ -145,7 +145,7 @@ def live_coordinators():
                 model = args[i + 1]
             elif arg.startswith("--model="):
                 model = arg.split("=", 1)[1]
-        vendor_session = session_for(name, args, env)
+        vendor_session = session_for(name, args, env, pid, start)
         model = resolve_model(name, vendor_session, pid, start) or model
         meta = {
             "pid": pid,
@@ -167,6 +167,37 @@ def live_coordinators():
         if previous is not meta:
             previous["ambiguous"] = True
     return list(by_session.values())
+
+
+def git_common_dir(directory: Any):
+    """Find a repository's common git directory without invoking git."""
+    try:
+        if not Path(directory).is_absolute() or not Path(directory).is_dir():
+            return None
+        path = Path(directory).resolve()
+        for parent in (path, *path.parents):
+            dotgit = parent / ".git"
+            if dotgit.is_dir():
+                gitdir = dotgit.resolve()
+            elif dotgit.is_file():
+                text = dotgit.read_text().strip()
+                if not text.startswith("gitdir: "):
+                    return None
+                gitdir = (parent / text[8:]).resolve()
+                if not gitdir.is_dir():
+                    return None
+            else:
+                continue
+            common = gitdir / "commondir"
+            result = (
+                (gitdir / common.read_text().strip()).resolve()
+                if common.is_file()
+                else gitdir
+            )
+            return result if result.is_dir() else None
+    except (OSError, ValueError, RuntimeError):
+        pass
+    return None
 
 
 def session_owner(task: Any, candidates: Any):
