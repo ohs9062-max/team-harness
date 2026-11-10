@@ -110,12 +110,18 @@ def report_cli(days: int, owner: Path | None, as_json: bool) -> None:
 def archive_cli(dry_run: bool, docs: bool, owner: Path | None) -> None:
     """Archive eligible workspace data."""
     if docs:
+        from team_harness.docs_migrate import main_checkout
         from team_harness.docs_migrate import manual
         from team_harness.docs_migrate import owners
 
         roots = owners()
         if owner is not None:
-            roots &= {owner.resolve()}
+            selected, _ = main_checkout(owner.resolve())
+            roots = (
+                {root for root in roots if main_checkout(root)[0] == selected}
+                if selected
+                else {owner.resolve()}
+            )
         for row in manual(roots, datetime.now().astimezone(), dry_run=dry_run):
             click.echo(row)
         return

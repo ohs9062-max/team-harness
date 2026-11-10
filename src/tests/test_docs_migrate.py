@@ -93,3 +93,60 @@ def test_dry_run_never_launches(repo: Path, monkeypatch: pytest.MonkeyPatch) -> 
     result = CliRunner().invoke(main, ["archive", "--docs", "--dry-run"])
     assert result.exit_code == 0
     assert "AGENTS.md=305" in result.output
+
+
+def test_registered_worktrees_launch_and_commit_once(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    worktrees = [tmp_path / "worktree1", tmp_path / "worktree2"]
+    for i, worktree in enumerate(worktrees):
+        git(repo, "worktree", "add", "-qb", f"branch{i}", str(worktree))
+    watch = tmp_path / "watch"
+    watch.mkdir()
+    tasks = []
+    for i, owner in enumerate([repo, *worktrees]):
+        task = tmp_path / f"registered{i}"
+        task.mkdir()
+        (task / ".th_owner").write_text(str(owner))
+        tasks.append(str(task))
+    (watch / "tasks.txt").write_text("\n".join(tasks))
+    now = datetime.now().astimezone()
+    rows = dm.manual(dm.owners(), now, dry_run=True)
+    assert len(rows) == 1
+    assert f"{repo} (워크트리 2개에서)" in rows[0]
+    result = CliRunner().invoke(
+        main, ["archive", "--docs", "--dry-run", "--owner", str(worktrees[0])]
+    )
+    assert result.exit_code == 0 and str(repo) in result.output
+    real = subprocess.run
+
+    def fake_launcher(
+        cmd: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        if str(cmd[0]).endswith("th-launch.sh"):
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        return real(cmd, **kwargs)  # type: ignore[call-overload]
+
+    monkeypatch.setattr(dm.subprocess, "run", fake_launcher)
+    assert len(dm.manual(dm.owners(), now, dry_run=False)) == 1
+    task = next((repo / ".th_docs").glob("docs_migrate_*"))
+    lines = (repo / "AGENTS.md").read_text().splitlines(keepends=True)
+    (repo / "AGENTS.md").write_text("".join(lines[:100]))
+    archive = repo / "docs/archive" / f"AGENTS_이관_{now:%Y%m%d}.md"
+    archive.parent.mkdir(parents=True)
+    archive.write_text("".join(lines[100:]))
+    dm.finish(repo, task)
+    assert len(git(repo, "log", "--oneline").splitlines()) == 2
+    for worktree in worktrees:
+        assert len(git(worktree, "log", "--oneline").splitlines()) == 1
+        assert not (worktree / ".th_docs").exists()
+
+
+def test_invalid_and_bare_repositories_are_skipped(tmp_path: Path) -> None:
+    bare = tmp_path / "bare.git"
+    subprocess.run(["git", "init", "--bare", "-q", str(bare)], check=True)
+    rows = dm.scan(
+        {bare, tmp_path / "missing"}, datetime.now(), execute=False, log=False
+    )
+    assert any("bare repository" in row for row in rows)
+    assert any("missing" in row for row in rows)

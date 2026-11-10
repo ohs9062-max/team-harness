@@ -39,6 +39,24 @@ def owners() -> set[Path]:
     return found
 
 
+def main_checkout(root: Path) -> tuple[Path | None, str]:
+    common = git(root, "rev-parse", "--git-common-dir")
+    if common.returncode:
+        return None, "not a repository or checkout missing"
+    bare = git(root, "rev-parse", "--is-bare-repository")
+    if bare.returncode or bare.stdout.strip() == "true":
+        return None, "bare repository"
+    path = Path(common.stdout.strip())
+    path = (root / path).resolve() if not path.is_absolute() else path.resolve()
+    main = path.parent
+    if path.name != ".git" or not main.is_dir() or not (main / ".git").is_dir():
+        return None, "main checkout missing or bare repository"
+    result = git(main, "rev-parse", "--show-toplevel")
+    if result.returncode or Path(result.stdout.strip()).resolve() != main:
+        return None, "main checkout missing"
+    return main, ""
+
+
 def event(message: str) -> None:
     wd = watch_dir()
     wd.mkdir(parents=True, exist_ok=True)
@@ -104,11 +122,21 @@ def scan(
     roots: set[Path], now: datetime, *, execute: bool, log: bool = True
 ) -> list[str]:
     rows: list[str] = []
-    for root in sorted(roots):
+    grouped: dict[Path, int] = {}
+    for owner in sorted(roots):
+        root, reason = main_checkout(owner)
+        if root is None:
+            row = f"{owner}: [{reason}]"
+            rows.append(row)
+            if log:
+                event(row)
+            continue
+        grouped[root] = grouped.get(root, 0) + (owner.resolve() != root)
+    for root, count in sorted(grouped.items()):
         try:
             counts, reason = detect(root, now)
             row = (
-                f"{root}: "
+                f"{root} (워크트리 {count}개에서): "
                 + ", ".join(f"{n}={v}" for n, v in counts.items())
                 + f" [{reason}]"
             )
@@ -259,7 +287,10 @@ def finish(root: Path, task: Path) -> None:
 
 
 def reap() -> None:
-    for root in owners():
+    roots = {
+        root for owner in owners() if (root := main_checkout(owner)[0]) is not None
+    }
+    for root in roots:
         for task in (root / ".th_docs").glob("docs_migrate_*"):
             if (
                 (task / "attempt.json").is_file()
