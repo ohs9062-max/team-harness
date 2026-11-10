@@ -71,6 +71,10 @@ def main() -> None:
 def _archive_on_start(owner: Path) -> None:
     try:
         archive_daily(datetime.now().astimezone(), owner)
+        from team_harness.docs_migrate import owners
+        from team_harness.docs_migrate import scan
+
+        scan(owners(), datetime.now().astimezone(), execute=False)
     except Exception as exc:
         wd = watch_dir()
         wd.mkdir(parents=True, exist_ok=True)
@@ -101,10 +105,23 @@ def report_cli(days: int, owner: Path | None, as_json: bool) -> None:
 
 @main.command("archive")
 @click.option("--dry-run", is_flag=True)
-@click.option("--owner", type=click.Path(path_type=Path), default=Path.cwd)
-def archive_cli(dry_run: bool, owner: Path) -> None:
+@click.option("--docs", is_flag=True)
+@click.option("--owner", type=click.Path(path_type=Path), default=None)
+def archive_cli(dry_run: bool, docs: bool, owner: Path | None) -> None:
     """Archive eligible workspace data."""
-    for move in archive_workspace(owner, datetime.now().astimezone(), dry_run):
+    if docs:
+        from team_harness.docs_migrate import manual
+        from team_harness.docs_migrate import owners
+
+        roots = owners()
+        if owner is not None:
+            roots &= {owner.resolve()}
+        for row in manual(roots, datetime.now().astimezone(), dry_run=dry_run):
+            click.echo(row)
+        return
+    for move in archive_workspace(
+        owner or Path.cwd(), datetime.now().astimezone(), dry_run
+    ):
         click.echo(f"{move.source} → {move.destination}")
 
 

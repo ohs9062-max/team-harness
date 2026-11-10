@@ -54,3 +54,6 @@ Do not read or write the coordinator journal (`.claude/current_status.md`, `.cla
   is indispensable, write the reason in `FAILED` and hand it to the coordinator.
   `TH_ALLOW_IMAGES=1` is reserved for a coordinator to set after the user has
   explicitly requested image reading in the current turn; never set it yourself.
+
+- AGENTS.md와 CLAUDE.md에는 현재 유효한 규칙만 명령문으로 쓰고, 경위·사례·폐기 규칙·원문 인용·사고 기록은 `docs/archive/AGENTS_이관_<YYYYMMDD>.md`로 옮겨 `(경위: docs/archive/...md §<절>)`만 남긴다.
+- 문서별 상한은 `TH_DOCS_MAX_LINES`(기본 300줄)이며 내용을 삭제하지 않고 옮긴다. 현재 유효한 규칙 문장은 본문에 남긴다.

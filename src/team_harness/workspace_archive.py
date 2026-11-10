@@ -312,6 +312,10 @@ def archive_on_start(owner: Path) -> None:
     """Run the shared daily check without blocking the caller on failure."""
     try:
         archive_daily(datetime.now().astimezone(), owner)
+        from team_harness.docs_migrate import owners
+        from team_harness.docs_migrate import scan
+
+        scan(owners(), datetime.now().astimezone(), execute=False)
     except Exception as exc:
         try:
             wd = watch_dir()
