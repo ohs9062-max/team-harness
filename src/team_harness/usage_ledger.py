@@ -158,6 +158,8 @@ def status_times(task: Path) -> tuple[datetime | None, datetime | None, str]:
 def task_result(task: Path) -> str:
     if (task / "VERIFY_FAILED").is_file():
         return "verify_failed"
+    if (task / "VERIFY_NONE").is_file():
+        return "검증 없음"
     if (task / "VERIFIED").is_file():
         return "verified"
     state = terminal_status(task)

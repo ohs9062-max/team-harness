@@ -42,6 +42,7 @@ GENERATED = {
     "verify_result.txt",
     "digest.md",
     "VERIFIED",
+    "VERIFY_NONE",
     "VERIFY_FAILED",
 }
 
@@ -462,10 +463,16 @@ def verify(task: Path, event: str = "") -> tuple[dict[str, Any], str]:
             json.dumps(result, ensure_ascii=False, indent=2) + "\n",
         )
         atomic_write(task / "verify_result.txt", text)
-        marker = "VERIFY_FAILED" if overall == "FAIL" else "VERIFIED"
-        (task / ("VERIFIED" if marker == "VERIFY_FAILED" else "VERIFY_FAILED")).unlink(
-            missing_ok=True
+        marker = (
+            "VERIFY_FAILED"
+            if overall == "FAIL"
+            else "VERIFY_NONE"
+            if overall == "WARN 검증 없음"
+            else "VERIFIED"
         )
+        for other in ("VERIFIED", "VERIFY_NONE", "VERIFY_FAILED"):
+            if other != marker:
+                (task / other).unlink(missing_ok=True)
         atomic_write(task / marker, text + read(task / ".th_verify_output.txt"))
         return result, text
 

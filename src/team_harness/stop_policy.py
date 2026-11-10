@@ -152,6 +152,7 @@ def _done_fingerprint(task: Path) -> str:
         "task.md",
         "verify.sh",
         "VERIFIED",
+        "VERIFY_NONE",
         "VERIFY_FAILED",
         "verify_result.json",
         "verify_result.txt",

@@ -197,3 +197,12 @@ def test_daily_once(env: tuple[Path, Path]) -> None:
     (watch / "events.log").write_bytes(b"x" * (5 * 1024 * 1024 + 1))
     assert not archive_daily(NOW + timedelta(hours=23), owner)
     assert archive_daily(NOW + timedelta(days=1), owner)
+
+
+def test_task_verify_none_archived_with_marker(env: tuple[Path, Path]) -> None:
+    path = task(env)
+    (path / "VERIFIED").rename(path / "VERIFY_NONE")
+    age(path)
+    archive_workspace(env[0], NOW)
+    assert (path.parent / "_archive/202610/job/VERIFY_NONE").is_file()
+    assert "VERIFY_NONE" in (env[0] / ".claude/archive/archive.log").read_text()

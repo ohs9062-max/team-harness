@@ -579,7 +579,7 @@ for marker in "$task_dir"/.th_*; do
   [[ $marker == "$task_dir/.th_launch_env" || $marker == "$task_dir/.th_launch.lock" ]] || rm -f "$marker"
 done
 rm -f "$task_dir"/DONE "$task_dir"/FAILED "$task_dir"/FAILED.* \
-  "$task_dir"/VERIFIED "$task_dir"/VERIFY_FAILED "$task_dir"/verify_result.json \
+  "$task_dir"/VERIFIED "$task_dir"/VERIFY_NONE "$task_dir"/VERIFY_FAILED "$task_dir"/verify_result.json \
   "$task_dir"/verify_result.txt "$task_dir"/digest.md "$task_dir"/context_exit_requested.json
 if [[ $preserve_job_pid != 1 ]]; then
   rm -f "$task_dir/job.pid"

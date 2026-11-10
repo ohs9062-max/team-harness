@@ -37,7 +37,13 @@ def _destination(path: Path, now: datetime) -> Path:
 
 
 def _move(
-    src: Path, dst: Path, now: datetime, dry_run: bool, moves: list[Move], log: Path
+    src: Path,
+    dst: Path,
+    now: datetime,
+    dry_run: bool,
+    moves: list[Move],
+    log: Path,
+    marker: str = "",
 ) -> Path:
     dst = _destination(dst, now)
     moves.append(Move(src, dst))
@@ -46,7 +52,11 @@ def _move(
         shutil.move(str(src), str(dst))
         log.parent.mkdir(parents=True, exist_ok=True)
         with log.open("a", encoding="utf-8") as out:
-            out.write(f"{now.isoformat(sep=' ', timespec='seconds')} | {src} → {dst}\n")
+            out.write(
+                f"{now.isoformat(sep=' ', timespec='seconds')} | {src} → {dst}"
+                + (f" | {marker}" if marker else "")
+                + "\n"
+            )
     return dst
 
 
@@ -177,7 +187,9 @@ def _eligible(task: Path, owner: Path, now: datetime) -> bool:
             return False
         if "_outputs" not in task.parts or "_archive" in task.parts:
             return False
-        if not all((task / name).is_file() for name in ("DONE", "VERIFIED")):
+        if not (task / "DONE").is_file() or not any(
+            (task / name).is_file() for name in ("VERIFIED", "VERIFY_NONE")
+        ):
             return False
         if any((task / name).exists() for name in ("FAILED", "VERIFY_FAILED")):
             return False
@@ -250,6 +262,9 @@ def archive_workspace(
                             dry_run,
                             moves,
                             log,
+                            "VERIFY_NONE"
+                            if (task / "VERIFY_NONE").is_file()
+                            else "VERIFIED",
                         )
                         moved_paths[line] = str(dest)
                         lines[i] = str(dest)

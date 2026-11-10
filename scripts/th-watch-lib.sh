@@ -43,7 +43,7 @@ watch_quota_lock_active() {
 watch_task_signature() {
   local task=$1 file files=()
   for file in "$task/DONE" "$task/FAILED" "$task"/FAILED.* "$task/STATUS" \
-    "$task/task.md" "$task/verify.sh" "$task/VERIFIED" "$task/VERIFY_FAILED" \
+    "$task/task.md" "$task/verify.sh" "$task/VERIFIED" "$task/VERIFY_NONE" "$task/VERIFY_FAILED" \
     "$task/KILLED" "$task/job.pid" "$task/worker.pid" \
     "$task/.th_daemon.done" "$task/.th_daemon.failed" \
     "$task/.th_digest.done" "$task/.th_digest.failed" "$task/.th_context.json" \
@@ -68,7 +68,7 @@ watch_task_settled() {
   fi
   if [[ -n $terminal ]]; then
     [[ -f $task/.th_daemon.$terminal && -f $task/.th_digest.$terminal ]] || return 1
-    [[ -f $task/VERIFIED || -f $task/VERIFY_FAILED ]] || return 1
+    [[ -f $task/VERIFIED || -f $task/VERIFY_NONE || -f $task/VERIFY_FAILED ]] || return 1
   fi
   marker="$task/.th_daemon.settled"
   [[ -f $marker && ! -e $task/context_exit_requested.json ]] || return 1
@@ -89,7 +89,7 @@ watch_task_settled() {
     { kill -0 "$pid" 2>/dev/null || [[ -d /proc/$pid ]]; } && return 1
   done
   for file in "$task/DONE" "$task/FAILED" "$task"/FAILED.* "$task/STATUS" \
-    "$task/task.md" "$task/verify.sh" "$task/VERIFIED" "$task/VERIFY_FAILED" \
+    "$task/task.md" "$task/verify.sh" "$task/VERIFIED" "$task/VERIFY_NONE" "$task/VERIFY_FAILED" \
     "$task/KILLED" "$task/job.pid" "$task/worker.pid" \
     "$task/.th_daemon.$terminal" "$task/.th_digest.$terminal" \
     "$task/.th_context.json" "$task/.th_session" "$task/codex.log" \
@@ -171,7 +171,7 @@ cpu_ticks() {
 latest_signature() {
   # Include actual artifacts, excluding digest/watch bookkeeping and input files.
   find "$1" -maxdepth 3 -type f ! -name '.th_*' \
-    ! -name 'digest.md' ! -name 'verify_result.*' ! -name VERIFIED ! -name VERIFY_FAILED \
+    ! -name 'digest.md' ! -name 'verify_result.*' ! -name VERIFIED ! -name VERIFY_NONE ! -name VERIFY_FAILED \
     ! -name task.md ! -name verify.sh ! -name '*.pid' ! -name 'workers*.md' \
     ! -name 'context_exit_requested.json' \
     -printf '%T@ %p\n' 2>/dev/null | sort
@@ -489,7 +489,7 @@ inspect_task_event() {
       rm -f "$marker.settled" "$marker.auto_continue"
     elif [[ ! -f $marker.settled && -f $marker.auto_continue ]]; then
       local changed_file
-      for changed_file in "$task/DONE" "$task/FAILED" "$task"/FAILED.* "$task/STATUS" "$task/task.md" "$task/verify.sh" "$task/VERIFIED" "$task/VERIFY_FAILED" "$task/worker.pid" "$task/job.pid"; do
+      for changed_file in "$task/DONE" "$task/FAILED" "$task"/FAILED.* "$task/STATUS" "$task/task.md" "$task/verify.sh" "$task/VERIFIED" "$task/VERIFY_NONE" "$task/VERIFY_FAILED" "$task/worker.pid" "$task/job.pid"; do
         if [[ -e $changed_file && $changed_file -nt $marker.auto_continue ]]; then
           rm -f "$marker.auto_continue"
           break
@@ -614,7 +614,7 @@ inspect_task_event() {
       touch "$marker.done"
       local v_res
       if [[ $marker_prefix == .th_daemon ]]; then
-        rm -f "$task/VERIFIED" "$task/VERIFY_FAILED"
+        rm -f "$task/VERIFIED" "$task/VERIFY_NONE" "$task/VERIFY_FAILED"
         [[ -f $task/verify.sh ]] && v_res="대기" || v_res="없음"
       else
         v_res=$(run_verification "$task")
@@ -622,7 +622,7 @@ inspect_task_event() {
       "$callback_fn" "$task" "완료" "완료" "$v_res" "$owner"
     fi
     if [[ $marker_prefix == .th_daemon && $current_worker_alive == 0 && -f $task/.th_digest.done && ! -f $marker.auto_continue ]] && \
-       [[ -f $task/VERIFIED || -f $task/VERIFY_FAILED ]]; then
+       [[ -f $task/VERIFIED || -f $task/VERIFY_NONE || -f $task/VERIFY_FAILED ]]; then
       local continue_event before_signature after_signature
       before_signature=$(watch_task_signature "$task")
       rm -f "$marker.settled"
@@ -642,7 +642,7 @@ inspect_task_event() {
         rm -f "$marker.settled"
       fi
     fi
-    if [[ ( -z $ctx_event || $ctx_event == none ) && $marker_prefix == .th_daemon && -f $marker.auto_continue && -f $task/.th_digest.done ]] && [[ -f $task/VERIFIED || -f $task/VERIFY_FAILED ]] && [[ ! -e $task/context_exit_requested.json ]]; then
+    if [[ ( -z $ctx_event || $ctx_event == none ) && $marker_prefix == .th_daemon && -f $marker.auto_continue && -f $task/.th_digest.done ]] && [[ -f $task/VERIFIED || -f $task/VERIFY_NONE || -f $task/VERIFY_FAILED ]] && [[ ! -e $task/context_exit_requested.json ]]; then
       local legacy_signature
       legacy_signature=$(watch_task_signature "$task")
       [[ -z $initial_signature || $initial_signature != "$legacy_signature" ]] || printf '%s\n' "$legacy_signature" > "$marker.settled"
@@ -661,7 +661,7 @@ inspect_task_event() {
     if [[ ! -f $marker.failed || $failed_file -nt $marker.failed ]]; then
       rm -f "$marker.done"
       touch "$marker.failed"
-      [[ $marker_prefix == .th_daemon ]] && rm -f "$task/VERIFIED" "$task/VERIFY_FAILED"
+      [[ $marker_prefix == .th_daemon ]] && rm -f "$task/VERIFIED" "$task/VERIFY_NONE" "$task/VERIFY_FAILED"
       local reason
       if [[ -f $failed_file ]]; then
         reason=$(tail -n 5 "$failed_file" 2>/dev/null | tr '\n' ' ')
@@ -671,7 +671,7 @@ inspect_task_event() {
       "$callback_fn" "$task" "실패" "실패 — $reason" "-" "$owner"
     fi
     if [[ $marker_prefix == .th_daemon && $current_worker_alive == 0 && $distinct_job_alive != 1 && -f $task/.th_digest.failed && ! -f $marker.auto_continue ]] && \
-       [[ -f $task/VERIFIED || -f $task/VERIFY_FAILED ]]; then
+       [[ -f $task/VERIFIED || -f $task/VERIFY_NONE || -f $task/VERIFY_FAILED ]]; then
       local continue_event before_signature after_signature
       before_signature=$(watch_task_signature "$task")
       rm -f "$marker.settled"
@@ -691,7 +691,7 @@ inspect_task_event() {
         rm -f "$marker.settled"
       fi
     fi
-    if [[ ( -z $ctx_event || $ctx_event == none ) && $marker_prefix == .th_daemon && $distinct_job_alive != 1 && -f $marker.auto_continue && -f $task/.th_digest.failed ]] && [[ -f $task/VERIFIED || -f $task/VERIFY_FAILED ]] && [[ ! -e $task/context_exit_requested.json ]]; then
+    if [[ ( -z $ctx_event || $ctx_event == none ) && $marker_prefix == .th_daemon && $distinct_job_alive != 1 && -f $marker.auto_continue && -f $task/.th_digest.failed ]] && [[ -f $task/VERIFIED || -f $task/VERIFY_NONE || -f $task/VERIFY_FAILED ]] && [[ ! -e $task/context_exit_requested.json ]]; then
       local legacy_signature
       legacy_signature=$(watch_task_signature "$task")
       [[ -z $initial_signature || $initial_signature != "$legacy_signature" ]] || printf '%s\n' "$legacy_signature" > "$marker.settled"

@@ -421,3 +421,69 @@ def test_artifacts_resolve_repo_relative_path_and_verify_clears_pythonpath(
     )
     monkeypatch.setenv("PYTHONPATH", "/opt/ros/jazzy")
     assert wd.check_script(task)["verdict"] == "PASS"
+
+
+def test_none_marker_exclusive_and_status(
+    tmp_path: Path, sandbox: tuple[Path, Path, Path]
+):
+    task = tmp_path / "empty"
+    task.mkdir()
+    (task / "DONE").touch()
+    (task / "VERIFIED").touch()
+    (task / "VERIFY_FAILED").touch()
+    assert wd.verify(task)[0]["overall"] == "WARN 검증 없음"
+    assert (task / "VERIFY_NONE").is_file()
+    assert not (task / "VERIFIED").exists() and not (task / "VERIFY_FAILED").exists()
+    (sandbox[1] / "tasks.txt").write_text(str(task) + "\n")
+    assert "검증 없음" in shell("th-status.sh", "-a").stdout
+    (task / "verify.sh").write_text("#!/bin/sh\nexit 0\n")
+    (task / "verify.sh").chmod(0o755)
+    assert wd.verify(task)[0]["overall"] == "PASS"
+    assert (task / "VERIFIED").exists() and not (task / "VERIFY_NONE").exists()
+    (task / "verify.sh").write_text("#!/bin/sh\nexit 1\n")
+    assert wd.verify(task)[0]["overall"] == "FAIL"
+    assert (task / "VERIFY_FAILED").exists() and not (task / "VERIFIED").exists()
+
+
+def test_reclassify_dry_run_and_apply(tmp_path: Path, sandbox: tuple[Path, Path, Path]):
+    tasks = []
+    for name, verdict in [("target", "SKIP"), ("keep", "PASS")]:
+        task = tmp_path / name
+        task.mkdir()
+        (task / "VERIFIED").write_text("old")
+        (task / "verify_result.json").write_text(
+            json.dumps(
+                {
+                    "overall": "PASS",
+                    "items": {
+                        "상태": {"verdict": "PASS"},
+                        "verify": {"verdict": verdict},
+                    },
+                }
+            )
+        )
+        tasks.append(task)
+    registry = sandbox[1] / "tasks.txt"
+    registry.write_text("\n".join(map(str, tasks)))
+    before = (tasks[0] / "verify_result.json").read_bytes()
+    dry = shell(
+        "th-verify.sh", "--reclassify", "--dry-run", "--registry", str(registry)
+    )
+    assert (
+        dry.returncode == 0
+        and str(tasks[0]) in dry.stdout
+        and str(tasks[1]) not in dry.stdout
+    )
+    assert (tasks[0] / "verify_result.json").read_bytes() == before
+    assert sorted(p.name for p in tasks[0].iterdir()) == [
+        "VERIFIED",
+        "verify_result.json",
+    ]
+    result = shell("th-verify.sh", "--reclassify", "--registry", str(registry))
+    assert result.returncode == 0 and str(tasks[0]) in result.stdout
+    assert (
+        json.loads((tasks[0] / "verify_result.json").read_text())["overall"]
+        == "WARN 검증 없음"
+    )
+    assert (tasks[0] / "VERIFY_NONE").exists() and not (tasks[0] / "VERIFIED").exists()
+    assert (tasks[1] / "VERIFIED").exists()

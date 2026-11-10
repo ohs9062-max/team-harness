@@ -749,8 +749,17 @@ def get_verify_status(task_dir):
     failed_file = os.path.join(task_dir, "VERIFY_FAILED")
     verify_sh = os.path.join(task_dir, "verify.sh")
 
+    if os.path.isfile(failed_file):
+        return "VERIFY_FAILED" if os.path.isfile(os.path.join(task_dir, "verify_result.json")) else "실패"
+    if os.path.isfile(os.path.join(task_dir, "VERIFY_NONE")):
+        return "검증 없음"
     if os.path.isfile(os.path.join(task_dir, "verify_result.json")):
-        return "VERIFY_FAILED" if os.path.isfile(failed_file) else "VERIFIED"
+        try:
+            if json.loads(Path(task_dir, "verify_result.json").read_text(encoding="utf-8"))["overall"] == "WARN 검증 없음":
+                return "검증 없음"
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+        return "VERIFIED"
     if os.path.isfile(verified_file):
         return "통과"
     elif os.path.isfile(failed_file):

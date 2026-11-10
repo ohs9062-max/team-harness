@@ -344,6 +344,7 @@ def main(task: Path) -> None:
         skip_names = {
             "digest.md",
             "VERIFIED",
+            "VERIFY_NONE",
             "VERIFY_FAILED",
             "task.md",
             "verify.sh",

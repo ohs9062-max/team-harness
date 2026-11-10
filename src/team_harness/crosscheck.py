@@ -144,6 +144,7 @@ def adopt_snapshot(path: Path, task: Path) -> dict[str, str]:
         "DONE",
         "FAILED",
         "VERIFIED",
+        "VERIFY_NONE",
         "VERIFY_FAILED",
         "digest.md",
         "verify_result.json",
