@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 import subprocess
+from typing import Any
 
 import pytest
 
@@ -357,7 +358,7 @@ def test_adopt_single_agy_uses_explicit_backend_without_budget_bypass(
     (source / "original").write_text("original")
     commands = []
 
-    def fake_run(cmd, **kwargs):
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         commands.append((cmd, kwargs.get("env", {})))
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
