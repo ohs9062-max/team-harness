@@ -437,8 +437,12 @@ def verify(task: Path, event: str = "") -> tuple[dict[str, Any], str]:
                 }[event],
             )
         overall = max((v["verdict"] for v in checks.values()), key=lambda v: RANK[v])
-        if overall == "SKIP":
-            overall = "PASS"
+        if overall != "FAIL" and all(
+            check["verdict"] == "SKIP"
+            for name, check in checks.items()
+            if name != "상태"
+        ):
+            overall = "WARN 검증 없음"
         now = datetime.now().strftime("%F %T")
         result = {
             "task_dir": str(task),
@@ -668,9 +672,26 @@ def digest(task: Path, event: str = "", event_id: str = "") -> None:
             atomic_write(marker, event_id + "\n")
 
 
+def quick_title(task: Path) -> str:
+    """Recognize the no-material case without executing project hooks or scripts."""
+    if (task / "verify.sh").exists() or os.environ.get("TH_VERIFY_HOOK"):
+        return ""
+    if any((parent / "verify_hooks.py").is_file() for parent in (task, *task.parents)):
+        return ""
+    if check_state(task)["verdict"] != "PASS":
+        return ""
+    if all(
+        check(task)["verdict"] == "SKIP" for check in (check_artifacts, check_numeric)
+    ):
+        return "WARN 검증 없음"
+    return ""
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("verify", "digest", "pids", "terminal"))
+    parser.add_argument(
+        "mode", choices=("verify", "digest", "pids", "terminal", "quick-title")
+    )
     parser.add_argument("task", type=Path)
     parser.add_argument(
         "--event", choices=("done", "failed", "dead", "quota", "stall"), default=""
@@ -684,6 +705,8 @@ def main() -> int:
         print("\n".join(str(pid) for pid in live_pids(task)))
     elif args.mode == "terminal":
         print(terminal_status(task))
+    elif args.mode == "quick-title":
+        print(quick_title(task))
     elif args.mode == "verify":
         result, text = verify(task)
         print(text, end="")

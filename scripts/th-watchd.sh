@@ -163,7 +163,19 @@ handle_daemon_event() {
     멈춤|'긴 실행 대기') digest_event=stall ;;
     *) digest_event=unknown ;;
   esac
-  [[ $event_type == 자동\ 계속 ]] || queue_digest "$task" "$digest_event"
+  local queue_after=0 quick_title
+  if [[ $event_type == 완료 ]]; then
+    quick_title=$(python3 "$script_dir/../src/team_harness/worker_digest.py" quick-title "$task" 2>/dev/null || true)
+    if [[ -n $quick_title ]]; then
+      v_res=$quick_title
+      touch "$task/.th_daemon.verify_notice"
+    fi
+    queue_after=1
+  elif [[ $event_type == '검증 완료' ]]; then
+    event_type='검증 결과'
+  elif [[ $event_type != 자동\ 계속 && $event_type != '채택 검증' ]]; then
+    queue_digest "$task" "$digest_event"
+  fi
 
   local jev_suffix="" jev_advice=""
   if [[ $event_type == 실패 && ${TEAM_HARNESS_JEV:-} != 0 ]]; then
@@ -205,6 +217,24 @@ handle_daemon_event() {
   if [[ ${TH_JEV_WATCH:-on} != "off" && ${TEAM_HARNESS_JEV:-} != 0 ]]; then
     th_jev -m team_harness.decisions.watch_cli "$task" "$event_type" "$watch_dir"
   fi
+  (( queue_after == 0 )) || queue_digest "$task" "$digest_event"
+}
+
+deliver_verification() {
+  local task=$1 verify_title verify_owner
+  [[ -f $task/.th_daemon.done && -f $task/.th_digest.done && -f $task/verify_result.json && ! -f $task/.th_daemon.verify_notice ]] || return 0
+  verify_title=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["overall"])' "$task/verify_result.json" 2>/dev/null || true)
+  [[ -n $verify_title ]] || return 0
+  if [[ $verify_title != 'WARN 검증 없음' ]]; then
+    touch "$task/.th_daemon.verify_notice"
+    return 0
+  fi
+  verify_owner=$(cat "$task/.th_owner" 2>/dev/null || true)
+  [[ -n $verify_owner ]] || verify_owner=$(cat "$task/.th_worktree" 2>/dev/null || true)
+  [[ -z $verify_owner ]] || verify_owner=$(project_owner "$verify_owner")
+  [[ -n $verify_owner && -d $verify_owner ]] || return 0
+  handle_daemon_event "$task" "검증 완료" "완료" "$verify_title" "$verify_owner"
+  touch "$task/.th_daemon.verify_notice"
 }
 
 while true; do
@@ -229,8 +259,24 @@ while true; do
   if [[ -f $registry ]]; then
     while IFS= read -r task || [[ -n $task ]]; do
       [[ -n $task && -d $task ]] || continue
+      if [[ -f $task/../crosscheck.json && ${task%/*} == */.th_adopt ]]; then
+        adopt_dir=${task%/*}
+        if [[ ! -f $adopt_dir/.notified ]]; then
+          adopt_message=$(python3 "$script_dir/../src/team_harness/crosscheck.py" notify "$adopt_dir" 2>/dev/null) || adopt_message=""
+          if [[ -n $adopt_message ]]; then
+            adopt_owner=$(cat "$task/.th_owner" 2>/dev/null || true)
+            if [[ -n $adopt_owner && -d $adopt_owner ]]; then
+              handle_daemon_event "$task" "채택 검증" "$adopt_message" "-" "$adopt_owner"
+              touch "$adopt_dir/.notified"
+            fi
+          fi
+        fi
+        continue
+      fi
+      deliver_verification "$task"
       watch_task_settled "$task" && continue
       inspect_task_event "$task" "$watch_dir" ".th_daemon" "$stall_sec" "" handle_daemon_event
+      deliver_verification "$task"
     done < "$registry"
     watch_retire_settled "$watch_dir"
   fi
@@ -240,6 +286,9 @@ while true; do
   if [[ ${TH_ONCE:-0} == 1 ]]; then
     # Test/one-shot mode owns its children and returns with no background jobs.
     for digest_pid in "${digest_jobs[@]}"; do wait "$digest_pid" || true; done
+    while IFS= read -r task || [[ -n $task ]]; do
+      [[ -n $task && -d $task ]] && deliver_verification "$task"
+    done < "$registry"
     break
   fi
 

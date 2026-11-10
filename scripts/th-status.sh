@@ -724,6 +724,26 @@ except OSError:
 legacy_tasks = set(raw_tasks)
 raw_tasks = list(dict.fromkeys(raw_tasks + list(observed)))
 valid_tasks = [t for t in raw_tasks if os.path.isdir(t)]
+def print_unverified_alerts():
+    counts = {}
+    archived = []
+    try:
+        archived = Path(watch_dir, "tasks_done.txt").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        pass
+    for task in set(valid_tasks + archived):
+        try:
+            data = json.loads(Path(task, "verify_result.json").read_text(encoding="utf-8"))
+            stamp = Path(task, "DONE").stat().st_mtime
+            if (data["overall"] == "WARN 검증 없음" and Path(task, "DONE").is_file()
+                    and 0 <= time.time() - stamp <= 7 * 86400):
+                project = get_project_short_name(task)
+                counts[project] = counts.get(project, 0) + 1
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    for project, count in sorted(counts.items()):
+        print(f"ℹ 검증 없음: {project} {count}건")
+
 def get_verify_status(task_dir):
     verified_file = os.path.join(task_dir, "VERIFIED")
     failed_file = os.path.join(task_dir, "VERIFY_FAILED")
@@ -1530,6 +1550,7 @@ if not all_mode:
     )
     if unread_inbox_line():
         print(unread_inbox_line())
+    print_unverified_alerts()
 
     sections = [
         ("⚠ 주의 필요", "33", att_rows, False, "attention"),
@@ -1576,6 +1597,7 @@ raw_w = [max(str_width(headers[i]), max((str_width(r[i]) for r in rows), default
 
 if unread_inbox_line():
     print(unread_inbox_line())
+print_unverified_alerts()
 
 w0 = min(max(raw_w[0], str_width(headers[0])), 24)
 w2 = min(max(raw_w[2], str_width(headers[2])), 10)

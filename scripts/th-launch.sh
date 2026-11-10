@@ -575,6 +575,7 @@ usage_record
 unset TH_AUTO_CONTINUE TH_ROLLOVER
 # Attempt markers are reset, but policy overrides must survive every relaunch.
 for marker in "$task_dir"/.th_*; do
+  [[ -d $marker ]] && continue
   [[ $marker == "$task_dir/.th_launch_env" || $marker == "$task_dir/.th_launch.lock" ]] || rm -f "$marker"
 done
 rm -f "$task_dir"/DONE "$task_dir"/FAILED "$task_dir"/FAILED.* \
@@ -673,6 +674,10 @@ else
   [[ -n $worker_tz ]] && timezone_env=("TZ=$worker_tz")
 fi
 worker_env=("TH_ROLE=worker" "TH_WORKSPACE=$journal_workspace" "TH_WORKER_OUTPUT_DIR=$task_dir" "TH_WORKER_ALLOW_PATHS=$worker_allow_paths" "TH_HARNESS_SRC=$py_src" "${image_env[@]}" "${timezone_env[@]}")
+adopt_timeout=()
+if [[ ${TH_ADOPT_TIMEOUT_SEC:-} =~ ^[1-9][0-9]*$ ]]; then
+  adopt_timeout=(timeout --signal=TERM --kill-after=5 "${TH_ADOPT_TIMEOUT_SEC}s")
+fi
 
 if [[ "$worker_type" == "codex" ]]; then
   project_doc_args=("-c" "project_doc_max_bytes=0")
@@ -687,7 +692,7 @@ if [[ "$worker_type" == "codex" ]]; then
   (
     if [[ "$spawn_mode" == "resume" && -n "$resume_session_id" ]]; then cd "$worktree"; fi
     exec {launch_lock_fd}>&-
-    exec env -u TH_JOB_TASK "${worker_env[@]}" setsid nohup "${worker_cmd[@]}" "$@" -- "$prompt"
+    exec env -u TH_JOB_TASK "${worker_env[@]}" setsid nohup "${adopt_timeout[@]}" "${worker_cmd[@]}" "$@" -- "$prompt"
   ) < /dev/null > codex.log 2>&1 &
   printf '%s\n' "$!" > "$task_dir/worker.pid"
 elif [[ "$worker_type" == "agy" ]]; then
@@ -695,7 +700,7 @@ elif [[ "$worker_type" == "agy" ]]; then
   if [[ -n "$worktree" && "$worktree" != "$task_dir" && -d "$worktree" ]]; then
     add_dir_args+=("--add-dir" "$worktree")
   fi
-  env -u TH_JOB_TASK "${worker_env[@]}" setsid nohup agy --dangerously-skip-permissions --model "$model" "${add_dir_args[@]}" "$@" --print="$prompt" < /dev/null > agy.log 2>&1 {launch_lock_fd}>&- &
+  env -u TH_JOB_TASK "${worker_env[@]}" setsid nohup "${adopt_timeout[@]}" agy --dangerously-skip-permissions --model "$model" "${add_dir_args[@]}" "$@" --print="$prompt" < /dev/null > agy.log 2>&1 {launch_lock_fd}>&- &
   init_pid=$!
 
   # agy는 실행 직후 별도 PID로 재부모화될 수 있다. 최초 nohup PID는
