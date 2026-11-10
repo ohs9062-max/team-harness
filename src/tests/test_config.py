@@ -920,3 +920,24 @@ def test_worker_suffix_does_not_restore_self_stop_exit():
         Path(__file__).resolve().parents[2] / "design/user_config/worker_suffix.md"
     ).read_text(encoding="utf-8")
     assert "If stopping yourself" not in suffix
+
+
+def test_operating_policy_is_loaded_once_with_local_override(tmp_path, monkeypatch):
+    global_path = _write_global_config(
+        tmp_path,
+        monkeypatch,
+        ['operating_policy_file = "policy.md"', 'system_prompt = "user override"'],
+    )
+    (global_path.parent / "policy.md").write_text("global policy")
+    cwd = tmp_path / "project"
+    cwd.mkdir()
+    config = load_config(cwd=str(cwd))
+    assert config.system_prompt_extension == "global policy\n\nuser override"
+    local = cwd / ".team-harness"
+    local.mkdir()
+    (local / "config.toml").write_text(
+        '[coordinator]\noperating_policy_file="policy.md"'
+    )
+    (local / "policy.md").write_text("project policy")
+    config = load_config(cwd=str(cwd))
+    assert config.system_prompt_extension == "project policy\n\nuser override"

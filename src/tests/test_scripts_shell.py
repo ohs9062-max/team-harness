@@ -2683,6 +2683,13 @@ def test_th_watch_long_running_wait_detection_and_job_preservation(test_env: dic
     try:
         # 1. False positive check: when job.pid == worker.pid, it is NOT a detached job
         (task_dir / "worker.pid").write_text(f"{worker_proc.pid}\n", encoding="utf-8")
+        from team_harness.agents.process_identity import capture_starttime
+
+        (task_dir / "worker.pid.start").write_text(
+            json.dumps(
+                {"pid": worker_proc.pid, "start": capture_starttime(worker_proc.pid)}
+            )
+        )
         (task_dir / "job.pid").write_text(f"{worker_proc.pid}\n", encoding="utf-8")
         (task_dir / "codex.log").write_text(
             "Do not poll in a loop (sleep -> check -> sleep)\n"

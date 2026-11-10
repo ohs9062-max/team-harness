@@ -38,6 +38,15 @@ else:
     if current.find(begin, last) >= 0:
         raise SystemExit(f"multiple journal rule blocks in {target}")
     rewritten = current[:first] + rule + current[last:]
+# Narrowly migrate the known blanket reread restrictions. Preserve unrelated
+# global instructions and all user-specific project rules.
+rewritten = rewritten.replace(
+    "2. 다시 읽는 것은 정말 필요할 때뿐이다(파일이 바뀌었거나, 컨텍스트 압축 등으로 내용을 잊었을 때). 그때도 **먼저 사용자에게 이유를 말하고 허락을 받은 뒤** 한 번만 읽는다.",
+    "2. 파일 변경·압축 후 상태 복원·승인된 정책 배포로 다시 읽어야 할 때는 필요한 부분만 한 번 읽는다. 기존 사용자 권한을 다시 묻지 않는다.",
+).replace(
+    "   - 실행 중 그 파일이 바뀌면 조용히 다시 읽지 말고 멈춰서 사용자에게 묻는다. 물을 수 없으면 중단한다.",
+    "   - 실행 중 정책이 바뀌면 버전을 기록하고 처리 경계에서 승인된 변경만 반영한다. 진행 중 작업의 입력·권한을 임의로 바꾸지 않는다.",
+)
 output.write_text(rewritten, encoding="utf-8")
 PY
   mv "$tmp" "$target"

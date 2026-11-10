@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 root=$(git rev-parse --show-toplevel)
+hook_root=$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")/.." && pwd)
 needs_canary=0
 needs_crosscheck=0
-crosscheck_ok=0
 while read -r local_ref local_sha remote_ref remote_sha; do
   [[ $local_sha =~ ^0+$ ]] && continue
   if [[ $remote_sha =~ ^0+$ ]]; then
@@ -16,18 +16,26 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     if git diff-tree --root -m --no-commit-id --name-only -r "$revision" | grep -E '^(scripts/|src/team_harness/)' > /dev/null; then
       needs_canary=1
     fi
+    revision_needs_crosscheck=0
+    revision_crosscheck_ok=0
+    # Read the parent once. grep -q in a pipe can terminate git show with
+    # SIGPIPE for a large document, falsely classifying an existing TH-D as new.
+    parent_decisions=$(git show "$revision^:design/decisions.md" 2>/dev/null || true)
     while IFS= read -r number; do
       [[ -n $number ]] || continue
-      if ! git show "$revision^:design/decisions.md" 2>/dev/null | grep -Eq "^## TH-D${number}([.[:space:]]|$)"; then
-        needs_crosscheck=1
+      if ! grep -Eq "^## TH-D${number}([.[:space:]]|$)" <<< "$parent_decisions"; then
+        revision_needs_crosscheck=1
       fi
     done < <(git diff-tree --root -m -p --no-commit-id "$revision" -- design/decisions.md | sed -nE 's/^\+## TH-D([0-9]+)([.[:space:]]|$).*/\1/p')
     while IFS= read -r trailer; do
       folder=${trailer#Crosscheck: }
-      if [[ -f "$folder/CROSSCHECK.md" ]] && awk '/^## 코디네이터 결정$/ {getline; if ($0 !~ /^시각: /) next; getline; if ($0 == "결정: 채택") valid=1} END {exit !valid}' "$folder/CROSSCHECK.md"; then
-        crosscheck_ok=1
+      if python3 "$hook_root/src/team_harness/adoption_gate.py" "$folder" "$root" "$revision"; then
+        revision_crosscheck_ok=1
       fi
     done < <(git show -s --format=%B "$revision" | git interpret-trailers --parse | grep '^Crosscheck: ' || true)
+    if (( revision_needs_crosscheck && ! revision_crosscheck_ok )); then
+      needs_crosscheck=1
+    fi
   done <<< "$revisions"
 done
 if (( needs_canary )); then
@@ -42,7 +50,7 @@ if (( needs_canary )); then
   fi
 fi
 
-if (( needs_crosscheck && ! crosscheck_ok )); then
+if (( needs_crosscheck )); then
   skip=${TH_CROSSCHECK_SKIP:-}
   if [[ -n ${skip//[[:space:]]/} ]]; then
     watch_dir=${TH_WATCH_DIR:-"$HOME/.team-harness/watch"}

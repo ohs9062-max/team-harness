@@ -55,7 +55,6 @@ from team_harness.worker_context import parse_task_metadata
 from team_harness.worker_context import registry_path_for_workspace
 from team_harness.worker_context import WorkerContextError
 from team_harness.worker_context import WorkerContextRegistry
-from team_harness.workspace_archive import archive_daily
 from team_harness.workspace_archive import archive_workspace
 from team_harness.workspace_archive import watch_dir
 
@@ -69,17 +68,9 @@ def main() -> None:
 
 
 def _archive_on_start(owner: Path) -> None:
-    try:
-        archive_daily(datetime.now().astimezone(), owner)
-        from team_harness.docs_migrate import owners
-        from team_harness.docs_migrate import scan
+    from team_harness.workspace_archive import archive_on_start
 
-        scan(owners(), datetime.now().astimezone(), execute=False)
-    except Exception as exc:
-        wd = watch_dir()
-        wd.mkdir(parents=True, exist_ok=True)
-        with (wd / "events.log").open("a") as out:
-            out.write(f"{datetime.now().isoformat()} archive failed: {exc}\n")
+    archive_on_start(owner)
 
 
 @main.command("report")

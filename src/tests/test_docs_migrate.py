@@ -1,5 +1,6 @@
 from datetime import datetime
 from datetime import timedelta
+import json
 from pathlib import Path
 import subprocess
 
@@ -67,9 +68,10 @@ def prepare(repo: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 def test_preserve_and_commit(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     task = prepare(repo, monkeypatch)
-    lines = (repo / "AGENTS.md").read_text().splitlines(keepends=True)
-    (repo / "AGENTS.md").write_text("".join(lines[:100]))
-    archive = repo / "docs/archive" / f"AGENTS_이관_{datetime.now():%Y%m%d}.md"
+    proposal = Path(json.loads((task / "attempt.json").read_text())["worktree"])
+    lines = (proposal / "AGENTS.md").read_text().splitlines(keepends=True)
+    (proposal / "AGENTS.md").write_text("".join(lines[:100]))
+    archive = proposal / "docs/archive" / f"AGENTS_이관_{datetime.now():%Y%m%d}.md"
     archive.parent.mkdir(parents=True)
     archive.write_text("".join(lines[100:]))
     dm.finish(repo, task)
@@ -80,7 +82,8 @@ def test_preserve_and_commit(repo: Path, monkeypatch: pytest.MonkeyPatch) -> Non
 def test_missing_line_rolls_back(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     task = prepare(repo, monkeypatch)
     original = (repo / "AGENTS.md").read_text()
-    (repo / "AGENTS.md").write_text("short\n")
+    proposal = Path(json.loads((task / "attempt.json").read_text())["worktree"])
+    (proposal / "AGENTS.md").write_text("short\n")
     dm.finish(repo, task)
     assert (repo / "AGENTS.md").read_text() == original
     assert "문서 이관 실패" in (repo / ".claude/inbox.md").read_text()
@@ -130,9 +133,10 @@ def test_registered_worktrees_launch_and_commit_once(
     monkeypatch.setattr(dm.subprocess, "run", fake_launcher)
     assert len(dm.manual(dm.owners(), now, dry_run=False)) == 1
     task = next((repo / ".th_docs").glob("docs_migrate_*"))
-    lines = (repo / "AGENTS.md").read_text().splitlines(keepends=True)
-    (repo / "AGENTS.md").write_text("".join(lines[:100]))
-    archive = repo / "docs/archive" / f"AGENTS_이관_{now:%Y%m%d}.md"
+    proposal = Path(json.loads((task / "attempt.json").read_text())["worktree"])
+    lines = (proposal / "AGENTS.md").read_text().splitlines(keepends=True)
+    (proposal / "AGENTS.md").write_text("".join(lines[:100]))
+    archive = proposal / "docs/archive" / f"AGENTS_이관_{now:%Y%m%d}.md"
     archive.parent.mkdir(parents=True)
     archive.write_text("".join(lines[100:]))
     dm.finish(repo, task)
@@ -150,3 +154,58 @@ def test_invalid_and_bare_repositories_are_skipped(tmp_path: Path) -> None:
     )
     assert any("bare repository" in row for row in rows)
     assert any("missing" in row for row in rows)
+
+
+def test_concurrent_document_edit_is_preserved(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    task = prepare(repo, monkeypatch)
+    proposal = Path(json.loads((task / "attempt.json").read_text())["worktree"])
+    lines = (proposal / "AGENTS.md").read_text().splitlines(keepends=True)
+    (proposal / "AGENTS.md").write_text("".join(lines[:100]))
+    archive = proposal / "docs/archive" / f"AGENTS_이관_{datetime.now():%Y%m%d}.md"
+    archive.parent.mkdir(parents=True)
+    archive.write_text("".join(lines[100:]))
+    concurrent = (repo / "AGENTS.md").read_text() + "new user rule\n"
+    (repo / "AGENTS.md").write_text(concurrent)
+    dm.finish(repo, task)
+    assert (repo / "AGENTS.md").read_text() == concurrent
+    assert "changed during migration" in (task / "finished").read_text()
+    assert archive.is_file()
+
+
+def test_failed_legacy_attempt_does_not_restore_over_editor(repo: Path) -> None:
+    task = repo / "legacy"
+    task.mkdir()
+    (task / "attempt.json").write_text(
+        json.dumps(
+            {
+                "original": {"AGENTS.md": "old\n"},
+                "time": datetime.now().timestamp(),
+                "archive": "docs/archive/old.md",
+            }
+        )
+    )
+    (task / "FAILED").touch()
+    edited = (repo / "AGENTS.md").read_text() + "keep this edit\n"
+    (repo / "AGENTS.md").write_text(edited)
+    dm.finish(repo, task)
+    assert (repo / "AGENTS.md").read_text() == edited
+
+
+def test_claude_only_migration(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (repo / "AGENTS.md").write_text("active rule\n")
+    (repo / "CLAUDE.md").write_text("".join(f"history {i}\n" for i in range(305)))
+    git(repo, "add", "AGENTS.md", "CLAUDE.md")
+    git(repo, "commit", "-qm", "claude reference")
+    task = prepare(repo, monkeypatch)
+    proposal = Path(json.loads((task / "attempt.json").read_text())["worktree"])
+    lines = (proposal / "CLAUDE.md").read_text().splitlines(keepends=True)
+    (proposal / "CLAUDE.md").write_text("".join(lines[:100]))
+    archive = proposal / "docs/archive" / f"AGENTS_이관_{datetime.now():%Y%m%d}.md"
+    archive.parent.mkdir(parents=True)
+    archive.write_text("".join(lines[100:]))
+    dm.finish(repo, task)
+    assert "문서 이관 실패" not in (task / "finished").read_text()
+    assert len((repo / "CLAUDE.md").read_text().splitlines()) == 100
+    assert (repo / "AGENTS.md").read_text() == "active rule\n"

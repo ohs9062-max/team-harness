@@ -17,6 +17,9 @@ from team_harness.agents.template import template_uses_generated_uuid
 from team_harness.caller_contract import INHERITED_CALLER_CONTEXT_ENV
 from team_harness.config import Config
 from team_harness.coordinator_zone import WORKER_PROMPT_HEADER
+from team_harness.resource_slots import bind as bind_slot
+from team_harness.resource_slots import release as release_slot
+from team_harness.resource_slots import reserve as reserve_slot
 
 
 @dataclass(frozen=True)
@@ -138,9 +141,27 @@ async def spawn(
         # derived value only for ``type=harness`` descendants.
         merged_env.pop(INHERITED_CALLER_CONTEXT_ENV, None)
 
-    stdout_file = stdout_path.open("wb")
-    stderr_file = stderr_path.open("wb")
+    request = asyncio.create_task(
+        asyncio.to_thread(
+            reserve_slot,
+            status_task_dir or log_dir / agent_id,
+            agent_type,
+            effective_model or "",
+            effective_effort or "",
+        )
+    )
     try:
+        slot = await asyncio.shield(request)
+    except asyncio.CancelledError:
+        # The filesystem reservation may finish after cancellation. Reclaim it
+        # when the thread completes rather than leaking a coordinator-owned slot.
+        request.add_done_callback(_release_admission_result)
+        raise
+    stdout_file = None
+    stderr_file = None
+    try:
+        stdout_file = stdout_path.open("wb")
+        stderr_file = stderr_path.open("wb")
         # The worker is the process-group leader and writes its streams
         # directly to the caller-owned log files. Descendants inherit both the
         # group and file descriptors, preserving crash-recovery visibility.
@@ -153,9 +174,24 @@ async def spawn(
             env=merged_env,
             start_new_session=True,
         )
+    except BaseException:
+        release_slot(slot)
+        raise
     finally:
-        stdout_file.close()
-        stderr_file.close()
+        if stdout_file is not None:
+            stdout_file.close()
+        if stderr_file is not None:
+            stderr_file.close()
+    try:
+        bind_slot(slot, proc.pid)
+    except BaseException:
+        from team_harness.agents.process_identity import kill_group
+
+        token = capture_starttime(proc.pid)
+        outcome = await asyncio.to_thread(kill_group, proc.pid, token)
+        if outcome in {"killed", "already-exited"}:
+            release_slot(slot)
+        raise
     # Identity capture: retry once while the child is definitely still ours
     # (unreaped) — without a starttime the worker can later only be waited on,
     # never verifiably killed (probe verdict "unverifiable").
@@ -206,6 +242,17 @@ async def spawn(
         ),
         effective_effort=effective_effort,
     )
+
+
+def _release_admission_result(request: asyncio.Task[str]) -> None:
+    try:
+        release_slot(request.result())
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).exception(
+            "Unable to release cancelled worker admission"
+        )
 
 
 def _recorded_model(

@@ -17,8 +17,10 @@ import subprocess
 import sys
 
 if __package__:
+    from .adoption_gate import record_receipt
     from .coordinator_zone import is_coordinator_zone
 else:
+    from adoption_gate import record_receipt  # pyright: ignore[reportMissingImports]
     import coordinator_zone as cz  # pyright: ignore[reportMissingImports]
 
     is_coordinator_zone = cz.is_coordinator_zone
@@ -137,7 +139,20 @@ test -s VERDICT.md
 
 def adopt_snapshot(path: Path, task: Path) -> dict[str, str]:
     """Freeze input files while excluding the verifier and harness bookkeeping."""
-    ignored = {".git", ".venv", ".claude", ".th_adopt", "__pycache__"}
+    ignored = {
+        ".git",
+        ".venv",
+        ".claude",
+        ".th_adopt",
+        "__pycache__",
+        ".team-harness",
+        ".th_docs",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".mypy_cache",
+        "node_modules",
+        ".next",
+    }
     volatile = {
         "STATUS",
         "WORKLOG.md",
@@ -247,7 +262,12 @@ def adopt(args: argparse.Namespace) -> int:
     folder = task / ".th_adopt"
     if folder.exists():
         raise ValueError(f"기존 채택 검증이 있습니다: {folder}")
-    names = list(NAMES) if args.two else ["terra"]
+    worker = getattr(args, "worker", "codex")
+    if worker not in {"codex", "agy"} or (args.two and worker != "codex"):
+        raise ValueError(
+            "--worker supports codex|agy for a single verifier; --two uses the existing pair"
+        )
+    names = list(NAMES) if args.two else (["agy"] if worker == "agy" else ["terra"])
     evidence = [{"path": str(task), "copy": "", "hashes": adopt_snapshot(task, task)}]
     source_data = [
         {
@@ -291,6 +311,7 @@ def adopt(args: argparse.Namespace) -> int:
         "launching": True,
         "models": {
             "terra": os.environ.get("TH_ADOPT_MODEL", "gpt-6.1-terra"),
+            "agy": os.environ.get("TH_ADOPT_MODEL", "Gemini 3.8 Flash (High)"),
             "sol": os.environ.get("TH_CROSSCHECK_SOL_MODEL", "gpt-6.1-sol"),
             "argon": os.environ.get(
                 "TH_CROSSCHECK_ARGON_MODEL", "gemini-4-argon-medium"
@@ -336,7 +357,7 @@ def adopt(args: argparse.Namespace) -> int:
                 [
                     str(ROOT / "scripts/th-launch.sh"),
                     str(own),
-                    "agy" if name == "argon" else "codex",
+                    "agy" if name in {"argon", "agy"} else "codex",
                     data["models"][name],
                     "medium",
                     str(own),
@@ -746,6 +767,7 @@ def decide(args: argparse.Namespace) -> int:
         f.write(
             "\n반례와 미해결 항목 (검증자 보고 원문):\n\n" + "\n\n".join(details) + "\n"
         )
+    record_receipt(folder, data, args.adopt, args.override_reason)
     return 0
 
 
@@ -765,6 +787,7 @@ def main() -> int:
     p.add_argument("claim")
     p.add_argument("--source", nargs="+", action="extend", default=[])
     p.add_argument("--two", action="store_true")
+    p.add_argument("--worker", choices=("codex", "agy"), default="codex")
     p = sub.add_parser("verdict")
     p.add_argument("folder")
     p = sub.add_parser("notify")

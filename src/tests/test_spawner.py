@@ -662,3 +662,43 @@ def test_recorded_model_argv_flag_templates_keep_resolved_value():
         )
         == "premium"
     )
+
+
+@pytest.mark.asyncio
+async def test_sdk_worker_and_shell_admission_share_a_limit(tmp_path, monkeypatch):
+    import os
+    import subprocess
+    import sys
+
+    monkeypatch.setenv("TH_MAX_PARALLEL", "1")
+    template = AgentTemplate(
+        command=(sys.executable, "-c", "import time; time.sleep(30)"), model_flag=None
+    )
+    running = await spawn(
+        agent_id="running",
+        agent_type="codex",
+        prompt="task",
+        cwd=tmp_path,
+        config=Config(agent_templates={"codex": template}),
+        log_dir=tmp_path / "logs",
+    )
+    command = [
+        sys.executable,
+        "-m",
+        "team_harness.resource_slots",
+        "reserve",
+        str(tmp_path / "shell-task"),
+        "codex",
+        "test",
+        "medium",
+        str(os.getpid()),
+    ]
+    try:
+        refused = subprocess.run(command, capture_output=True, text=True)
+        assert refused.returncode == 4
+        assert "상한" in refused.stderr
+    finally:
+        running.proc.terminate()
+        await running.proc.wait()
+    admitted = subprocess.run(command, capture_output=True, text=True)
+    assert admitted.returncode == 0, admitted.stderr

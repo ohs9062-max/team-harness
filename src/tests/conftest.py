@@ -11,7 +11,11 @@ from team_harness.tracking.context import ContextTracker
 
 
 @pytest.fixture(autouse=True)
-def isolate_worker_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+def isolate_worker_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # Tests must never register real workers or start persistent maintenance.
+    monkeypatch.setenv("TH_NO_MAINTENANCE", "1")
+    monkeypatch.setenv("TH_WATCH_DIR", str(tmp_path / "isolated-watch"))
+    monkeypatch.setenv("TH_CODEX_SESSIONS_DIR", str(tmp_path / "isolated-sessions"))
     for key in (
         "TH_JOB_TASK",
         "TH_WORKER_OUTPUT_DIR",

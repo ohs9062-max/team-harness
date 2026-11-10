@@ -153,14 +153,14 @@ def test_artifacts_and_parent_hook(
     assert wd.verify(task)[0]["overall"] == "FAIL"
 
 
-def test_verify_script_is_one_item_and_runs_once(
+def test_verify_script_is_one_item_and_reruns_without_declared_inputs(
     tmp_path: Path, sandbox: tuple[Path, Path, Path]
 ):
     task = make_task(tmp_path, "script")
     (task / "verify.sh").write_text("echo run >> attempts\nexit 1\n")
     assert wd.verify(task)[0]["items"]["verify"]["verdict"] == "FAIL"
     assert wd.verify(task)[0]["overall"] == "FAIL"
-    assert (task / "attempts").read_text().splitlines() == ["run"]
+    assert (task / "attempts").read_text().splitlines() == ["run", "run"]
 
 
 @pytest.mark.parametrize("mode", ["quota", "failure", "timeout"])
@@ -487,3 +487,26 @@ def test_reclassify_dry_run_and_apply(tmp_path: Path, sandbox: tuple[Path, Path,
     )
     assert (tasks[0] / "VERIFY_NONE").exists() and not (tasks[0] / "VERIFIED").exists()
     assert (tasks[1] / "VERIFIED").exists()
+
+
+@pytest.mark.parametrize("declared", [False, True])
+def test_changed_verification_input_invalidates_pass(tmp_path: Path, declared: bool):
+    (tmp_path / "DONE").touch()
+    (tmp_path / "value.txt").write_text("good")
+    (tmp_path / "verify.sh").write_text('test "$(cat value.txt)" = good\n')
+    if declared:
+        (tmp_path / "verify_inputs.json").write_text('["value.txt"]')
+    assert wd.check_script(tmp_path)["verdict"] == "PASS"
+    (tmp_path / "value.txt").write_text("bad")
+    assert wd.check_script(tmp_path)["verdict"] == "FAIL"
+
+
+def test_force_verification_bypasses_declared_cache(tmp_path: Path):
+    (tmp_path / "input").write_text("stable")
+    (tmp_path / "verify_inputs.json").write_text('["input"]')
+    (tmp_path / "verify.sh").write_text("echo run >> attempts\n")
+    assert wd.check_script(tmp_path)["verdict"] == "PASS"
+    assert wd.check_script(tmp_path)["verdict"] == "PASS"
+    assert (tmp_path / "attempts").read_text().splitlines() == ["run"]
+    wd.check_script(tmp_path, force=True)
+    assert (tmp_path / "attempts").read_text().splitlines() == ["run", "run"]

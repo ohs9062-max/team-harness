@@ -11,7 +11,6 @@ import json
 import os
 from pathlib import Path
 import re
-import signal
 import subprocess
 import sys
 import time
@@ -280,7 +279,7 @@ def main(task: Path) -> None:
                             stage = "preflight"
                             preflight_relaunch(task, args, workspace)
                             stage = "terminate"
-                            terminate_worker_group(worker_pid)
+                            terminate_worker_group(worker_pid, task=task)
                             stage = "park"
                             park_worker_if_needed("context_cap_exceeded")
                             stage = "relaunch"
@@ -578,33 +577,11 @@ def main(task: Path) -> None:
         return "none", []
 
     def terminate_worker_preserving_job(w_pid: int, w_pgid: int, j_pid: int) -> None:
-        try:
-            os.killpg(w_pgid, signal.SIGTERM)
-        except ProcessLookupError:
-            return
-        except OSError:
-            try:
-                os.kill(w_pid, signal.SIGTERM)
-            except OSError:
-                return
-        kill_grace = float(os.environ.get("TH_KILL_GRACE_SEC", "10"))
-        deadline = time.monotonic() + max(0.1, kill_grace)
-        while time.monotonic() < deadline:
-            if not pid_alive(w_pid):
-                break
-            time.sleep(0.1)
-        if pid_alive(w_pid):
-            try:
-                if get_pgid(j_pid) != w_pgid:
-                    os.killpg(w_pgid, signal.SIGKILL)
-                else:
-                    os.kill(w_pid, signal.SIGKILL)
-            except OSError:
-                pass
-            for _ in range(10):
-                if not pid_alive(w_pid):
-                    break
-                time.sleep(0.05)
+        # Recheck job separation immediately before using the shared verified
+        # group-kill path. Missing identity must never become a PID-only kill.
+        if get_pgid(j_pid) == w_pgid:
+            raise ValueError("job shares worker group; termination deferred")
+        terminate_worker_group(w_pid, task=task)
 
     event_out = "none"
     detail_out = ""
@@ -680,10 +657,15 @@ def main(task: Path) -> None:
                                     break
                     except Exception:
                         pass
-                    terminate_worker_preserving_job(worker_pid, w_pgid, job_pid)
-                    park_worker_if_needed(reason_override="long_running_wait")
-                    event_out = "worker_terminated"
-                    detail_out = f"긴 실행 대기 — 응답 제한시간({exit_grace}s) 초과로 최소 문서 작성 후 worker(pid={worker_pid}) 종료, job.pid({job_pid}) 보존"
+                    try:
+                        terminate_worker_preserving_job(worker_pid, w_pgid, job_pid)
+                    except (OSError, ValueError) as exc:
+                        event_out = "kill_deferred"
+                        detail_out = f"긴 실행 대기 — 종료 보류: {exc}"
+                    else:
+                        park_worker_if_needed(reason_override="long_running_wait")
+                        event_out = "worker_terminated"
+                        detail_out = f"긴 실행 대기 — 응답 제한시간({exit_grace}s) 초과로 최소 문서 작성 후 worker(pid={worker_pid}) 종료, job.pid({job_pid}) 보존"
         else:
             support_state, cmds = extract_worker_tool_events(task)
             if support_state == "unsupported":

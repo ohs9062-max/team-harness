@@ -2,9 +2,9 @@
 
 상태 확인은 LLM이 로그를 계속 읽는 방식 대신 기존 셸 감시기의 사건 감지로 시작한다. `scripts/th-watch-lib.sh::inspect_task_event`가 DONE/FAILED(FAILED.* 포함), 마지막 STATUS의 완료/실패, 프로세스 소실, 쿼터·용량 오류, CPU 누적 ticks와 파일 mtime이 600초 동안 바뀌지 않은 멈춤을 판단한다. 날짜가 붙은 STATUS도 같은 방식으로 처리한다. 파일 목록과 각 mtime을 비교하므로 다른 파일의 갱신도 멈춤 타이머를 초기화한다. job.pid/worker.pid가 유효하지 않아도 작업 폴더를 정확한 명령 인자로 가진 agy를 /proc에서 찾는다. 이것은 생존 관찰이며 실행 중 세션의 입양이나 재연결은 아니다(TH-D2).
 
-`th-watchd.sh`는 사건을 표시한 뒤 `th-digest.sh`를 백그라운드로 요청한다. 알림, inbox, events.log, 기존 선택형 Jev 관찰과 th-watch의 깨우기는 유지된다. 완료의 verify.sh가 오래 걸려도 데몬 루프는 막히지 않는다. digest 자식은 daemon lock과 표준 스트림을 물려받지 않는다. `TH_ONCE=1`은 한 번 순회한 후 요청한 digest를 기다려 시험 프로세스를 남기지 않는다. 정상 데몬 종료도 digest 요청과 외부 명령 그룹을 정리한다. 새 데몬이나 주기적인 감시 LLM은 없다.
+`th-watchd.sh`는 사건을 표시한 뒤 `th-digest.sh`를 백그라운드로 요청한다. 알림, inbox, events.log, 기존 선택형 Jev 관찰과 th-watch의 깨우기는 유지된다. 완료의 verify.sh가 오래 걸려도 데몬 루프는 막히지 않는다. digest 자식은 daemon lock과 표준 스트림을 물려받지 않는다. `TH_ONCE=1`은 한 번 순회한 후 요청한 digest를 기다려 시험 프로세스를 남기지 않는다. 정상 데몬 종료도 digest 요청과 외부 명령 그룹을 정리한다. 주기적인 감시 LLM은 없다. 보고·보관·문서 이관은 별도 maintenance 프로세스가 맡는다.
 
-`src/team_harness/worker_digest.py::verify`는 작업별 flock 아래 상태, 기대 산출물, 수치, verify.sh, 프로젝트 hook을 검사한다. 항목의 PASS/WARN/FAIL/SKIP와 사유를 JSON 및 한 줄 텍스트로 저장한다. 전체 판정은 FAIL > WARN > PASS이고 SKIP은 악화시키지 않는다. FAILED는 오래된 DONE보다 우선한다. 미완료 상태에서 살아 있는 프로세스는 WARN, 프로세스도 없으면 FAIL이다. 완료 후 남아 있는 PID는 진단 정보로 기록한다. FAIL이면 VERIFY_FAILED, 그 외에는 VERIFIED를 쓰고 반대 마커를 제거한다.
+`src/team_harness/worker_digest.py::verify`는 작업별 flock 아래 상태, 기대 산출물, 수치, verify.sh, 프로젝트 hook을 검사한다. 항목의 PASS/WARN/FAIL/SKIP와 사유를 JSON 및 한 줄 텍스트로 저장한다. 전체 판정은 FAIL > WARN > PASS이고 SKIP은 악화시키지 않는다. FAILED는 오래된 DONE보다 우선한다. 미완료 상태에서 살아 있는 프로세스는 WARN, 프로세스도 없으면 FAIL이다. 완료 후 남아 있는 PID는 진단 정보로 기록한다. FAIL이면 VERIFY_FAILED, 상태 외 모든 검사가 SKIP이면 WARN 검증 없음과 VERIFY_NONE, 그 외에는 VERIFIED를 쓰고 다른 마커를 제거한다.
 
 산출물 목록은 task.md의 기대 산출물 절에만 한정한다. 백틱 경로(공백 포함 가능) 또는 단순 bullet 목록을 해석하며 파일/디렉터리/glob의 존재와 파일 수를 확인한다. 경로가 모호하면 WARN으로 표시한다. JSON의 중첩 숫자 및 숫자 문자열과 보고서 소수를 Decimal ROUND_HALF_UP으로 3자리 비교한다. 설정 값은 증거가 될 수 없으므로 results.json만 사용한다. 이는 숫자의 존재를 확인할 뿐 그 수치가 의미상 올바른 지표인지 증명하지 않는다. 그런 규칙은 프로젝트 hook에 둔다.
 
@@ -17,3 +17,5 @@ LLM 호출은 기본 agy이며 TH_DIGEST_WORKER/MODEL 환경변수로 변경한�
 스크립트가 제목 `## 시각 작업 [판정]`과 모든 검수 원문을 만든 뒤 선택적인 LLM 요약을 덧붙인다. LLM이 FAIL/WARN을 생략하거나 다른 문장으로 출력해도 검수 원문과 판정 파일은 유지된다. LLM 문장은 검증된 판정이 아니며 코디네이터는 제목/검수 줄을 기준으로 판단한다. `.th_owner`를 우선하는 inbox 위치 규칙으로 workers.md를 정하고 작업별 `.th_workers_file` override도 제공한다. 파일별 flock과 atomic replace로 동시 갱신을 보호한다. 200줄을 넘으면 오래된 블록을 workers_archive.md로 옮긴다. 최신 블록 자체가 200줄을 넘는 경우 앞 200줄을 유지하고 나머지 줄을 archive에 보관한다. 기존 TeamHarnessResult, SDK, config.toml 스키마, Protocol 작업 트리/세션 계약은 변경하지 않는다.
 
 작업 결과는 workers.md의 요약으로 판단한다. FAIL·WARN이거나 이상할 때만 원본을 연다. 감시용 LLM 워커는 띄우지 않는다.
+
+검수 캐시는 명시한 verify_inputs.json의 모든 입력 파일 내용이 같을 때만 사용한다. 입력 선언이 없는 검수는 실제로 다시 실행하며 --force로 캐시를 무시할 수 있다. 상세 계약은 `reliability-and-global-deployment.md`를 따른다.

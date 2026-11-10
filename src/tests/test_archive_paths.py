@@ -5,6 +5,7 @@ from types import ModuleType
 import pytest
 
 from team_harness import harness
+from team_harness import maintenance
 from team_harness import workspace_archive
 from team_harness.protocol import mode_a
 from team_harness.protocol import mode_b
@@ -16,12 +17,12 @@ class StopRun(Exception):
 
 
 @pytest.mark.asyncio
-async def test_run_start_calls_archive(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+async def test_run_start_schedules_maintenance(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     monkeypatch.setenv("TH_WATCH_DIR", str(tmp_path / "watch"))
     calls = []
-    monkeypatch.setattr(
-        workspace_archive, "archive_daily", lambda now, owner: calls.append(owner)
-    )
+    monkeypatch.setattr(maintenance, "start", lambda owner: calls.append(owner))
     monkeypatch.setattr(
         harness, "load_config", lambda **kwargs: (_ for _ in ()).throw(StopRun())
     )
@@ -32,14 +33,12 @@ async def test_run_start_calls_archive(monkeypatch: pytest.MonkeyPatch, tmp_path
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("module", [mode_a, mode_b, mode_c])
-async def test_protocol_start_calls_archive(
+async def test_protocol_start_schedules_maintenance(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, module: ModuleType
 ):
     monkeypatch.setenv("TH_WATCH_DIR", str(tmp_path / "watch"))
     calls = []
-    monkeypatch.setattr(
-        workspace_archive, "archive_daily", lambda now, owner: calls.append(owner)
-    )
+    monkeypatch.setattr(maintenance, "start", lambda owner: calls.append(owner))
     monkeypatch.setattr(
         module, "load_protocol_config", lambda: (_ for _ in ()).throw(StopRun())
     )
@@ -69,18 +68,15 @@ def test_recent_archive_does_nothing(monkeypatch: pytest.MonkeyPatch, tmp_path: 
 
 @pytest.mark.asyncio
 async def test_archive_failure_logs_and_run_continues(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ):
-    watch = tmp_path / "watch"
-    monkeypatch.setenv("TH_WATCH_DIR", str(watch))
+    def fail(owner: Path) -> None:
+        raise OSError("maintenance error")
 
-    def fail(now: datetime, owner: Path) -> None:
-        raise RuntimeError("archive error")
-
-    monkeypatch.setattr(workspace_archive, "archive_daily", fail)
+    monkeypatch.setattr(maintenance, "start", fail)
     monkeypatch.setattr(
         harness, "load_config", lambda **kwargs: (_ for _ in ()).throw(StopRun())
     )
     with pytest.raises(StopRun):
         await harness.TeamHarness(cwd=str(tmp_path)).run("task")
-    assert "archive failed: archive error" in (watch / "events.log").read_text()
+    assert "Unable to start maintenance: maintenance error" in caplog.text

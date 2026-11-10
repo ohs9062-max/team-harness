@@ -237,18 +237,13 @@ deliver_verification() {
   touch "$task/.th_daemon.verify_notice"
 }
 
+# Maintenance has its own process and singleton lock. Its failure cannot delay
+# completion/error delivery. One-shot tests never start persistent services.
+if [[ ${TH_ONCE:-0} != 1 ]]; then
+  th_python -m team_harness.maintenance --start || true
+fi
+
 while true; do
-  report_epoch=$(cat "$watch_dir/report.last" 2>/dev/null || printf 0)
-  report_epoch=${report_epoch%%.*}
-  if [[ ! $report_epoch =~ ^[0-9]+$ ]] || (( $(date +%s) - report_epoch >= 86400 )); then
-    th_python -m team_harness.loss_report || true
-  fi
-  archive_epoch=$(cat "$watch_dir/archive.last" 2>/dev/null || printf 0)
-  archive_epoch=${archive_epoch%%.*}
-  if [[ ! $archive_epoch =~ ^[0-9]+$ ]] || (( $(date +%s) - archive_epoch >= 86400 )); then
-    th_python -m team_harness.workspace_archive || true
-  fi
-  th_python -m team_harness.docs_migrate --daily || true
   # 자기 스크립트 또는 라이브러리 파일 변경 시 스스로 재실행 (exec)
   current_sig=$(get_script_sig)
   if [[ -n $current_sig && -n $last_sig && $current_sig != "$last_sig" ]]; then

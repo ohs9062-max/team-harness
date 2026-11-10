@@ -180,7 +180,13 @@ done <<< "$policy_out"
 [[ -f $suffix ]] || { echo "worker_suffix.md 없음(최신 정책을 붙일 수 없음): $suffix"; exit 1; }
 
 ctx_prep_file=$(mktemp "${TMPDIR:-/tmp}/th-launch-ctx.XXXXXX")
-cleanup_ctx_prep() { rm -f "$ctx_prep_file"; }
+admission_slot=""
+cleanup_ctx_prep() {
+  rm -f "$ctx_prep_file"
+  if [[ -n $admission_slot ]]; then
+    PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" th_python -m team_harness.resource_slots release "$admission_slot" || true
+  fi
+}
 trap cleanup_ctx_prep EXIT
 
 if ! PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" "${context_python[@]}" - "$journal_workspace" "$task_dir" "$worker_type" "$model" "$worktree" "$ctx_prep_file" << 'PYEOF'
@@ -643,6 +649,7 @@ if [[ -n $recovery_summary ]]; then
 $recovery_summary"
 fi
 
+admission_slot=$(PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" th_python -m team_harness.resource_slots reserve "$task_dir" "$worker_type" "$model" "$effort" "$$")
 worker_header='너는 team-harness 워커다(TH_ROLE=worker). 코디네이터가 아니다. 이 지시서의 작업만 하고 결과는 결과 폴더에만 남긴다.'
 prompt="$worker_header
 
@@ -742,6 +749,8 @@ elif [[ "$worker_type" == "claude" ]]; then
 fi
 
 python3 "$script_dir/th-launch-identity.py" record "$task_dir"
+PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" th_python -m team_harness.resource_slots bind "$admission_slot" "$(<"$task_dir/worker.pid")"
+admission_slot=""
 
 if [[ $ctx_enabled == 1 ]]; then
   if ! PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" "${context_python[@]}" - "$ctx_prep_file" "$task_dir" << 'PYEOF'

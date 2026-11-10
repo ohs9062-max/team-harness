@@ -9,6 +9,8 @@ description: spawn_agent, wait_for_any, wait_for_agents, read_agent_output, read
 
 이 문서를 team-harness의 제품 설명서로 취급하지 마십시오. 사용자가 team-harness 자체를 설치, 설정, 디버깅 또는 개발하는 방법을 묻는다면 프로젝트의 README나 로컬 저장소 파일을 참조하십시오.
 
+공통 모델·읽기·재실행·검증 기준은 전역 `~/.team-harness/operating_policy.md`를 한 번 확인한다. 개발 체크아웃의 정본은 `design/designs/operating_policy.md`다.
+
 ## 운영 모델 (Operating model)
 
 team-harness는 여러분에게 작업자(Worker) CLI 팀을 제공합니다. 다음 사항에 대한 책임은 여전히 조율자 본인에게 있습니다:

@@ -323,25 +323,58 @@ def run_bounded(
             pass
 
 
-def check_script(task: Path) -> dict[str, str]:
+def verification_key(task: Path, worktree: Path, script: Path) -> str | None:
+    """Cache only when the task declares every input to its check.
+
+    An arbitrary shell check may read ignored files, external data or services.
+    A DONE timestamp (or even a Git commit) cannot identify those inputs.
+    Missing/invalid declarations disable caching, never weaken verification.
+    """
+    manifest = task / "verify_inputs.json"
+    try:
+        paths = json.loads(manifest.read_text(encoding="utf-8"))
+        if (
+            not isinstance(paths, list)
+            or not paths
+            or not all(isinstance(path, str) and path for path in paths)
+        ):
+            return None
+        digest = hashlib.sha256(script.read_bytes())
+        digest.update(str(worktree).encode())
+        digest.update(manifest.read_bytes())
+        done = task / "DONE"
+        digest.update(str(done.stat().st_mtime_ns if done.exists() else 0).encode())
+        for raw in paths:
+            path = Path(raw)
+            path = path if path.is_absolute() else worktree / path
+            digest.update(str(path).encode())
+            # Directories and links require a fuller dependency declaration.
+            if not path.is_file() or path.is_symlink():
+                return None
+            with path.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+        return digest.hexdigest()
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def check_script(task: Path, *, force: bool = False) -> dict[str, str]:
     script = task / "verify.sh"
     if not script.is_file():
         return item("SKIP", "verify.sh 없음")
     worktree = Path(read(task / ".th_worktree").strip() or task)
     if not worktree.is_dir():
         worktree = task
-    done = task / "DONE"
-    generation = str(done.stat().st_mtime_ns) if done.is_file() else "no-done"
-    key = hashlib.sha256(
-        script.read_bytes() + str(worktree).encode() + generation.encode()
-    ).hexdigest()
+    key = verification_key(task, worktree, script)
     cache = task / ".th_verify_script.json"
-    try:
-        saved = json.loads(read(cache))
-        if saved.get("key") == key:
-            return saved["item"]
-    except ValueError:
-        pass
+    if key is not None and not force:
+        try:
+            saved = json.loads(read(cache))
+            if saved.get("key") == key and isinstance(saved.get("item"), dict):
+                return saved["item"]
+        except (ValueError, AttributeError):
+            pass
     verify_env = dict(os.environ)
     verify_env.pop("PYTHONPATH", None)
     code, output = run_bounded(
@@ -373,7 +406,13 @@ def check_script(task: Path) -> dict[str, str]:
         "; ".join(failures + warnings) or "verify.sh 통과",
     )
     result["script_exit_code"] = str(code)
-    atomic_write(cache, json.dumps({"key": key, "item": result}, ensure_ascii=False))
+    # Checks may themselves change an input. Such results cannot be reused.
+    if key is not None and verification_key(task, worktree, script) == key:
+        atomic_write(
+            cache, json.dumps({"key": key, "item": result}, ensure_ascii=False)
+        )
+    else:
+        cache.unlink(missing_ok=True)
     return result
 
 
@@ -419,13 +458,15 @@ def check_hooks(task: Path) -> dict[str, dict[str, str]]:
         return {"hook": item("FAIL", f"hook 오류: {exc}")}
 
 
-def verify(task: Path, event: str = "") -> tuple[dict[str, Any], str]:
+def verify(
+    task: Path, event: str = "", *, force: bool = False
+) -> tuple[dict[str, Any], str]:
     with locked(task / ".th_verify.lock"):
         checks = {
             "상태": check_state(task),
             "산출물": check_artifacts(task),
             "수치 대조": check_numeric(task),
-            "verify": check_script(task),
+            "verify": check_script(task, force=force),
         }
         checks.update(check_hooks(task))
         if event in {"quota", "dead", "stall"}:
@@ -704,6 +745,9 @@ def main() -> int:
         "--event", choices=("done", "failed", "dead", "quota", "stall"), default=""
     )
     parser.add_argument("--event-id", default="")
+    parser.add_argument(
+        "--force", action="store_true", help="ignore verification cache"
+    )
     args = parser.parse_args()
     task = args.task.resolve()
     if not task.is_dir():
@@ -715,7 +759,7 @@ def main() -> int:
     elif args.mode == "quick-title":
         print(quick_title(task))
     elif args.mode == "verify":
-        result, text = verify(task)
+        result, text = verify(task, force=args.force)
         print(text, end="")
         return int(result["overall"] == "FAIL")
     else:

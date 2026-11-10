@@ -1510,6 +1510,16 @@ def load_config(
                 agent_templates[agent_name] = _parse_agent_template(agent_name, section)
 
     prompt_parts: list[str] = []
+    operating_policy = _resolve_optional_prompt_text(
+        local_section=local_coordinator,
+        local_config_path=local_path,
+        global_section=global_coordinator,
+        global_config_path=global_path,
+        key="operating_policy_file",
+        fallback="",
+    )
+    if operating_policy:
+        prompt_parts.append(operating_policy)
     config_prompt = coordinator.get("system_prompt")
     if isinstance(config_prompt, str) and config_prompt:
         prompt_parts.append(config_prompt)

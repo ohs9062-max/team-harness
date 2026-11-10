@@ -17,7 +17,7 @@
 | 8 | 토큰 절감 | 기본 적용, 측정 | `worker_isolate_mcp`, `measure_preamble.py` |
 | 9 | 모델·추론 노력 | **코디네이터가 자동 선택** | (직접 쓸 일 없음) |
 | 10 | graft 코드 그래프 | **코디네이터 판단**, 기본 꺼짐 | (직접 쓸 일 없음) |
-| 11 | Jev 결정 라우터 | **자동 적용** (`th run`·`th repl`) | (직접 쓸 일 없음) |
+| 11 | Jev 결정 라우터·권고 | 도구 선택은 내장 조율자, 권고는 여러 경로 | (직접 쓸 일 없음) |
 | 12 | 코디네이터 작업일지 | 상태·이력 보존 | `.claude/current_status.md`, `work_log.md` |
 
 ---
@@ -58,7 +58,7 @@
 
 ### 0-3. `th cord`로 일할 때 붙는 것
 
-이때 조율자는 Claude Code·Codex 자체이고(자기 도구를 이미 가짐), team-harness는 그 위에
+이때 조율자는 Claude Code 자체이고(자기 도구를 이미 가짐), team-harness는 그 위에
 여러 워커를 묶는 고삐와 감시 장치를 덧붙입니다.
 
 | 붙이는 것 | 역할 |
@@ -108,7 +108,7 @@ npx -y skills add . --skill team-harness orca-harness-protocol \
 
 ## 2. Orca 코디네이터 (`th cord`)
 
-Orca에서 대상 프로젝트 작업 트리를 만들고 Codex·Claude·Agy 중 하나를 연 뒤 입력합니다.
+Orca에서 대상 프로젝트 작업 트리를 만들고 Claude 코디네이터를 연 뒤 입력합니다.
 `th cord`는 shell 명령이 아니라 **에이전트 프롬프트 명령**입니다.
 
 ```text
@@ -124,8 +124,7 @@ B codex                             # 진행 중 작업을 codex에 인계 → M
 종료
 ```
 
-- 코디네이터는 계획·짧은 지시·결과 검증·보고만 하고, 코드·문서 작성과 수정, 브랜치 병합,
-  커밋·push를 포함한 실제 작업은 Codex 워커에 맡깁니다(작은 수정도 포함).
+- 코디네이터는 계획·위임·검증·보고를 담당합니다. 구현과 장시간 실행은 위임하고, 승인된 작은 문서·설정 수정은 비용을 고려해 직접 처리할 수 있습니다.
 - 워커의 채팅 출력은 근거가 아닙니다. 완료와 수치는 파일(`DONE`/`FAILED`, 결과표)로만 인정합니다.
 - 운영 규칙 원문: `~/.claude/skills/orca-harness-protocol/SKILL.md`.
 
@@ -340,7 +339,7 @@ uv run python scripts/measure_preamble.py   # 시스템 프롬프트 + 도구 �
 |---|---|
 | 모델·effort | 코디네이터가 워커 선택 기준으로 `th-launch` 인자에 넣음. `th run` 조율자도 같은 기준으로 워커 모델 선택 |
 | graft | 기본 꺼짐. `th-launch` 워커에는 아직 연결되지 않음. `th run`·protocol로 큰 저장소 코드 작업을 할 때만 코디네이터가 켬 |
-| Jev | 전역 설정으로 항상 켜짐. `th run`·`th repl` 내장 조율자에만 효과. 실패·쿼터 소진 시 전체 도구로 자동 대체, 연속 3회 오류면 그 실행에서 꺼짐 |
+| Jev | 도구 선택은 내장 조율자에 적용. 모델 등급·실패 원인 권고는 th-launch·SDK·protocol·watch에도 적용. 실패·쿼터 소진 시 전체 도구로 자동 대체, 연속 3회 오류면 그 실행에서 꺼짐 |
 
 ### 9. 모델·추론 노력 (참고)
 
@@ -433,3 +432,20 @@ TH_WATCH_DIR=/path/to/watch scripts/th-watchd.sh  # 기존 사건 감지에서 �
 수치 대조는 `report.md`(없으면 `RESULTS.md`)의 `0.xxx`를 작업 폴더 아래 `results.json`의 중첩 숫자 값과 3자리 반올림으로 비교합니다. JSON이 없으면 SKIP이고 불일치는 WARN입니다. 설정 JSON이나 하네스의 검수 JSON을 근거로 쓰지 않습니다. 기존 `verify.sh`와 공통 git 검사는 `verify` 항목으로 합치며 같은 스크립트/작업 트리의 검수 실행을 캐시합니다. 새 `th-launch`에서 사건·검수 캐시를 초기화합니다.
 
 LLM은 고정 프롬프트 뒤에 검수·보고서·STATUS 사본을 받고 5줄까지만 출력합니다. 판정 제목과 검수 원문은 스크립트가 직접 넣습니다. Linux `bwrap`의 읽기 전용 파일시스템과 CLI의 읽기 전용/도구 차단 플래그를 사용하며, 지원되지 않는 환경에서는 요약 호출을 생략합니다. 자세한 계약은 [worker digest 설계](design/designs/worker_digest.md)를 참고합니다.
+
+
+## 전역 배포와 유지보수
+
+공통 운영 정책은 `design/designs/operating_policy.md`가 정본이다. 같은 규칙을 이 안내나 설정의 긴 프롬프트로 중복 관리하지 않는다.
+
+```bash
+th-sync.sh --status   # 전역 설치 해시·설정 차이·워크트리 반영 상태
+th-sync.sh --apply    # 검증·commit·origin/main push 이후 전역 설치와 안전한 fast-forward
+th-verify.sh 작업폴더 --force  # 기존 검수 캐시를 무시하고 다시 실행
+```
+
+배포는 전역 명령을 정본 설치로 연결하고 정책·스킬을 갱신한다. 설정의 provider·모델·키·사용자 override는 보존하며 이전 파일은 deployment-backups에 남긴다. 분기되거나 수정이 겹치는 워크트리는 강제로 덮어쓰지 않고 blocked로 표시한다. 전역 명령은 해당 워크트리에서도 최신 설치를 사용한다. maintenance는 새로 push한 정본 revision을 확인해 다음 주기에 동기화한다.
+
+감시기는 사건 전달을 담당하고, 문서 이관·보관·일일 보고는 별도 maintenance 프로세스에서 수행한다. 문서 이관은 독립 worktree에서 제안을 검증하고 원문 변경이 없을 때만 적용한다. 실패 시 원문으로 덮어쓰지 않는다.
+
+검수 입력을 선언하지 않으면 셸 검수는 매번 실행한다. 모든 입력 파일을 `verify_inputs.json` 배열에 선언한 경우에만 입력 내용 해시로 캐시한다. 네트워크·환경·시각 등 파일 이외 입력에 의존하는 검사는 캐시를 사용하지 않는다.

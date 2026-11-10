@@ -88,7 +88,9 @@ def _parallel_limit(worker_type: str, env: Mapping[str, str]) -> int | None:
     return None
 
 
-def _active_workers(task_dir: Path, worker_type: str, watch_dir: Path) -> list[str]:
+def _active_workers(
+    task_dir: Path, worker_type: str, watch_dir: Path, *, full_paths: bool = False
+) -> list[str]:
     tasks_file = watch_dir / "tasks.txt"
     if not tasks_file.is_file():
         return []
@@ -116,7 +118,7 @@ def _active_workers(task_dir: Path, worker_type: str, watch_dir: Path) -> list[s
             continue
         if not (candidate / f"{worker_type}.log").is_file():
             continue
-        active.append(candidate.name)
+        active.append(str(resolved) if full_paths else candidate.name)
     return active
 
 
@@ -343,6 +345,8 @@ def check(
     effort: str,
     watch_dir: str | Path,
     env: Mapping[str, str] | None = None,
+    *,
+    active_workers: list[str] | None = None,
 ) -> list[Violation]:
     actual_env: Mapping[str, str] = os.environ if env is None else env
     tdir = Path(task_dir)
@@ -369,7 +373,11 @@ def check(
 
     limit = _parallel_limit(worker_type, actual_env)
     if limit is not None:
-        active = _active_workers(tdir, worker_type, wdir)
+        active = (
+            active_workers
+            if active_workers is not None
+            else _active_workers(tdir, worker_type, wdir)
+        )
         if len(active) >= limit:
             joined = ", ".join(active)
             violations.append(

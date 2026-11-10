@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-import signal
 import subprocess
-import time
+
+from team_harness.agents.process_identity import kill_group
 
 
 def launch_arguments(task: Path, watch_dir: Path) -> list[str]:
@@ -26,23 +26,29 @@ def launch_arguments(task: Path, watch_dir: Path) -> list[str]:
     raise ValueError("no launch settings for task")
 
 
-def terminate_worker_group(pid: int) -> None:
-    """Terminate only the worker's isolated process group, with a ten-second grace."""
+def persisted_worker_starttime(task: Path, pid: int) -> str | None:
+    """Read launch-time identity, including the original shell token format."""
+    try:
+        saved = json.loads((task / "worker.pid.start").read_text(encoding="utf-8"))
+        if saved.get("pid") != pid or not isinstance(saved.get("start"), str):
+            return None
+        token = saved["start"]
+        return token if token.startswith(("linux:", "lstart:")) else f"linux:{token}"
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def terminate_worker_group(pid: int, *, task: Path | None = None) -> None:
+    """Refuse to signal a group without its persisted launch-time identity."""
     pgid = os.getpgid(pid)
     if pgid != pid or pgid == os.getpgrp():
         raise ValueError("worker does not lead an isolated process group")
-    os.killpg(pgid, signal.SIGTERM)
-    deadline = time.monotonic() + 10
-    while time.monotonic() < deadline:
-        try:
-            os.killpg(pgid, 0)
-        except ProcessLookupError:
-            return
-        time.sleep(0.1)
-    try:
-        os.killpg(pgid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
+    token = persisted_worker_starttime(task, pid) if task else None
+    if token is None:
+        raise ValueError("worker launch identity unavailable; termination deferred")
+    result = kill_group(pgid, token)
+    if result not in {"killed", "already-exited"}:
+        raise ValueError(f"worker termination deferred: {result}")
 
 
 def relaunch_worker(

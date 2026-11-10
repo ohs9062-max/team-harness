@@ -296,7 +296,9 @@ def archive_daily(
                 return []
         except (OSError, ValueError):
             pass
-        owners: set[Path] = set()
+        from team_harness.maintenance import registered_owners
+
+        owners = registered_owners()
         if owner is not None:
             owners.add(owner.resolve())
         for registry in (wd / "tasks.txt", wd / "tasks_done.txt"):
@@ -324,23 +326,15 @@ def archive_daily(
 
 
 def archive_on_start(owner: Path) -> None:
-    """Run the shared daily check without blocking the caller on failure."""
+    """Schedule maintenance independently of run/repl/SDK/protocol execution."""
     try:
-        archive_daily(datetime.now().astimezone(), owner)
-        from team_harness.docs_migrate import owners
-        from team_harness.docs_migrate import scan
+        from team_harness.maintenance import start
 
-        scan(owners(), datetime.now().astimezone(), execute=False)
-    except Exception as exc:
-        try:
-            wd = watch_dir()
-            wd.mkdir(parents=True, exist_ok=True)
-            with (wd / "events.log").open("a") as out:
-                out.write(f"{datetime.now().isoformat()} archive failed: {exc}\n")
-        except OSError:
-            import logging
+        start(owner)
+    except OSError as exc:
+        import logging
 
-            logging.getLogger(__name__).exception("Unable to record archive failure")
+        logging.getLogger(__name__).warning("Unable to start maintenance: %s", exc)
 
 
 if __name__ == "__main__":

@@ -23,7 +23,9 @@ def git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 
 def owners() -> set[Path]:
-    found: set[Path] = set()
+    from team_harness.maintenance import registered_owners
+
+    found = registered_owners()
     for name in ("tasks.txt", "tasks_done.txt"):
         try:
             lines = (watch_dir() / name).read_text().splitlines()
@@ -170,10 +172,24 @@ def launch(root: Path, now: datetime) -> None:
         for name in FILES
         if (root / name).is_file()
     }
+    worktree = task / "worktree"
+    created = git(root, "worktree", "add", "--detach", str(worktree), "HEAD")
+    if created.returncode:
+        raise OSError(f"cannot isolate document migration: {created.stderr}")
     archive_name = f"docs/archive/AGENTS_이관_{now:%Y%m%d}.md"
     (task / "attempt.json").write_text(
         json.dumps(
-            {"time": now.timestamp(), "original": original, "archive": archive_name},
+            {
+                "time": now.timestamp(),
+                "original": original,
+                "archive": archive_name,
+                "worktree": str(worktree),
+                "targets": [
+                    name
+                    for name, text in original.items()
+                    if len(text.splitlines()) > limit()
+                ],
+            },
             ensure_ascii=False,
         ),
         encoding="utf-8",
@@ -184,7 +200,7 @@ def launch(root: Path, now: datetime) -> None:
     (task / "task.md").write_text(
         template.format(
             policy=ROOT / "design/designs/workspace_docs_policy.md",
-            owner=root,
+            owner=worktree,
             date=now.strftime("%Y%m%d"),
             max_lines=limit(),
         ),
@@ -193,7 +209,7 @@ def launch(root: Path, now: datetime) -> None:
     cmd = [str(ROOT / "scripts/th-launch.sh"), str(task), "agy"]
     if os.environ.get("TH_DOCS_MODEL"):
         cmd.append(os.environ["TH_DOCS_MODEL"])
-    cmd.append(str(root))
+    cmd.append(str(worktree))
     try:
         proc = subprocess.run(
             cmd,
@@ -218,43 +234,92 @@ def normalized(text: str) -> Counter[str]:
 
 
 def finish(root: Path, task: Path) -> None:
+    """Validate an isolated proposal; never restore over a user's current edits.
+
+    Legacy in-place attempts are left untouched on failure. New attempts apply
+    only if every original document is still identical and unstaged. The
+    proposal remains in its worktree when validation or application fails.
+    """
     data = json.loads((task / "attempt.json").read_text(encoding="utf-8"))
     original: dict[str, str] = data["original"]
-    archive = root / data["archive"]
-    new = [archive] if archive.is_file() else []
-    before = len(original.get("AGENTS.md", "").splitlines())
+    if not original or not set(original).issubset(FILES):
+        raise ValueError("invalid migration document set")
+    source = Path(data.get("worktree", str(root)))
+    relative_archive = data["archive"]
+    relative = Path(relative_archive)
+    if (
+        relative.is_absolute()
+        or ".." in relative.parts
+        or relative.parts[:2] != ("docs", "archive")
+    ):
+        raise ValueError("invalid migration archive path")
+    if source != root and source.resolve() != (task / "worktree").resolve():
+        raise ValueError("migration worktree is outside the task")
+    archive = source / relative_archive
     current = {
-        name: (root / name).read_text(encoding="utf-8")
+        name: (source / name).read_text(encoding="utf-8")
         for name in original
-        if (root / name).is_file()
+        if (source / name).is_file()
     }
-    after = len(current.get("AGENTS.md", "").splitlines())
+    targets = data.get("targets") or list(original)
     old_lines: Counter[str] = Counter()
     new_lines: Counter[str] = Counter()
     for text in original.values():
         old_lines.update(normalized(text))
-    for text in [*current.values(), *(p.read_text(encoding="utf-8") for p in new)]:
+    for text in current.values():
         new_lines.update(normalized(text))
+    if archive.is_file():
+        new_lines.update(normalized(archive.read_text(encoding="utf-8")))
     reason = ""
-    if (task / "FAILED").exists():
+    if any((source / name).is_symlink() for name in original) or archive.is_symlink():
+        reason = "document or archive is a symlink"
+    elif (task / "FAILED").exists():
         reason = "worker failed"
-    elif (
-        not (root / "AGENTS.md").is_file()
-        or "AGENTS.md" not in original
-        or len(current.get("AGENTS.md", "").splitlines())
-        >= len(original["AGENTS.md"].splitlines())
+    elif set(current) != set(original):
+        reason = "original document removed"
+    elif not any(
+        len(current[name].splitlines()) < len(original[name].splitlines())
+        for name in targets
     ):
-        reason = "AGENTS.md did not shrink"
+        reason = "target documents did not shrink"
+    elif any(
+        len(current[name].splitlines()) > len(original[name].splitlines())
+        for name in original
+    ):
+        reason = "document grew"
     elif old_lines - new_lines:
         reason = "original lines missing"
-    elif not new:
+    elif not archive.is_file():
         reason = "no new archive"
+    paths = [name for name in original if current.get(name) != original[name]]
+    paths.append(relative_archive)
+    if not reason and source != root:
+        # A per-migration lock cannot lock out an editor. Check the actual
+        # content and index immediately before git applies its contextual patch.
+        if any(
+            not (root / name).is_file()
+            or (root / name).read_text(encoding="utf-8") != text
+            for name, text in original.items()
+        ):
+            reason = "original documents changed during migration"
+        elif git(root, "status", "--porcelain", "--", *paths).stdout:
+            reason = "document or archive has uncommitted changes"
+        else:
+            staged = git(source, "add", "--", *paths)
+            patch = git(source, "diff", "--cached", "--binary", "--", *paths)
+            if staged.returncode or patch.returncode or not patch.stdout:
+                reason = "cannot prepare migration patch"
+            else:
+                applied = subprocess.run(
+                    ["git", "-C", str(root), "apply", "--index", "-"],
+                    input=patch.stdout,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                if applied.returncode:
+                    reason = "original changed or patch could not be applied"
     if not reason:
-        paths = [
-            name
-            for name in original
-            if (root / name).read_text(encoding="utf-8") != original[name]
-        ] + [str(p.relative_to(root)) for p in new]
         result = git(root, "add", "--", *paths)
         if not result.returncode:
             result = git(
@@ -262,22 +327,23 @@ def finish(root: Path, task: Path) -> None:
                 "commit",
                 "--only",
                 "-m",
-                f"docs: archive AGENTS history ({datetime.fromtimestamp(data['time']):%Y-%m-%d})",
+                f"docs: archive rule history ({datetime.fromtimestamp(data['time']):%Y-%m-%d})",
                 "--",
                 *paths,
             )
         if result.returncode:
-            git(root, "reset", "--", *paths)
-            reason = "commit failed"
+            # Preserve the proposed edits and index on commit failure. A blind
+            # reset/restore can destroy unrelated concurrent edits or staging.
+            reason = "commit failed; edits preserved for inspection"
     if reason:
-        for name, content in original.items():
-            (root / name).write_text(content, encoding="utf-8")
-        for p in new:
-            p.unlink()
-        message = f"문서 이관 실패 {root.name} — {reason}"
+        message = f"문서 이관 실패 {root.name} — {reason}; proposal: {source}"
     else:
         sha = git(root, "rev-parse", "--short", "HEAD").stdout.strip()
-        message = f"문서 이관 {root.name} {before}줄→{after}줄 커밋 {sha}"
+        counts = ", ".join(
+            f"{name} {len(original[name].splitlines())}줄→{len(current[name].splitlines())}줄"
+            for name in targets
+        )
+        message = f"문서 이관 {root.name} {counts} 커밋 {sha}"
     inbox = root / ".claude/inbox.md"
     inbox.parent.mkdir(parents=True, exist_ok=True)
     with inbox.open("a", encoding="utf-8") as out:

@@ -10,7 +10,7 @@ Do not read or write the coordinator journal (`.claude/current_status.md`, `.cla
 - Long loops/training: append progress lines to `STATUS` as
   `YYYY-MM-DD HH:MM:SS 처리 N/M장 X s/장` or `YYYY-MM-DD HH:MM:SS epoch=k/E`
   so `ths` can estimate the finish time. Do not compute an ETA yourself.
-- Reading and output: locate file sections with `rg -n`, then read only what is needed, at most 200 lines per command. Do not combine multiple sections in one command. Do not reread sections already read; after editing, check only changed sections. Use quiet test options such as `-q` and `| tail -n 40`; limit Git output with `--stat`, `--oneline`, or `-n`. Read logs only with `tail`.
+- Reading and output: locate file sections with `rg -n`, then read only what is needed, at most 200 lines per command. Reuse already read rules; after compaction restore necessary state, and after an approved deployment read changed policy once. After editing, check changed sections. Use quiet test options such as `-q`; preserve the test exit code when limiting output; limit Git output with `--stat`, `--oneline`, or `-n`. Read the tail or required ranges of logs. Read relevant diffs when reviewing changes.
 - Long job: smoke test first, then use `th-job-start.sh <task folder> -- <command>`; the actual process records its PID in `job.pid`. Do not launch it with setsid directly.
   The runner chains train → evaluate → plots → report → `DONE`/`FAILED`; on a
   failed step it writes `FAILED` with the step name and rc, even after worker exit.

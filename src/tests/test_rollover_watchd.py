@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 from typing import Any
 
 import pytest
@@ -43,7 +44,9 @@ def scenario(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: Any):
     monkeypatch.setattr(watch_inspect, "launch_arguments", lambda *args: ["launch"])
     monkeypatch.setattr(watch_inspect, "preflight_relaunch", lambda *args: None)
     monkeypatch.setattr(
-        watch_inspect, "terminate_worker_group", lambda pid: calls.append(("stop", pid))
+        watch_inspect,
+        "terminate_worker_group",
+        lambda pid, **kw: calls.append(("stop", pid)),
     )
     monkeypatch.setattr(
         watch_inspect,
@@ -137,7 +140,7 @@ def test_rollover_is_excluded_from_retry_count(tmp_path: Path):
     root = Path(__file__).resolve().parents[2]
     script = f'''source "{root}/scripts/th-watch-lib.sh"
 worker_digest_program() {{ printf '%s' "{root}/src/team_harness/worker_digest.py"; }}
-th_python() {{ python "$@"; }}
+th_python() {{ "{sys.executable}" "$@"; }}
 callback() {{ printf '%s' "$2"; }}
 safe_step_auto_retry "$1" "$2" "$1/marker" callback "$1"
 '''

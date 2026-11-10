@@ -6,7 +6,7 @@ set -euo pipefail
 
 workspace=${CLAUDE_PROJECT_DIR:-$PWD}
 status="$workspace/.claude/current_status.md"
-if [[ -f $status ]]; then
+if [[ ${1:-} != prompt && -f $status ]]; then
   cat "$status"
 fi
 
@@ -17,6 +17,7 @@ owner=$(project_owner "$workspace")
 inbox="$owner/.claude/inbox.md"
 
 if [[ ${1:-} == prompt ]]; then
+  python3 "$script_dir/../src/team_harness/policy_notice.py" "$workspace" || true
   offset_file="$workspace/.claude/.inbox_offset"
   mkdir -p "$(dirname "$offset_file")"
   current_size=0

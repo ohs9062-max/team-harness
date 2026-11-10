@@ -14,7 +14,7 @@
 |------|------|-----------|
 | A | PARALLEL COMPETITION | 같은 작업을 Codex/Gemini가 독립 수행 → Cross Review → Compare → 사용자 선택 |
 | B | RELAY | 같은 작업을 다른 AI가 이어받음 |
-| C | ROLE PIPELINE | 역할별 전문 분업 (Claude 설계 → Codex 구현 → Gemini 검수) |
+| C | ROLE PIPELINE | 역할별 전문 분업 (설계 → 구현 → 독립 검수) |
 
 사용자는 "A로 해", "B로 이어서 해", "C로 해"로 지시한다.
 어떤 AI에게 처음 명령하든 동일한 실행 계약이 적용된다.
@@ -239,17 +239,17 @@ CONTINUE
 ## MODE C — ROLE PIPELINE
 
 MODE C Runner는 `task/<TASK-ID>/pipeline` branch와 하나의 pipeline worktree를 만든다.
-Claude, Codex, Gemini는 그 worktree를 순서대로 사용하며 base/master에 Worker write를 하지 않는다.
+역할별 워커는 그 worktree를 순서대로 사용하며 base/master에 Worker write를 하지 않는다.
 
 ### 기본 역할 배치
 
 | Stage | 기본 담당 | 설명 |
 |-------|----------|------|
-| ANALYZE / DESIGN | Claude | 요구사항 분석, 구조 설계 |
+| ANALYZE / DESIGN | Codex (설정으로 변경 가능) | 요구사항 분석, 구조 설계 |
 | IMPLEMENT / TEST | Codex | 구현, 수정, 실행, 테스트 |
 | REVIEW | Gemini | 독립 검수, 반례 탐색, 요구 누락 확인 |
 
-역할은 기본값이다. 사용자가 특정 AI 교체를 지시하면 변경한다.
+구체 기본 역할은 `protocol/config.py`의 ProtocolConfig가 정한다. 사용자가 특정 AI 교체를 지시하면 변경한다. Claude 워커는 TH-D30에 따라 명시 요청 때만 사용한다.
 
 ### 상태 머신
 
@@ -260,7 +260,7 @@ DEFINE
 GIT_PREFLIGHT
   untracked 무시, tracked 수정은 경고 후 HEAD 기준 진행
   ↓
-DESIGN (Claude)
+DESIGN (설계 워커)
   요구사항 분석, 설계, 제약, 검증 기준
   산출물 기록 (자동 러너: protocol_outputs/DESIGN/<agent>.md, 수동: shared/DESIGN.md)
   ↓
@@ -361,7 +361,7 @@ MODE에 따라 TASK.md에 기록하는 필드:
 ## Stage Plan
 
 ### DESIGN
-- agent: Claude
+- agent: Codex
 - status: PENDING / IN_PROGRESS / DONE
 
 ### IMPLEMENT

@@ -8,10 +8,14 @@ under `.claude/`.
 Regardless of mode or loaded skills, coordinators must maintain the current
 workspace's `.claude/current_status.md` and `.claude/work_log.md`.
 Read `current_status.md` at startup, after compaction, and before long work.
+These required state restores and changed policy from an approved deployment
+are exceptions to routine reread restrictions; read only the necessary content.
 Update only changed status lines; append one timestamped work-log line for
 every instruction, start, completion, failure, decision, or mistake.  Scripts
 record repeating instruction/completion/failure events automatically; the
 coordinator records judgments, causes, decisions, and lessons.  Read detailed
 history only from the work-log tail.  Full format: team-harness
 `design/coordinator_journal.md`.
+Shared operational policy: `~/.team-harness/operating_policy.md` (read once for
+relevant work). `th-sync.sh --status` reports the globally deployed revision.
 <!-- TEAM-HARNESS-COORDINATOR-JOURNAL:END -->

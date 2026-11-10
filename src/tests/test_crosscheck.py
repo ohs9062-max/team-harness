@@ -200,7 +200,37 @@ def test_push_guard(tmp_path: Path) -> None:
         "## 코디네이터 결정\n시각: now\n결정: 채택\n"
     )
     git("commit", "--amend", "-qm", f"new decision\n\nCrosscheck: {approved}")
+    # A legacy Markdown approval cannot authorize a new, unrelated decision.
+    assert push(edited, git("rev-parse", "HEAD")).returncode != 0
+    from team_harness.adoption_gate import record_receipt
+    from team_harness.adoption_gate import sha
+
+    (approved / "crosscheck.json").write_text("{}")
+    (approved / "evidence.sha256").write_text("evidence")
+    (approved / "terra").mkdir()
+    (approved / "terra/VERDICT.md").write_text("VERDICT: PASS")
+    data = {
+        "names": ["terra"],
+        "source": [
+            {
+                "path": str(root),
+                "hashes": {"design/decisions.md": sha(decisions.read_bytes())},
+            }
+        ],
+    }
+    record_receipt(approved, data, True, None)
     assert push(edited, git("rev-parse", "HEAD")).returncode == 0
+    # A subsequent rejection revokes approval; tampering also invalidates it.
+    record_receipt(approved, data, False, None)
+    assert push(edited, git("rev-parse", "HEAD")).returncode != 0
+    record_receipt(approved, data, True, None)
+    with (approved / "CROSSCHECK.md").open("a") as out:
+        out.write("\n## 코디네이터 결정\n시각: later\n결정: 기각\n")
+    assert push(edited, git("rev-parse", "HEAD")).returncode != 0
+    record_receipt(approved, data, True, None)
+    decisions.write_text(decisions.read_text() + "\n## TH-D3. Unreviewed\ntext\n")
+    git("commit", "-qam", f"another decision\n\nCrosscheck: {approved}")
+    assert push(edited, git("rev-parse", "HEAD")).returncode != 0
 
 
 def test_generated_briefs_pass_checker(sample: tuple[Path, argparse.Namespace]) -> None:
@@ -253,6 +283,7 @@ def test_real_launch_preflight(
             "TH_WORKSPACE": str(tmp_path),
             "TH_CODEX_REASON": "independent claim crosscheck",
             "TH_HIGH_REASON": "independent claim crosscheck",
+            "TH_CODEX_SESSIONS_DIR": str(tmp_path / "empty-sessions"),
         }
     )
     for name, worker, model in (
@@ -313,3 +344,67 @@ def test_real_launch_with_fake_models(
     assert cc.start(args) == 0
     result, details, _ = cc.verdict(Path(args.folder))
     assert result == 0, details
+
+
+def test_adopt_single_agy_uses_explicit_backend_without_budget_bypass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    task = tmp_path / "task"
+    task.mkdir()
+    (task / "task.md").write_text("Inspect the source")
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "original").write_text("original")
+    commands = []
+
+    def fake_run(cmd, **kwargs):
+        commands.append((cmd, kwargs.get("env", {})))
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(cc.subprocess, "run", fake_run)
+    monkeypatch.setenv("TH_NO_DAEMON", "1")
+    monkeypatch.setenv("TH_IGNORE_BUDGET", "1")
+    args = argparse.Namespace(
+        folder=str(task), claim="claim", source=[str(source)], two=False, worker="agy"
+    )
+    assert cc.adopt(args) == 0
+    data = cc.load(task / ".th_adopt")
+    assert data["names"] == ["agy"]
+    launched = next(
+        (cmd, env) for cmd, env in commands if str(cmd[0]).endswith("th-launch.sh")
+    )
+    assert launched[0][2] == "agy"
+    assert "TH_IGNORE_BUDGET" not in launched[1]
+
+
+def test_push_guard_existing_heading_in_large_document(tmp_path: Path):
+    root = tmp_path / "repo"
+    root.mkdir()
+
+    def git(*args: str) -> str:
+        return subprocess.check_output(
+            ["git", "-C", str(root), *args], text=True
+        ).strip()
+
+    git("init", "-q")
+    git("config", "user.name", "test")
+    git("config", "user.email", "test@example.invalid")
+    (root / "design").mkdir()
+    document = root / "design/decisions.md"
+    document.write_text("## TH-D1. Original\n" + "history line\n" * 20000)
+    git("add", ".")
+    git("commit", "-qm", "base")
+    base = git("rev-parse", "HEAD")
+    document.write_text(
+        document.read_text().replace("TH-D1. Original", "TH-D1. Renamed")
+    )
+    git("commit", "-qam", "rename existing heading")
+    head = git("rev-parse", "HEAD")
+    result = subprocess.run(
+        [str(cc.ROOT / ".githooks/pre-push")],
+        cwd=root,
+        input=f"refs/heads/main {head} refs/heads/main {base}\n",
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 0, result.stderr
