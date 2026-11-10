@@ -5,7 +5,7 @@
 # Project module calls must use the repository dependency environment.
 th_python() {
   local repo
-  repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+  repo=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)
   if [[ -x $repo/.venv/bin/python ]]; then
     "$repo/.venv/bin/python" "$@"
   elif command -v uv >/dev/null 2>&1; then
@@ -129,7 +129,7 @@ watch_retire_settled() {
 
 task_live_pids() {
   local lib_dir
-  lib_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  lib_dir=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
   python3 "$lib_dir/th-job-liveness.py" "$1"
 }
 
@@ -179,7 +179,7 @@ latest_signature() {
 
 worker_digest_program() {
   local lib_dir
-  lib_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  lib_dir=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
   printf '%s/../src/team_harness/worker_digest.py\n' "$lib_dir"
 }
 
@@ -328,7 +328,7 @@ quota_error_line() {
 
 inspect_context_and_job() {
   local task=$1 lib_dir py_src
-  lib_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  lib_dir=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
   py_src=$(cd "$lib_dir/../src" && pwd)
   # team_harness needs the project dependency graph (httpx); not system python3.
   PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" th_python -m team_harness.watch_inspect "$task"
@@ -465,7 +465,7 @@ PY
   local worktree launch_script retry_no retry_output rc
   worktree=$(<"$task/.th_worktree")
   [[ -n $worktree ]] || return 1
-  launch_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/th-launch.sh"
+  launch_script="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)/th-launch.sh"
   retry_no=$attempts
   retry_output=$(TH_RELAUNCH=1 TH_NO_DAEMON=1 "$launch_script" "$task" "$worker" "$model" "$effort" "$worktree" 2>&1) || rc=$?
   if [[ ${rc:-0} -eq 0 ]]; then
@@ -569,7 +569,7 @@ inspect_task_event() {
   local terminal failed_file program
   program=$(worker_digest_program)
   terminal=$(python3 "$program" terminal "$task")
-  terminal=$(python3 "$(dirname "${BASH_SOURCE[0]}")/th-job-liveness.py" terminal "$task" "$terminal")
+  terminal=$(python3 "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/th-job-liveness.py" terminal "$task" "$terminal")
   failed_file="$task/FAILED"
   if [[ ! -f $failed_file ]]; then
     for cand in "$task"/FAILED.*; do
@@ -597,7 +597,7 @@ inspect_task_event() {
         flock -x 9
         if [[ ! -f $task/.th_done_terminated ]] && kill -0 "$current_worker_pid" 2>/dev/null; then
           local repo
-          repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+          repo=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)
           if PYTHONPATH="$repo/src${PYTHONPATH:+:$PYTHONPATH}" th_python -c \
             'import sys; from team_harness.worker_relaunch import terminate_worker_group; terminate_worker_group(int(sys.argv[1]))' "$current_worker_pid"; then
             touch "$task/.th_done_terminated"

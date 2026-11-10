@@ -28,7 +28,7 @@ if ! flock -n 201; then
   exit 0
 fi
 
-script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+script_dir=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 self_path=$(realpath "${BASH_SOURCE[0]}")
 lib_path=$(realpath "$script_dir/th-watch-lib.sh")
 

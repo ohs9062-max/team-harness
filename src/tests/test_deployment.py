@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 import subprocess
 import tomllib
@@ -149,3 +150,83 @@ def test_worktree_with_local_commits_already_contains_candidate(
     rows = {row["path"]: row for row in dp.sync_worktrees(repository, candidate)}
     assert rows[str(path)]["state"] == "contains_revision"
     assert (path / "local").read_text() == "local commit"
+
+
+def test_status_reports_committed_source_ahead_of_deployment(
+    repository: Path, tmp_path: Path
+):
+    home = tmp_path / "home"
+    directory = home / ".team-harness"
+    directory.mkdir(parents=True)
+    old = git(repository, "rev-parse", "HEAD")
+    (directory / "deployment.json").write_text(
+        json.dumps(
+            {"source": str(repository), "revision": old, "files": {}, "worktrees": []}
+        )
+    )
+    assert dp.status(home)["state"] == "current"
+    (repository / "tracked").write_text("committed candidate\n")
+    git(repository, "commit", "-qam", "candidate not deployed")
+    state = dp.status(home)
+    assert state["state"] == "drift"
+    assert state["source_dirty"] is False
+    assert state["source_matches_deployment"] is False
+    assert state["source_head"] != old
+
+
+def test_config_migration_does_not_rewrite_other_tables_prompt(tmp_path: Path):
+    path = tmp_path / "config.toml"
+    path.write_text(
+        '[unrelated]\nsystem_prompt="""Custom instructions"""\n'
+        '[coordinator]\nsystem_prompt="""\n## Coordinator policy: minimize tokens\n'
+        '- old managed rule\n"""\n'
+    )
+    dp.merge_config(path, tmp_path)
+    data = tomllib.loads(path.read_text())
+    assert data["unrelated"]["system_prompt"] == "Custom instructions"
+    assert data["coordinator"]["system_prompt"] == ""
+    assert data["coordinator"]["operating_policy_file"] == "operating_policy.md"
+
+
+def test_config_table_examples_and_custom_suffix_are_preserved(tmp_path: Path):
+    path = tmp_path / "config.toml"
+    original_prompt = '\n[coordinator]\noperating_policy_file="example"\n[other]\n'
+    path.write_text(
+        '[unrelated]\nsystem_prompt="""' + original_prompt + '"""\n'
+        '[coordinator] # actual configuration\nworker_suffix_file="custom.md"\n'
+        'system_prompt="""\n[example]\noperating_policy_file="also an example"\n"""\n'
+        "[after]\nvalue=42\n"
+    )
+    original = tomllib.loads(path.read_text())
+    dp.merge_config(path, tmp_path)
+    data = tomllib.loads(path.read_text())
+    assert data["unrelated"] == original["unrelated"]
+    assert (
+        data["coordinator"]["system_prompt"] == original["coordinator"]["system_prompt"]
+    )
+    assert data["coordinator"]["worker_suffix_file"] == "custom.md"
+    assert data["coordinator"]["operating_policy_file"] == "operating_policy.md"
+    assert data["after"] == {"value": 42}
+
+
+def test_managed_prompt_with_escaped_delimiter_does_not_change_other_settings(
+    tmp_path: Path,
+):
+    path = tmp_path / "config.toml"
+    path.write_text(r'''[coordinator]
+system_prompt = """
+## Coordinator policy: minimize tokens
+example delimiter: \"""
+- Experiment design check before long runs: keep baseline
+"""
+[unrelated]
+value = "preserve"
+''')
+    original = tomllib.loads(path.read_text())
+    dp.merge_config(path, tmp_path)
+    updated = tomllib.loads(path.read_text())
+    assert updated["unrelated"] == original["unrelated"]
+    assert (
+        updated["coordinator"]["system_prompt"]
+        == "- Experiment design check before long runs: keep baseline"
+    )

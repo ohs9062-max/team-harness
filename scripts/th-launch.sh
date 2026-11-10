@@ -10,7 +10,7 @@
 # 정책 변경은 다음 launch부터 적용하며 실행 중 워커는 교체하지 않는다.
 set -euo pipefail
 
-script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+script_dir=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 # shellcheck source=scripts/th-watch-lib.sh
 source "$script_dir/th-watch-lib.sh"
 

@@ -61,43 +61,79 @@ def install_file(source: Path, target: Path, home: Path) -> None:
     atomic_write(target, source.read_bytes(), source.stat().st_mode & 0o777)
 
 
+def _coordinator_body(text: str) -> tuple[int, int] | None:
+    """Find real table boundaries, ignoring examples inside TOML strings/arrays.
+
+    A header-looking line inside a value has an incomplete TOML prefix. Let
+    the standard parser distinguish it instead of inventing a second lexer.
+    """
+    start = None
+    for match in re.finditer(r"(?m)^[ \t]*\[[^\n]*", text):
+        try:
+            tomllib.loads(text[: match.start()])
+            header = tomllib.loads(match.group())
+        except tomllib.TOMLDecodeError:
+            continue
+        if start is not None:
+            return start, match.start()
+        if header == {"coordinator": {}}:
+            start = match.end()
+    return (start, len(text)) if start is not None else None
+
+
 def merge_config(path: Path, home: Path) -> None:
     text = path.read_text(encoding="utf-8") if path.exists() else "[coordinator]\n"
     data = tomllib.loads(text)
-    prompt = data.get("coordinator", {}).get("system_prompt", "")
-    # Migrate only the identifiable legacy managed prompt, never arbitrary
-    # user instructions. Keep its experiment-specific policy as a custom rule.
+    coordinator = data.get("coordinator", {})
+    if not isinstance(coordinator, dict):
+        raise ValueError("coordinator must be a TOML table")
+    bounds = _coordinator_body(text)
+    if bounds is None:
+        text += "\n[coordinator]\n"
+        bounds = _coordinator_body(text)
+    assert bounds is not None
+    start, end = bounds
+    section = text[start:end]
+    prompt = coordinator.get("system_prompt", "")
+    # Migrate only the identifiable legacy managed prompt in THIS table.
+    # Never match another table's field or an example inside a quoted value.
     if isinstance(prompt, str) and prompt.lstrip().startswith(
         "## Coordinator policy: minimize tokens"
     ):
         experiment = re.search(r"(?ms)^- Experiment design check.*?(?=^- |\Z)", prompt)
         retained = experiment.group().strip() if experiment else ""
-        text = re.sub(
-            r'(?ms)^system_prompt\s*=\s*""".*?"""',
-            lambda m: "system_prompt = " + json.dumps(retained),
-            text,
-            count=1,
-        )
-    match = re.search(r"(?m)^\[coordinator\]\s*$", text)
-    if match is None:
-        text += "\n[coordinator]\n"
-        match = re.search(r"(?m)^\[coordinator\]\s*$", text)
-    assert match is not None
-    tail = text[match.end() :]
-    next_table = re.search(r"(?m)^\[", tail)
-    end = match.end() + next_table.start() if next_table else len(text)
-    section = text[match.end() : end]
+        for match in re.finditer(r"(?m)^[ \t]*system_prompt[ \t]*=[ \t]*", section):
+            try:
+                tomllib.loads(section[: match.start()])
+            except tomllib.TOMLDecodeError:
+                continue
+            # Find the complete parsed value, not the first quote-like
+            # delimiter: escaped triple quotes can occur inside a prompt.
+            value_end = None
+            for quotes in re.finditer(r"[\"']+", section[match.end() :]):
+                candidate = match.end() + quotes.end()
+                try:
+                    prefix = tomllib.loads(section[:candidate])
+                except tomllib.TOMLDecodeError:
+                    continue
+                if prefix.get("system_prompt") == prompt:
+                    value_end = candidate
+                    break
+            if value_end is None:
+                raise ValueError("cannot safely locate the managed prompt value")
+            section = (
+                section[: match.end()] + json.dumps(retained) + section[value_end:]
+            )
+            break
     for name, value in (
         ("operating_policy_file", "operating_policy.md"),
         ("worker_suffix_file", "worker_suffix.md"),
     ):
-        pattern = rf"(?m)^{name}\s*=.*$"
-        setting = f'{name} = "{value}"'
-        if not re.search(pattern, section):
-            section = section.rstrip() + "\n" + setting + "\n"
-    updated = text[: match.end()] + section + text[end:]
+        if name not in coordinator:
+            section = section.rstrip() + f'\n{name} = "{value}"\n'
+    updated = text[:start] + section + text[end:]
     tomllib.loads(updated)  # Validate before replacing a working configuration.
-    if updated != text or not path.exists() or path.read_text() != updated:
+    if not path.exists() or path.read_text() != updated:
         backup(path, home)
         atomic_write(path, updated.encode(), 0o600)
 
@@ -286,6 +322,8 @@ def status(home: Path | None = None) -> dict:
     source = Path(data["source"])
     source_dirty = bool(git(source, "diff", "--name-only", "HEAD").stdout)
     data["source_dirty"] = source_dirty
+    data["source_head"] = git(source, "rev-parse", "HEAD").stdout.strip()
+    data["source_matches_deployment"] = data["source_head"] == data["revision"]
     for row in data.get("worktrees", []):
         path = Path(row["path"])
         current = git(path, "rev-parse", "HEAD")
@@ -298,7 +336,11 @@ def status(home: Path | None = None) -> dict:
             path, "merge-base", "--is-ancestor", data["revision"], "HEAD"
         ).returncode
     data["drift"] = drift
-    data["state"] = "drift" if drift or source_dirty else "current"
+    data["state"] = (
+        "drift"
+        if drift or source_dirty or not data["source_matches_deployment"]
+        else "current"
+    )
     return data
 
 

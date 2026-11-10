@@ -40,7 +40,7 @@ watchd는 사건·검수 결과 전달을 담당한다. 별도 maintenance 프�
 
 `th-sync.sh --apply`는 정본 체크아웃의 tracked 변경이 커밋되고 origin/main에 push된 경우만 배포한다. 전역 명령을 정본 소스에 연결하고 공통 정책·워커 규칙·스킬·hook을 설치한다. 기존 provider·키·모델·사용자 prompt는 보존한다. 식별 가능한 예전 관리 prompt만 공통 정책 참조로 이관하며 그 안의 실험 기준은 사용자 확장으로 남긴다. 파일을 바꾸기 전 홈의 deployment-backups에 보관한다. 설정 내용과 인증 정보는 저장소나 상태 출력에 노출하지 않는다.
 
-워크트리는 ancestor 관계일 때만 ff-only로 갱신한다. 이미 배포 revision을 포함하고 추가 local commit이 있는 작업선은 contains_revision으로 표시하고 보존한다. 사용자 편집과 충돌하거나 이력이 분기되면 blocked로 기록하고 stash/reset/강제 checkout을 하지 않는다. 해당 워크트리의 전역 명령은 정본 설치를 계속 사용한다. `--status`는 파일·링크 해시, 소스 미커밋 변경과 각 워크트리의 실제 HEAD를 보여준다. 배포 manifest는 마지막 성공한 설치를 가리킨다. 여러 전역 파일의 교체는 하나의 OS 트랜잭션이 아니므로 중간 실패는 오류로 보고하고 다시 동기화한다.
+워크트리는 ancestor 관계일 때만 ff-only로 갱신한다. 이미 배포 revision을 포함하고 추가 local commit이 있는 작업선은 contains_revision으로 표시하고 보존한다. 사용자 편집과 충돌하거나 이력이 분기되면 blocked로 기록하고 stash/reset/강제 checkout을 하지 않는다. 해당 워크트리의 전역 명령은 정본 설치를 계속 사용한다. `--status`는 파일·링크 해시, 소스 미커밋 변경, 정본 HEAD와 배포 revision의 차이 및 각 워크트리의 실제 HEAD를 보여준다. 배포 manifest는 마지막 성공한 설치를 가리킨다. 여러 전역 파일의 교체는 하나의 OS 트랜잭션이 아니므로 중간 실패는 오류로 보고하고 다시 동기화한다.
 
 새 프로세스는 즉시 새 코드를 사용한다. Claude의 기존 UserPromptSubmit hook은 다음 사용자 입력에서 정책 버전이 달라진 경우 한 번만 새 정책을 제공한다. 읽은 prompt·장기 실행 subprocess·이미 import한 라이브러리 코드를 소급 교체하지 않는다. maintenance는 Python 소스 변경 시 다음 주기에 재실행한다. 실행 중 작업을 업데이트 목적으로 죽이지 않는다.
 

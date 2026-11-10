@@ -3471,3 +3471,20 @@ def test_launch_serializes_same_task_and_releases_lock(test_env: dict) -> None:
         cmd, env=test_env["env"], capture_output=True, text=True, timeout=40
     )
     assert again.returncode == 0, again.stderr
+
+
+def test_global_symlink_entrypoints_resolve_canonical_source(tmp_path: Path):
+    for name in ("th-verify.sh", "th-crosscheck.sh", "th-adopt.sh"):
+        link = tmp_path / name
+        link.symlink_to(SCRIPTS_DIR / name)
+        result = subprocess.run([str(link), "--help"], capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+    library = tmp_path / "th-watch-lib.sh"
+    library.symlink_to(SCRIPTS_DIR / library.name)
+    result = subprocess.run(
+        ["bash", "-c", 'source "$1"; th_python -c "print(42)"', "bash", str(library)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "42"

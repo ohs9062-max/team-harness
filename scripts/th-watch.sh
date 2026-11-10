@@ -38,7 +38,7 @@ case "$stall_sec" in (*[!0-9]*|'') stall_sec=600 ;; esac
 case "$max_wait" in (*[!0-9]*|'') max_wait=21600 ;; esac
 deadline=$(( $(date +%s) + max_wait ))
 
-script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+script_dir=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 # shellcheck source=scripts/th-watch-lib.sh
 source "$script_dir/th-watch-lib.sh"
 
