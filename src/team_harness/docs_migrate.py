@@ -291,6 +291,12 @@ def finish(root: Path, task: Path) -> None:
         reason = "original lines missing"
     elif not archive.is_file():
         reason = "no new archive"
+    elif any(
+        relative_archive not in current[name]
+        for name in original
+        if len(current[name].splitlines()) < len(original[name].splitlines())
+    ):
+        reason = "archive reference missing from shortened document"
     paths = [name for name in original if current.get(name) != original[name]]
     paths.append(relative_archive)
     if not reason and source != root:

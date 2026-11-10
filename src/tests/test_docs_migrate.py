@@ -70,7 +70,10 @@ def test_preserve_and_commit(repo: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     task = prepare(repo, monkeypatch)
     proposal = Path(json.loads((task / "attempt.json").read_text())["worktree"])
     lines = (proposal / "AGENTS.md").read_text().splitlines(keepends=True)
-    (proposal / "AGENTS.md").write_text("".join(lines[:100]))
+    (proposal / "AGENTS.md").write_text(
+        "".join(lines[:100])
+        + f"(경위: docs/archive/AGENTS_이관_{datetime.now():%Y%m%d}.md §이관)\n"
+    )
     archive = proposal / "docs/archive" / f"AGENTS_이관_{datetime.now():%Y%m%d}.md"
     archive.parent.mkdir(parents=True)
     archive.write_text("".join(lines[100:]))
@@ -135,7 +138,10 @@ def test_registered_worktrees_launch_and_commit_once(
     task = next((repo / ".th_docs").glob("docs_migrate_*"))
     proposal = Path(json.loads((task / "attempt.json").read_text())["worktree"])
     lines = (proposal / "AGENTS.md").read_text().splitlines(keepends=True)
-    (proposal / "AGENTS.md").write_text("".join(lines[:100]))
+    (proposal / "AGENTS.md").write_text(
+        "".join(lines[:100])
+        + f"(경위: docs/archive/AGENTS_이관_{datetime.now():%Y%m%d}.md §이관)\n"
+    )
     archive = proposal / "docs/archive" / f"AGENTS_이관_{now:%Y%m%d}.md"
     archive.parent.mkdir(parents=True)
     archive.write_text("".join(lines[100:]))
@@ -162,7 +168,10 @@ def test_concurrent_document_edit_is_preserved(
     task = prepare(repo, monkeypatch)
     proposal = Path(json.loads((task / "attempt.json").read_text())["worktree"])
     lines = (proposal / "AGENTS.md").read_text().splitlines(keepends=True)
-    (proposal / "AGENTS.md").write_text("".join(lines[:100]))
+    (proposal / "AGENTS.md").write_text(
+        "".join(lines[:100])
+        + f"(경위: docs/archive/AGENTS_이관_{datetime.now():%Y%m%d}.md §이관)\n"
+    )
     archive = proposal / "docs/archive" / f"AGENTS_이관_{datetime.now():%Y%m%d}.md"
     archive.parent.mkdir(parents=True)
     archive.write_text("".join(lines[100:]))
@@ -201,11 +210,31 @@ def test_claude_only_migration(repo: Path, monkeypatch: pytest.MonkeyPatch) -> N
     task = prepare(repo, monkeypatch)
     proposal = Path(json.loads((task / "attempt.json").read_text())["worktree"])
     lines = (proposal / "CLAUDE.md").read_text().splitlines(keepends=True)
-    (proposal / "CLAUDE.md").write_text("".join(lines[:100]))
+    (proposal / "CLAUDE.md").write_text(
+        "".join(lines[:100])
+        + f"(경위: docs/archive/AGENTS_이관_{datetime.now():%Y%m%d}.md §이관)\n"
+    )
     archive = proposal / "docs/archive" / f"AGENTS_이관_{datetime.now():%Y%m%d}.md"
     archive.parent.mkdir(parents=True)
     archive.write_text("".join(lines[100:]))
     dm.finish(repo, task)
     assert "문서 이관 실패" not in (task / "finished").read_text()
-    assert len((repo / "CLAUDE.md").read_text().splitlines()) == 100
+    assert len((repo / "CLAUDE.md").read_text().splitlines()) == 101
     assert (repo / "AGENTS.md").read_text() == "active rule\n"
+
+
+def test_missing_archive_reference_preserves_original(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    task = prepare(repo, monkeypatch)
+    original = (repo / "AGENTS.md").read_text()
+    proposal = Path(json.loads((task / "attempt.json").read_text())["worktree"])
+    lines = original.splitlines(keepends=True)
+    (proposal / "AGENTS.md").write_text("".join(lines[:100]))
+    archive = proposal / "docs/archive" / f"AGENTS_이관_{datetime.now():%Y%m%d}.md"
+    archive.parent.mkdir(parents=True)
+    archive.write_text("".join(lines[100:]))
+    dm.finish(repo, task)
+    assert "archive reference missing" in (task / "finished").read_text()
+    assert (repo / "AGENTS.md").read_text() == original
+    assert archive.is_file()
