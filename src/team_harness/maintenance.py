@@ -21,9 +21,15 @@ def start(owner: Path | None = None) -> None:
     wd = watch_dir()
     wd.mkdir(parents=True, exist_ok=True)
     if owner is not None:
-        with (wd / "maintenance_owners.jsonl").open("a", encoding="utf-8") as out:
+        with (wd / "maintenance_owners.jsonl").open("a+", encoding="utf-8") as out:
             fcntl.flock(out, fcntl.LOCK_EX)
-            out.write(json.dumps(str(owner.resolve())) + "\n")
+            out.seek(0)
+            previous = out.read()
+            resolved = owner.resolve()
+            if resolved not in _parse_owners(previous):
+                if previous and not previous.endswith("\n"):
+                    out.write("\n")
+                out.write(json.dumps(str(resolved)) + "\n")
     with (wd / "maintenance.lock").open("a") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -47,14 +53,25 @@ def start(owner: Path | None = None) -> None:
             )
 
 
-def registered_owners() -> set[Path]:
+def _parse_owners(text: str) -> set[Path]:
+    result = set()
+    for line in text.splitlines():
+        try:
+            value = json.loads(line)
+            if isinstance(value, str) and value.strip():
+                result.add(Path(value).resolve())
+        except (ValueError, OSError):
+            continue
+    return result
+
+
+def registered_owners(wd: Path | None = None) -> set[Path]:
     try:
-        return {
-            Path(json.loads(line))
-            for line in (watch_dir() / "maintenance_owners.jsonl")
-            .read_text()
-            .splitlines()
-        }
+        return _parse_owners(
+            ((wd or watch_dir()) / "maintenance_owners.jsonl").read_text(
+                encoding="utf-8", errors="replace"
+            )
+        )
     except FileNotFoundError:
         return set()
 

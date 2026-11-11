@@ -36,10 +36,15 @@ def classify(text: str) -> str:
 
 
 def owners(wd: Path, owner: Path | None = None) -> set[Path]:
-    result = {owner.resolve()} if owner else set()
-    registry = wd / "tasks.txt"
-    if registry.exists():
-        for line in registry.read_text(encoding="utf-8", errors="replace").splitlines():
+    from team_harness.maintenance import registered_owners
+
+    result = registered_owners(wd)
+    if owner:
+        result.add(owner.resolve())
+    for name in ("tasks.txt", "tasks_done.txt"):
+        for line in _lines(wd / name):
+            if not line.strip():
+                continue
             try:
                 value = (
                     (Path(line) / ".th_owner")

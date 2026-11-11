@@ -599,7 +599,7 @@ inspect_task_event() {
           local repo
           repo=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)
           if PYTHONPATH="$repo/src${PYTHONPATH:+:$PYTHONPATH}" th_python -c \
-            'import sys; from team_harness.worker_relaunch import terminate_worker_group; terminate_worker_group(int(sys.argv[1]))' "$current_worker_pid"; then
+            'import sys; from pathlib import Path; from team_harness.worker_relaunch import terminate_worker_group; terminate_worker_group(int(sys.argv[1]), task=Path(sys.argv[2]))' "$current_worker_pid" "$task"; then
             touch "$task/.th_done_terminated"
             printf '%s [DONE 후 잔류 프로세스 종료] %s pid=%s\n' "$(date '+%F %T')" "$task" "$current_worker_pid" >> "$watch_dir/events.log"
           fi

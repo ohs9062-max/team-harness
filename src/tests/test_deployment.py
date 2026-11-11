@@ -95,9 +95,8 @@ def test_unpushed_and_uncommitted_candidates_are_not_deployed(
         dp.apply(repository, tmp_path / "home")
 
 
-def test_full_deployment_installs_hooks_and_reports_drift(
-    repository: Path, tmp_path: Path
-):
+@pytest.fixture
+def deployable_repository(repository: Path) -> Path:
     import shutil
 
     source = Path(__file__).resolve().parents[2]
@@ -107,6 +106,7 @@ def test_full_deployment_installs_hooks_and_reports_drift(
         "templates/journal_rule_block.md",
         "skills/team-harness/SKILL.md",
         "skills/orca-harness-protocol/SKILL.md",
+        "src/team_harness/hook_identity.py",
         "scripts/install-journal-rule.sh",
         "scripts/install-image-guard.sh",
         "scripts/install-coordinator-zone-guard.sh",
@@ -123,6 +123,13 @@ def test_full_deployment_installs_hooks_and_reports_drift(
     git(repository, "add", ".")
     git(repository, "commit", "-qm", "deployable files")
     git(repository, "update-ref", "refs/remotes/origin/main", "HEAD")
+    return repository
+
+
+def test_full_deployment_installs_hooks_and_reports_drift(
+    deployable_repository: Path, tmp_path: Path
+):
+    repository = deployable_repository
     home = tmp_path / "home"
     result = dp.apply(repository, home)
     assert dp.status(home)["state"] == "current"
@@ -230,3 +237,172 @@ value = "preserve"
         updated["coordinator"]["system_prompt"]
         == "- Experiment design check before long runs: keep baseline"
     )
+
+
+def test_document_migration_worktrees_are_excluded_from_sync_and_status(
+    repository: Path, tmp_path: Path
+):
+    artifact = repository / ".th_docs/docs_migrate_20261111/worktree"
+    git(repository, "worktree", "add", "--detach", str(artifact))
+    original = git(artifact, "rev-parse", "HEAD")
+    (artifact / "tracked").write_text("staged migration proposal\n")
+    git(artifact, "add", "tracked")
+    (repository / "tracked").write_text("new revision\n")
+    git(repository, "commit", "-qam", "update")
+    revision = git(repository, "rev-parse", "HEAD")
+    rows = dp.sync_worktrees(repository, revision)
+    row = next(row for row in rows if row["path"] == str(artifact))
+    assert row["state"] == "excluded"
+    assert "documentation migration artifact" in row["reason"]
+    assert git(artifact, "rev-parse", "HEAD") == original
+    assert (artifact / "tracked").read_text() == "staged migration proposal\n"
+    home = tmp_path / "home"
+    manifest = home / ".team-harness/deployment.json"
+    manifest.parent.mkdir(parents=True)
+    # An old manifest's blocked artifact must also be classified as excluded.
+    row["state"] = "blocked"
+    manifest.write_text(
+        json.dumps(
+            {
+                "source": str(repository),
+                "revision": revision,
+                "files": {},
+                "worktrees": rows,
+            }
+        )
+    )
+    state = dp.status(home)
+    row = next(row for row in state["worktrees"] if row["path"] == str(artifact))
+    assert row["state"] == "excluded"
+    assert "tracked_dirty" not in row
+    assert state["state"] == "current"
+
+
+def test_deployment_backs_up_changed_assets_and_is_idempotent(
+    deployable_repository: Path, tmp_path: Path
+):
+    home = tmp_path / "home"
+    originals = {
+        ".local/bin/ths": "#!/bin/sh\necho custom-status\n",
+        ".agy/AGENTS.md": "keep agy instructions\n",
+        ".claude/hooks/image_guard.py": "# old image guard\n",
+        ".claude/hooks/coordinator_zone_guard.py": "# old zone guard\n",
+        ".claude/CLAUDE.md": (
+            "2. 다시 읽는 것은 정말 필요할 때뿐이다(파일이 바뀌었거나, 컨텍스트 압축 등으로 내용을 잊었을 때). "
+            "그때도 **먼저 사용자에게 이유를 말하고 허락을 받은 뒤** 한 번만 읽는다.\n"
+        ),
+        ".codex/hooks.json": '{"hooks":{},"custom":"keep codex"}\n',
+        ".claude/settings.json": json.dumps(
+            {
+                "env": {"PRIVATE_SETTING": "example-secret"},
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "matcher": "Read|Bash",
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": "python3 ~/.claude/hooks/image_guard.py",
+                                },
+                                {"type": "command", "command": "echo keep-user-hook"},
+                            ],
+                        },
+                        {
+                            "matcher": "Bash",
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": "python3 ~/.claude/hooks/image_guard.py",
+                                }
+                            ],
+                        },
+                    ]
+                },
+            }
+        )
+        + "\n",
+    }
+    for relative, content in originals.items():
+        path = home / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+    result = dp.apply(deployable_repository, home)
+    backups = home / ".team-harness/deployment-backups"
+    backed_contents = [path.read_text() for path in backups.iterdir() if path.is_file()]
+    for content in originals.values():
+        assert content in backed_contents
+    for relative in originals:
+        target = home / relative
+        if relative != ".local/bin/ths":
+            assert result["files"][str(target)] == dp.digest(target)
+    assert originals[".claude/CLAUDE.md"] in (home / ".claude/CLAUDE.md").read_text()
+    settings = json.loads((home / ".claude/settings.json").read_text())
+    assert settings["env"]["PRIVATE_SETTING"] == "example-secret"
+    pretool = settings["hooks"]["PreToolUse"]
+    image_entries = [
+        entry
+        for entry in pretool
+        if any("image_guard.py" in hook["command"] for hook in entry["hooks"])
+    ]
+    assert [entry["matcher"] for entry in image_entries] == ["Read", "Bash"]
+    assert any(
+        hook["command"] == "echo keep-user-hook"
+        for entry in pretool
+        for hook in entry["hooks"]
+    )
+    snapshot = {path: path.stat().st_mtime_ns for path in backups.iterdir()}
+    mtimes = {Path(path): Path(path).stat().st_mtime_ns for path in result["files"]}
+    dp.apply(deployable_repository, home)
+    assert {path: path.stat().st_mtime_ns for path in backups.iterdir()} == snapshot
+    assert {path: path.stat().st_mtime_ns for path in mtimes} == mtimes
+    assert "example-secret" not in json.dumps(dp.status(home))
+    for relative in (
+        ".claude/settings.json",
+        ".codex/hooks.json",
+        ".claude/hooks/image_guard.py",
+        ".claude/hooks/coordinator_zone_guard.py",
+        ".agy/AGENTS.md",
+    ):
+        path = home / relative
+        path.write_text(path.read_text() + "\n")
+        assert str(path) in dp.status(home)["drift"]
+
+
+def test_replaced_symlink_is_backed_up_without_reading_its_target(tmp_path: Path):
+    home = tmp_path / "home"
+    target = home / "ths"
+    home.mkdir()
+    target.symlink_to("missing-custom-status")
+    source = tmp_path / "source"
+    source.write_text("installed")
+    dp.install_file(source, target, home)
+    backups = list((home / ".team-harness/deployment-backups").iterdir())
+    assert len(backups) == 1
+    assert backups[0].is_symlink()
+    assert str(backups[0].readlink()) == "missing-custom-status"
+    assert target.is_file() and not target.is_symlink()
+
+
+def test_auto_sync_uses_only_clean_pushed_source(
+    repository: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    manifest = Path.home() / ".team-harness/deployment.json"
+    manifest.parent.mkdir(parents=True)
+    old = git(repository, "rev-parse", "HEAD")
+    manifest.write_text(json.dumps({"source": str(repository), "revision": old}))
+    calls = []
+    monkeypatch.setattr(dp, "apply", lambda root: calls.append(root))
+    dp.auto_sync()
+    assert calls == []
+    (repository / "tracked").write_text("new revision\n")
+    git(repository, "commit", "-qam", "update")
+    dp.auto_sync()
+    assert calls == []
+    git(repository, "update-ref", "refs/remotes/origin/main", "HEAD")
+    (repository / "tracked").write_text("dirty\n")
+    dp.auto_sync()
+    assert calls == []
+    (repository / "tracked").write_text("new revision\n")
+    dp.auto_sync()
+    assert calls == [repository]

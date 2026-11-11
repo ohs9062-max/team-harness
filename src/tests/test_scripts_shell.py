@@ -3488,3 +3488,148 @@ def test_global_symlink_entrypoints_resolve_canonical_source(tmp_path: Path):
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "42"
+
+
+@pytest.mark.parametrize("stage", ["preflight", "launch_check", "final_reserve"])
+def test_shared_admission_rejection_preserves_task_state(test_env: dict, stage: str):
+    """An SDK-only slot is visible before shell context/attempt/result mutation."""
+    from team_harness import resource_slots
+    from team_harness.worker_context import registry_path_for_workspace
+
+    task = _create_task_dir(test_env["tmp_path"], "rejected_admission")
+    env = dict(test_env["env"], TH_MAX_PARALLEL="1", HOME=str(test_env["tmp_path"]))
+    if stage == "preflight":
+        env["TH_PREFLIGHT_ONLY"] = "1"
+    prior_files = {
+        "DONE": "old done",
+        "FAILED": "old failure",
+        "VERIFIED": "old verification",
+        "job.pid": "987654321",
+        "STATUS": "old status",
+        ".th_digest.done": "old digest",
+        ".th_launch_env": "old overrides",
+    }
+    for name, content in prior_files.items():
+        (task / name).write_text(content)
+    registry = registry_path_for_workspace(test_env["workspace"])
+    registry.parent.mkdir(parents=True, exist_ok=True)
+    registry.write_text(json.dumps({"schema_version": 1, "sessions": []}))
+    before_registry = registry.read_bytes()
+    usage = test_env["watch_dir"] / "usage.jsonl"
+    usage.write_text("old usage\n")
+    launcher = SCRIPTS_DIR / "th-launch.sh"
+    if stage == "final_reserve":
+        # Simulate capacity changing after the read-only check but before reserve.
+        # Keep both the policy check and final admission implementation real.
+        harness = test_env["tmp_path"] / "race-harness"
+        script_dir = harness / "scripts"
+        script_dir.mkdir(parents=True)
+        (harness / "src").symlink_to(REPO_ROOT / "src", target_is_directory=True)
+        (harness / ".venv").symlink_to(REPO_ROOT / ".venv", target_is_directory=True)
+        launcher = script_dir / "th-launch.sh"
+        launcher.write_text((SCRIPTS_DIR / "th-launch.sh").read_text())
+        launcher.chmod(0o755)
+        (script_dir / "th-launch-identity.py").symlink_to(
+            SCRIPTS_DIR / "th-launch-identity.py"
+        )
+        (script_dir / "th-watch-lib.sh").write_text(
+            (SCRIPTS_DIR / "th-watch-lib.sh").read_text()
+            + "\nth_python() {\n"
+            + "  if [[ $1 == -m && $2 == team_harness.resource_slots && $3 == reserve ]]; then\n"
+            + f'    TH_MAX_PARALLEL=0 "{REPO_ROOT}/.venv/bin/python" "$@"\n'
+            + f'  else "{REPO_ROOT}/.venv/bin/python" "$@"; fi\n'
+            + "}\n"
+        )
+        env["TEAM_HARNESS_JEV"] = "0"
+    else:
+        resource_slots.reserve(
+            test_env["tmp_path"] / "sdk_only", "codex", directory=test_env["watch_dir"]
+        )
+    result = subprocess.run(
+        [str(launcher), str(task)], env=env, capture_output=True, text=True, timeout=15
+    )
+    assert result.returncode == 4, result.stdout + result.stderr
+    assert "상한" in result.stderr
+    assert registry.read_bytes() == before_registry
+    assert usage.read_text() == "old usage\n"
+    assert {name: (task / name).read_text() for name in prior_files} == prior_files
+    assert not (task / "worker.pid").exists()
+
+
+def test_context_preparation_failure_releases_shared_slot(test_env: dict):
+    task = _create_task_dir(test_env["tmp_path"], "unavailable_worker")
+    env = dict(test_env["env"], TH_FAIL_LAUNCH="1", HOME=str(test_env["tmp_path"]))
+    result = subprocess.run(
+        [str(SCRIPTS_DIR / "th-launch.sh"), str(task)],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "worker launch failed" in result.stderr
+    assert json.loads((test_env["watch_dir"] / "admission.json").read_text()) == {}
+    assert not (test_env["watch_dir"] / "usage.jsonl").exists()
+
+
+def test_pre_spawn_failure_rolls_back_pending_context(test_env: dict):
+    """Failure after register_active cannot permanently lock the task key."""
+    from team_harness.worker_context import registry_path_for_workspace
+
+    task = _create_task_dir(test_env["tmp_path"], "pending_rollback")
+    env = dict(test_env["env"], HOME=str(test_env["tmp_path"]))
+    # journal_append runs after pending registration but before starting a worker.
+    # A file in place of its parent causes a real preparation failure.
+    (test_env["workspace"] / ".claude").write_text("blocked directory")
+    result = subprocess.run(
+        [str(SCRIPTS_DIR / "th-launch.sh"), str(task)],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode != 0
+    registry = registry_path_for_workspace(test_env["workspace"])
+    assert json.loads(registry.read_text())["sessions"] == []
+    assert json.loads((test_env["watch_dir"] / "admission.json").read_text()) == {}
+    assert not (task / "worker.pid").exists()
+
+
+def test_registration_conflict_does_not_roll_back_another_pending_launch(
+    test_env: dict,
+):
+    """A competing register between dispatch and registration retains ownership."""
+    from team_harness.worker_context import registry_path_for_workspace
+
+    task = _create_task_dir(test_env["tmp_path"], "pending_conflict")
+    hook = test_env["tmp_path"] / "conflict-hook"
+    hook.mkdir()
+    (hook / "sitecustomize.py").write_text(
+        "from team_harness.worker_context import WorkerContextRegistry\n"
+        "original = WorkerContextRegistry.register_active\n"
+        "def conflict(self, record):\n"
+        "    if record.get('pending_launch'):\n"
+        "        original(self, record)  # competing launch won the registration\n"
+        "    return original(self, record)\n"
+        "WorkerContextRegistry.register_active = conflict\n"
+    )
+    env = dict(
+        test_env["env"],
+        HOME=str(test_env["tmp_path"]),
+        PYTHONPATH=str(hook) + os.pathsep + str(REPO_ROOT / "src"),
+    )
+    result = subprocess.run(
+        [str(SCRIPTS_DIR / "th-launch.sh"), str(task)],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "worker context conflict" in result.stderr
+    sessions = json.loads(
+        registry_path_for_workspace(test_env["workspace"]).read_text()
+    )["sessions"]
+    assert len(sessions) == 1
+    assert sessions[0]["pending_launch"] is True
+    assert json.loads((test_env["watch_dir"] / "admission.json").read_text()) == {}

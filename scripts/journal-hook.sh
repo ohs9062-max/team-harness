@@ -33,7 +33,10 @@ if [[ ${1:-} == prompt ]]; then
     tail -c "+$(( previous_size + 1 ))" "$inbox"
   fi
   printf '%s\n' "$current_size" > "$offset_file"
-elif (( $# == 0 )) && [[ -f $inbox ]]; then
-  printf '## inbox (최근)\n'
-  tail -n 10 "$inbox"
+else
+  python3 "$script_dir/../src/team_harness/policy_notice.py" "$workspace" --session-start || true
+  if (( $# == 0 )) && [[ -f $inbox ]]; then
+    printf '## inbox (최근)\n'
+    tail -n 10 "$inbox"
+  fi
 fi

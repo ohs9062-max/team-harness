@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import timedelta
 import fcntl
 import json
 import os
@@ -13,8 +14,115 @@ import pytest
 
 from team_harness import crosscheck as cc
 from team_harness import worker_digest as wd
+from team_harness.adoption_gate import receipt_valid
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+@pytest.mark.parametrize("failure_stage", ["write", "replace"])
+def test_decision_receipt_survives_queries_and_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_stage: str
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args: str) -> str:
+        return subprocess.check_output(
+            ["git", "-C", str(repo), *args], text=True
+        ).strip()
+
+    git("init", "-q")
+    git("config", "user.name", "Test")
+    git("config", "user.email", "test@example.invalid")
+    (repo / "design").mkdir()
+    (repo / "design/decisions.md").write_text("## TH-D1. Reviewed\nDecision\n")
+    (repo / ".gitignore").write_text("_outputs/\n")
+    git("add", ".")
+    git("commit", "-qm", "reviewed document")
+    task = repo / "_outputs/task"
+    task.mkdir(parents=True)
+    (task / "task.md").write_text("검토 요청")
+    monkeypatch.setenv("TH_NO_DAEMON", "1")
+    real_run = subprocess.run
+
+    def run_or_launch(
+        cmd: list[str], **kwargs: Any
+    ) -> subprocess.CompletedProcess[Any]:
+        if str(cmd[0]).endswith("th-launch.sh"):
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        return real_run(cmd, **kwargs)
+
+    monkeypatch.setattr(cc.subprocess, "run", run_or_launch)
+    assert (
+        cc.adopt(
+            argparse.Namespace(folder=str(task), claim="결론", source=[], two=False)
+        )
+        == 0
+    )
+    folder = task / ".th_adopt"
+    (folder / "terra/DONE").touch()
+    (folder / "terra/VERDICT.md").write_text("기준\n반례: 없음\nVERDICT: PASS\n")
+    args = argparse.Namespace(
+        folder=str(folder), adopt=True, reason="근거 확인", override_reason=None
+    )
+    assert cc.decide(args) == 0
+    report = (folder / "CROSSCHECK.md").read_bytes()
+    receipt = (folder / "adoption.json").read_bytes()
+    assert receipt_valid(folder, repo, "HEAD")
+    later = cc.now() + timedelta(minutes=1)
+    monkeypatch.setattr(cc, "now", lambda: later)
+    assert cc.verdict(folder)[0] == 0
+    assert cc.notification(folder) == 0
+    assert (folder / "CROSSCHECK.md").read_bytes() == report
+    assert (folder / "adoption.json").read_bytes() == receipt
+
+    # Committing a trailer changes HEAD but not the reviewed decision content.
+    git("commit", "--allow-empty", "-qm", f"adopt\n\nCrosscheck: {folder}")
+    assert cc.verdict(folder)[1]["terra"][0] == "UNAVAILABLE"
+    assert cc.notification(folder) == 0
+    assert (folder / "CROSSCHECK.md").read_bytes() == report
+    assert (folder / "adoption.json").read_bytes() == receipt
+    assert receipt_valid(folder, repo, "HEAD")
+
+    # Invalid commands cannot change a past decision's frozen evidence either.
+    with pytest.raises(ValueError, match="override-reason"):
+        cc.decide(args)
+    assert (folder / "CROSSCHECK.md").read_bytes() == report
+    assert receipt_valid(folder, repo, "HEAD")
+    args.adopt = False
+    args.reason = "새 상태에서 기각"
+    # Fail the real receipt writer after it has changed the report. Both the
+    # temporary-file write and its final replace must preserve the old pair.
+    with monkeypatch.context() as failure:
+        if failure_stage == "write":
+            real_write_text = Path.write_text
+
+            def fail_write(path: Path, text: str, **kwargs: Any) -> int:
+                if path == folder / ".adoption.json.tmp":
+                    raise OSError("injected receipt failure")
+                return real_write_text(path, text, **kwargs)
+
+            failure.setattr(Path, "write_text", fail_write)
+        else:
+            real_replace = Path.replace
+
+            def fail_replace(path: Path, target: Path) -> Path:
+                if path == folder / ".adoption.json.tmp":
+                    raise OSError("injected receipt failure")
+                return real_replace(path, target)
+
+            failure.setattr(Path, "replace", fail_replace)
+        with pytest.raises(OSError, match="injected receipt failure"):
+            cc.decide(args)
+    assert (folder / "CROSSCHECK.md").read_bytes() == report
+    assert (folder / "adoption.json").read_bytes() == receipt
+    assert receipt_valid(folder, repo, "HEAD")
+    assert cc.notification(folder) == 0
+    assert (folder / "CROSSCHECK.md").read_bytes() == report
+    assert cc.decide(args) == 0
+    assert (folder / "CROSSCHECK.md").read_bytes() != report
+    assert "결정: 기각" in (folder / "CROSSCHECK.md").read_text()
+    assert not receipt_valid(folder, repo, "HEAD")
 
 
 def test_missing_verification_and_state_failure(tmp_path: Path) -> None:

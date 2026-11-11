@@ -93,6 +93,21 @@ def test_daily_once(tmp_path: Path) -> None:
     ).exists()
 
 
+@pytest.mark.parametrize("registry", ["maintenance_owners.jsonl", "tasks_done.txt"])
+def test_daily_includes_sdk_and_retired_workspace(
+    tmp_path: Path, registry: str
+) -> None:
+    owner, task, watch, now = fixture_data(tmp_path)
+    (watch / "tasks.txt").unlink()
+    value = json.dumps(str(owner)) if registry.endswith("jsonl") else str(task)
+    (watch / registry).write_text(value + "\n")
+    tomorrow = now + timedelta(days=1)
+    daily(tomorrow, watch)
+    report = owner / ".claude/reports" / f"loss_{now:%Y%m%d}.md"
+    assert "| 2 | 1 |" in report.read_text()
+    assert "손실 리포트: launch 2, 재실행 1" in (owner / ".claude/inbox.md").read_text()
+
+
 def test_events_and_false_stall(tmp_path: Path) -> None:
     owner, task, watch, now = fixture_data(tmp_path)
     later = now + timedelta(minutes=2)

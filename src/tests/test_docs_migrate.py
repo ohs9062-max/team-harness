@@ -238,3 +238,37 @@ def test_missing_archive_reference_preserves_original(
     assert "archive reference missing" in (task / "finished").read_text()
     assert (repo / "AGENTS.md").read_text() == original
     assert archive.is_file()
+
+
+@pytest.mark.parametrize("reference", [False, True])
+def test_same_length_migrated_document_requires_archive_reference(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, reference: bool
+) -> None:
+    original_claude = "current rule\nhistory one\nhistory two\n"
+    (repo / "CLAUDE.md").write_text(original_claude)
+    git(repo, "add", "CLAUDE.md")
+    git(repo, "commit", "-qm", "short document")
+    task = prepare(repo, monkeypatch)
+    data = json.loads((task / "attempt.json").read_text())
+    proposal = Path(data["worktree"])
+    lines = (proposal / "AGENTS.md").read_text().splitlines(keepends=True)
+    archive_path = data["archive"]
+    (proposal / "AGENTS.md").write_text(
+        "".join(lines[:100]) + f"경위: {archive_path}\n"
+    )
+    (proposal / "CLAUDE.md").write_text(
+        "current rule\n"
+        + (f"경위: {archive_path}\n" if reference else "## 경위\n")
+        + "\n"
+    )
+    archive = proposal / archive_path
+    archive.parent.mkdir(parents=True)
+    archive.write_text("".join(lines[100:]) + "history one\nhistory two\n")
+    assert len((proposal / "CLAUDE.md").read_text().splitlines()) == 3
+    dm.finish(repo, task)
+    if reference:
+        assert "문서 이관 실패" not in (task / "finished").read_text()
+        assert archive_path in (repo / "CLAUDE.md").read_text()
+    else:
+        assert "archive reference missing" in (task / "finished").read_text()
+        assert (repo / "CLAUDE.md").read_text() == original_claude

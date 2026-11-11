@@ -14,6 +14,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import tomllib
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -42,23 +43,112 @@ def atomic_write(path: Path, content: bytes, mode: int | None = None) -> None:
 
 
 def backup(path: Path, home: Path) -> None:
-    if path.is_file():
-        key = hashlib.sha256(str(path).encode()).hexdigest()[:12]
-        target = (
-            home
-            / ".team-harness/deployment-backups"
-            / (f"{datetime.now():%Y%m%dT%H%M%S}-{key}-{digest(path)[:12]}-{path.name}")
-        )
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if not target.exists():
+    if not path.is_symlink() and not path.is_file():
+        return
+    key = hashlib.sha256(str(path).encode()).hexdigest()[:12]
+    content = str(path.readlink()).encode() if path.is_symlink() else path.read_bytes()
+    kind = "link" if path.is_symlink() else "file"
+    fingerprint = kind + "-" + hashlib.sha256(content).hexdigest()[:12]
+    target = (
+        home
+        / ".team-harness/deployment-backups"
+        / f"{datetime.now():%Y%m%dT%H%M%S}-{key}-{fingerprint}-{path.name}"
+    )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if not target.exists() and not target.is_symlink():
+        if path.is_symlink():
+            target.symlink_to(path.readlink())
+        else:
             shutil.copy2(path, target)
 
 
 def install_file(source: Path, target: Path, home: Path) -> None:
-    if target.is_file() and source.read_bytes() == target.read_bytes():
+    mode = source.stat().st_mode & 0o777
+    if (
+        not target.is_symlink()
+        and target.is_file()
+        and source.read_bytes() == target.read_bytes()
+        and target.stat().st_mode & 0o777 == mode
+    ):
         return
     backup(target, home)
-    atomic_write(target, source.read_bytes(), source.stat().st_mode & 0o777)
+    atomic_write(target, source.read_bytes(), mode)
+
+
+def install_link(source: Path, target: Path, home: Path) -> None:
+    if target.is_symlink() and target.resolve() == source.resolve():
+        return
+    backup(target, home)
+    temporary = target.with_name(f".{target.name}.deploy.{os.getpid()}")
+    temporary.unlink(missing_ok=True)
+    temporary.symlink_to(source)
+    temporary.replace(target)
+
+
+INSTALLER_ASSETS = (
+    ".claude/CLAUDE.md",
+    ".codex/AGENTS.md",
+    ".agy/AGENTS.md",
+    ".agy/INSTRUCTIONS.md",
+    ".config/agy/AGENTS.md",
+    ".claude/settings.json",
+    ".codex/hooks.json",
+    ".claude/hooks/image_guard.py",
+    ".claude/hooks/coordinator_zone_guard.py",
+)
+
+
+def install_hooks(root: Path, home: Path) -> dict[str, str]:
+    """Prepare installer output privately, then back up only changed assets.
+
+    Installers merge into a copy of the user's files, so a parse failure cannot
+    leave half-written live settings. Only declared assets are promoted; their
+    contents and credentials never enter deployment output.
+    """
+    installed = {}
+    with tempfile.TemporaryDirectory(
+        prefix="deployment-stage-", dir=home / ".team-harness"
+    ) as stage_name:
+        stage = Path(stage_name)
+        for relative in INSTALLER_ASSETS:
+            source = home / relative
+            if source.is_file():
+                target = stage / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, target)
+        environment = dict(
+            os.environ,
+            HOME=str(stage),
+            TH_INSTALL_TARGET_HOME=str(home),
+            TH_CLAUDE_HOOKS_DIR=str(stage / ".claude/hooks"),
+            TH_CLAUDE_SETTINGS=str(stage / ".claude/settings.json"),
+            TH_CODEX_HOOKS=str(stage / ".codex/hooks.json"),
+            TH_CODEX_HOOKS_BACKUP=str(stage / ".codex/hooks.json.before-deployment"),
+        )
+        for name in (
+            "install-journal-rule.sh",
+            "install-image-guard.sh",
+            "install-coordinator-zone-guard.sh",
+        ):
+            script = root / "scripts" / name
+            if not script.is_file():
+                raise ValueError(f"deployment installer missing: {script}")
+            setup = subprocess.run(
+                ["bash", str(script)],
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if setup.returncode:
+                raise RuntimeError(f"{name}: {setup.stderr.strip()}")
+        for relative in INSTALLER_ASSETS:
+            source = stage / relative
+            if source.is_file():
+                target = home / relative
+                install_file(source, target, home)
+                installed[str(target)] = digest(target)
+    return installed
 
 
 def _coordinator_body(text: str) -> tuple[int, int] | None:
@@ -149,9 +239,18 @@ def worktrees(root: Path) -> list[Path]:
     ]
 
 
+def excluded_worktree(path: Path) -> str:
+    if ".th_docs" in path.parts:
+        return "documentation migration artifact; preserved for inspection"
+    return ""
+
+
 def sync_worktrees(root: Path, revision: str) -> list[dict[str, str]]:
     results = []
     for path in worktrees(root):
+        if reason := excluded_worktree(path):
+            results.append({"path": str(path), "state": "excluded", "reason": reason})
+            continue
         head = git(path, "rev-parse", "HEAD").stdout.strip()
         if head == revision:
             results.append({"path": str(path), "state": "current"})
@@ -227,19 +326,11 @@ def apply(root: Path = ROOT, home: Path | None = None) -> dict:
             for name in (source.name, source.stem):
                 target = bin_dir / name
                 links[str(target)] = str(source.resolve())
-                if target.is_symlink() and target.resolve() == source.resolve():
-                    continue
-                backup(target, home)
-                temporary = target.with_name(f".{name}.deploy.{os.getpid()}")
-                temporary.unlink(missing_ok=True)
-                temporary.symlink_to(source)
-                temporary.replace(target)
+                install_link(source, target, home)
         target = bin_dir / "ths"
-        temporary = bin_dir / ".ths.deploy"
-        temporary.unlink(missing_ok=True)
-        temporary.symlink_to(root / "scripts/th-status.sh")
-        temporary.replace(target)
-        links[str(target)] = str((root / "scripts/th-status.sh").resolve())
+        source = root / "scripts/th-status.sh"
+        install_link(source, target, home)
+        links[str(target)] = str(source.resolve())
         python = root / ".venv/bin/python"
         if not python.exists():
             python = Path(sys.executable)
@@ -249,43 +340,18 @@ def apply(root: Path = ROOT, home: Path | None = None) -> dict:
             "${PYTHONPATH:+:$PYTHONPATH}\n"
             f'exec {shlex.quote(str(python))} -m team_harness "$@"\n'
         )
-        backup(bin_dir / "th", home)
-        atomic_write(bin_dir / "th", wrapper.encode(), 0o755)
+        if (
+            (bin_dir / "th").is_symlink()
+            or not (bin_dir / "th").is_file()
+            or (
+                (bin_dir / "th").read_bytes() != wrapper.encode()
+                or (bin_dir / "th").stat().st_mode & 0o777 != 0o755
+            )
+        ):
+            backup(bin_dir / "th", home)
+            atomic_write(bin_dir / "th", wrapper.encode(), 0o755)
         installed[str(bin_dir / "th")] = digest(bin_dir / "th")
-        for relative in (
-            ".claude/CLAUDE.md",
-            ".codex/AGENTS.md",
-            ".claude/settings.json",
-            ".codex/hooks.json",
-        ):
-            backup(home / relative, home)
-        for name in (
-            "install-journal-rule.sh",
-            "install-image-guard.sh",
-            "install-coordinator-zone-guard.sh",
-        ):
-            script = root / "scripts" / name
-            if not script.is_file():
-                raise ValueError(f"deployment installer missing: {script}")
-            environment = dict(
-                os.environ,
-                HOME=str(home),
-                TH_CLAUDE_HOOKS_DIR=str(home / ".claude/hooks"),
-                TH_CLAUDE_SETTINGS=str(home / ".claude/settings.json"),
-                TH_CODEX_HOOKS=str(home / ".codex/hooks.json"),
-                TH_CODEX_HOOKS_BACKUP=str(home / ".codex/hooks.json.before-deployment"),
-            )
-            setup = subprocess.run(
-                ["bash", str(script)],
-                env=environment,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if setup.returncode:
-                raise RuntimeError(f"{name}: {setup.stderr.strip()}")
-        for path in (home / ".claude/CLAUDE.md", home / ".codex/AGENTS.md"):
-            installed[str(path)] = digest(path)
+        installed.update(install_hooks(root, home))
         result = {
             "schema": 1,
             "source": str(root),
@@ -312,7 +378,9 @@ def status(home: Path | None = None) -> dict:
     drift = [
         name
         for name, expected in data["files"].items()
-        if not Path(name).is_file() or digest(Path(name)) != expected
+        if Path(name).is_symlink()
+        or not Path(name).is_file()
+        or digest(Path(name)) != expected
     ]
     drift.extend(
         name
@@ -326,6 +394,16 @@ def status(home: Path | None = None) -> dict:
     data["source_matches_deployment"] = data["source_head"] == data["revision"]
     for row in data.get("worktrees", []):
         path = Path(row["path"])
+        if reason := excluded_worktree(path):
+            row.update(state="excluded", reason=reason)
+            for field in (
+                "head",
+                "tracked_dirty",
+                "at_deployed_revision",
+                "contains_deployed_revision",
+            ):
+                row.pop(field, None)
+            continue
         current = git(path, "rev-parse", "HEAD")
         row["head"] = current.stdout.strip()
         row["tracked_dirty"] = bool(

@@ -15,6 +15,7 @@ from team_harness.agents.process_identity import probe_group
 from team_harness.agents.process_identity import ProcessProbeError
 from team_harness.launch_policy import _active_workers
 from team_harness.launch_policy import _pid_alive
+from team_harness.launch_policy import _read_pid
 from team_harness.launch_policy import check
 from team_harness.worker_digest import quota_lock_active
 from team_harness.workspace_archive import watch_dir
@@ -65,15 +66,46 @@ def active(row: dict) -> bool:
             return state.alive and state.verdict != "identity_mismatch"
         except ProcessProbeError:
             return True
-    if not token:
-        try:
-            os.kill(int(row["pid"]), 0)
-            return True
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            return True
-    return capture_starttime(int(row["pid"])) == token
+    pid = int(row["pid"])
+    return _pid_alive(pid) and (not token or capture_starttime(pid) == token)
+
+
+def _workers(
+    rows: dict, task: Path, worker: str, directory: Path, *, exclude_task: bool = False
+) -> list[str]:
+    target = str(task.resolve())
+    replaced_pid = _read_pid(task / "worker.pid") if exclude_task else None
+    tasks = [
+        row["task"]
+        for row in rows.values()
+        if row["worker"] == worker
+        and not (
+            exclude_task
+            and row["task"] == target
+            and row.get("bound")
+            and row["pid"] == replaced_pid
+        )
+    ]
+    represented = set(tasks)
+    tasks.extend(
+        path
+        for path in _active_workers(task, worker, directory, full_paths=True)
+        if path not in represented
+    )
+    return [Path(path).name for path in sorted(tasks)]
+
+
+def current_workers(task: Path, worker: str, directory: Path) -> list[str]:
+    """Observe the same shared slots as reserve, excluding the replaced task.
+
+    This is a preflight snapshot, not a reservation. The final reserve still
+    arbitrates races between simultaneous launchers under the same lock.
+    """
+    with ledger(directory) as rows:
+        for key in list(rows):
+            if not active(rows[key]):
+                del rows[key]
+        return _workers(rows, task, worker_family(worker), directory, exclude_task=True)
 
 
 def reserve(
@@ -91,21 +123,13 @@ def reserve(
         for key in list(rows):
             if not active(rows[key]):
                 del rows[key]
-        family = [row for row in rows.values() if row["worker"] == worker]
-        tasks = [row["task"] for row in family]
-        represented = set(tasks)
-        tasks.extend(
-            path
-            for path in _active_workers(task, worker, directory, full_paths=True)
-            if path not in represented
-        )
         violations = check(
             task,
             worker,
             model,
             effort,
             directory,
-            active_workers=[Path(p).name for p in sorted(tasks)],
+            active_workers=_workers(rows, task, worker, directory),
         )
         violations = [v for v in violations if v.code in {"parallel", "budget"}]
         if os.environ.get("TH_IGNORE_QUOTA_LOCK") != "1" and quota_lock_active(

@@ -161,9 +161,6 @@ fi
 if [[ ${TH_PREFLIGHT_ONLY:-0} == 1 ]]; then
   exit 0
 fi
-if [[ ${TH_ROLLOVER:-0} != 1 && ${TH_AUTO_CONTINUE:-0} != 1 && ${TH_RELAUNCH:-0} != 1 ]]; then
-  PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" th_python -m team_harness.launch_env save "$task_dir"
-fi
 policy_override=""
 if (( brief_rc == 2 )); then
   policy_override="override: TH_BRIEF_OK=$TH_BRIEF_OK"
@@ -181,13 +178,36 @@ done <<< "$policy_out"
 
 ctx_prep_file=$(mktemp "${TMPDIR:-/tmp}/th-launch-ctx.XXXXXX")
 admission_slot=""
+worker_spawned=0
 cleanup_ctx_prep() {
+  # Context registration is provisional until a process is started. Any
+  # preparation failure must restore the former parked entry or remove it.
+  if [[ $worker_spawned == 0 && -s $ctx_prep_file ]]; then
+    PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" th_python - "$ctx_prep_file" << 'PYEOF' || true
+import json, sys
+from pathlib import Path
+from team_harness.worker_context import WorkerContextRegistry
+meta = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+if meta.get("enabled") and meta.get("registered"):
+    registry = WorkerContextRegistry(meta["registry_path"])
+    entry = next((r for r in registry.sessions() if r.get("session_id") == meta["session_id"]), None)
+    if entry and entry.get("pending_launch"):
+        registry.restore_after_failed_launch(meta["session_id"], meta.get("prior_entry"))
+PYEOF
+  fi
   rm -f "$ctx_prep_file"
   if [[ -n $admission_slot ]]; then
     PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" th_python -m team_harness.resource_slots release "$admission_slot" || true
   fi
 }
 trap cleanup_ctx_prep EXIT
+
+# Reserve before registry preparation, durable attempt recording, or clearing
+# any previous result. A losing concurrent launcher leaves the task intact.
+admission_slot=$(PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" th_python -m team_harness.resource_slots reserve "$task_dir" "$worker_type" "$model" "$effort" "$$")
+if [[ ${TH_ROLLOVER:-0} != 1 && ${TH_AUTO_CONTINUE:-0} != 1 && ${TH_RELAUNCH:-0} != 1 ]]; then
+  PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" th_python -m team_harness.launch_env save "$task_dir"
+fi
 
 if ! PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" "${context_python[@]}" - "$journal_workspace" "$task_dir" "$worker_type" "$model" "$worktree" "$ctx_prep_file" << 'PYEOF'
 import json, os, re, shutil, sys, uuid
@@ -463,22 +483,6 @@ prior_entry = next(
     (dict(item) for item in registry.sessions() if item.get("session_id") == session_id),
     None,
 )
-try:
-    registry.register_active(
-        {
-            "task_key": task_key,
-            "session_id": session_id,
-            "agent_type": worker_type,
-            "model": model,
-            "worktree": str(worktree),
-            "worklog_path": worklog_path,
-            "experiment_path": experiment_path,
-            "pending_launch": True,
-        }
-    )
-except (RegistryConflictError, WorkerContextError) as exc:
-    print(f"worker context conflict: {exc}", file=sys.stderr)
-    sys.exit(1)
 
 preserve_job = bool(
     distinct_job_alive
@@ -508,6 +512,33 @@ out_file.write_text(
     ),
     encoding="utf-8",
 )
+try:
+    registry.register_active(
+        {
+            "task_key": task_key,
+            "session_id": session_id,
+            "agent_type": worker_type,
+            "model": model,
+            "worktree": str(worktree),
+            "worklog_path": worklog_path,
+            "experiment_path": experiment_path,
+            "pending_launch": True,
+        }
+    )
+except (RegistryConflictError, WorkerContextError) as exc:
+    print(f"worker context conflict: {exc}", file=sys.stderr)
+    sys.exit(1)
+
+# Only our successful registration may be rolled back. A conflicting launch
+# can point at the same resume session but must never restore that entry.
+try:
+    prepared = json.loads(out_file.read_text(encoding="utf-8"))
+    prepared["registered"] = True
+    out_file.write_text(json.dumps(prepared), encoding="utf-8")
+except (OSError, ValueError):
+    registry.restore_after_failed_launch(session_id, prior_entry)
+    raise
+
 PYEOF
 then
   exit 1
@@ -649,7 +680,6 @@ if [[ -n $recovery_summary ]]; then
 $recovery_summary"
 fi
 
-admission_slot=$(PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" th_python -m team_harness.resource_slots reserve "$task_dir" "$worker_type" "$model" "$effort" "$$")
 worker_header='너는 team-harness 워커다(TH_ROLE=worker). 코디네이터가 아니다. 이 지시서의 작업만 하고 결과는 결과 폴더에만 남긴다.'
 prompt="$worker_header
 
@@ -748,6 +778,7 @@ elif [[ "$worker_type" == "claude" ]]; then
   printf '%s\n' "$!" > "$task_dir/worker.pid"
 fi
 
+worker_spawned=1
 python3 "$script_dir/th-launch-identity.py" record "$task_dir"
 PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" th_python -m team_harness.resource_slots bind "$admission_slot" "$(<"$task_dir/worker.pid")"
 admission_slot=""

@@ -684,16 +684,36 @@ def adopt_changed(path: Path, data: dict) -> bool:
 
 
 def verdict(folder: Path) -> tuple[int, dict[str, tuple[str, str]], dict]:
+    # Serialize observation with the report/receipt pair written by decide.
+    with (folder / ".decision.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _verdict(folder)
+
+
+def _verdict(
+    folder: Path, *, write_report: bool = True
+) -> tuple[int, dict[str, tuple[str, str]], dict]:
     data = load(folder)
     results, pending = evaluate(folder, data)
     names = data.get("names", NAMES)
     accepted = all(results[name][0] == "PASS" for name in names)
     rc = 3 if pending else (0 if accepted else 1)
+    # A receipt freezes the report, including its timestamp and repository
+    # state. Queries still return the current evaluation without changing the
+    # evidence for a past decision. Only an explicit new decision replaces it.
+    if write_report and not (folder / "adoption.json").exists():
+        _write_report(folder, results, data, rc)
+    return rc, results, data
+
+
+def _write_report(
+    folder: Path, results: dict[str, tuple[str, str]], data: dict, rc: int
+) -> None:
     result_lines = "\n".join(
         f"- {name} ({data['models'][name]}): {results[name][0]} — {results[name][1]}; {folder / name / 'VERDICT.md'}"
-        for name in names
+        for name in data.get("names", NAMES)
     )
-    report = f"# 독립 반증 검증\n\n대상: {data['claim'].strip()}\n\n시각: {now().isoformat()}\n\n증거 해시: {data['evidence_manifest_hash']}\n\n{result_lines}\n\n종합: {'실행 중' if pending else '채택 가능' if accepted else '채택 보류'}\n\n코디네이터가 근거를 원본과 대조해야 함. 각 VERDICT.md의 반례와 미해결 항목을 확인한다.\n"
+    report = f"# 독립 반증 검증\n\n대상: {data['claim'].strip()}\n\n시각: {now().isoformat()}\n\n증거 해시: {data['evidence_manifest_hash']}\n\n{result_lines}\n\n종합: {'실행 중' if rc == 3 else '채택 가능' if rc == 0 else '채택 보류'}\n\n코디네이터가 근거를 원본과 대조해야 함. 각 VERDICT.md의 반례와 미해결 항목을 확인한다.\n"
     output = folder / "CROSSCHECK.md"
     # Preserve decisions already appended across repeated checks.
     if output.exists():
@@ -702,7 +722,6 @@ def verdict(folder: Path) -> tuple[int, dict[str, tuple[str, str]], dict]:
         if marker in prior:
             report += marker + prior.split(marker, 1)[1]
     output.write_text(report, encoding="utf-8")
-    return rc, results, data
 
 
 def notification(folder: Path) -> int:
@@ -744,7 +763,13 @@ def notification(folder: Path) -> int:
 
 def decide(args: argparse.Namespace) -> int:
     folder = Path(args.folder).resolve()
-    rc, results, data = verdict(folder)
+    with (folder / ".decision.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _decide(args, folder)
+
+
+def _decide(args: argparse.Namespace, folder: Path) -> int:
+    rc, results, data = _verdict(folder, write_report=False)
     if rc == 3:
         raise ValueError("검증 실행 중에는 결정할 수 없습니다")
     if args.adopt and rc != 0 and not (args.override_reason or "").strip():
@@ -758,16 +783,37 @@ def decide(args: argparse.Namespace) -> int:
         details.append(
             f"### {name}: {results[name][0]} ({data['models'][name]})\n경로: {path}\n\n{text}"
         )
-    with (folder / "CROSSCHECK.md").open("a", encoding="utf-8") as f:
-        f.write(
-            f"\n## 코디네이터 결정\n시각: {now().isoformat()}\n결정: {'채택' if args.adopt else '기각'}\n이유: {args.reason}\n"
-        )
-        if args.override_reason:
-            f.write(f"보류 override 이유: {args.override_reason}\n")
-        f.write(
-            "\n반례와 미해결 항목 (검증자 보고 원문):\n\n" + "\n\n".join(details) + "\n"
-        )
-    record_receipt(folder, data, args.adopt, args.override_reason)
+    previous = {
+        path: path.read_bytes() if path.exists() else None
+        for path in (folder / "CROSSCHECK.md", folder / "adoption.json")
+    }
+    try:
+        _write_report(folder, results, data, rc)
+        with (folder / "CROSSCHECK.md").open("a", encoding="utf-8") as f:
+            f.write(
+                f"\n## 코디네이터 결정\n시각: {now().isoformat()}\n결정: {'채택' if args.adopt else '기각'}\n이유: {args.reason}\n"
+            )
+            if args.override_reason:
+                f.write(f"보류 override 이유: {args.override_reason}\n")
+            f.write(
+                "\n반례와 미해결 항목 (검증자 보고 원문):\n\n"
+                + "\n\n".join(details)
+                + "\n"
+            )
+        record_receipt(folder, data, args.adopt, args.override_reason)
+    except Exception:
+        # The receipt uses an atomic replace, but the report and receipt cannot
+        # be replaced together. Restore both after a handled write failure.
+        # A crash or failed rollback leaves mismatched hashes rejected by the
+        # adoption gate rather than silently accepting incomplete evidence.
+        for path, content in previous.items():
+            if content is None:
+                path.unlink(missing_ok=True)
+            elif not path.exists() or path.read_bytes() != content:
+                temporary = path.with_name(f".{path.name}.rollback")
+                temporary.write_bytes(content)
+                temporary.replace(path)
+        raise
     return 0
 
 

@@ -371,12 +371,15 @@ def check(
             )
         )
 
+    # Lazy import avoids the reserve -> check module dependency at import time.
+    from team_harness.resource_slots import current_workers
+
     limit = _parallel_limit(worker_type, actual_env)
     if limit is not None:
         active = (
             active_workers
             if active_workers is not None
-            else _active_workers(tdir, worker_type, wdir)
+            else current_workers(tdir, worker_type, wdir)
         )
         if len(active) >= limit:
             joined = ", ".join(active)

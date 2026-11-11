@@ -295,8 +295,9 @@ def finish(root: Path, task: Path) -> None:
         relative_archive not in current[name]
         for name in original
         if len(current[name].splitlines()) < len(original[name].splitlines())
+        or normalized(original[name]) - normalized(current[name])
     ):
-        reason = "archive reference missing from shortened document"
+        reason = "archive reference missing from migrated document"
     paths = [name for name in original if current.get(name) != original[name]]
     paths.append(relative_archive)
     if not reason and source != root:
