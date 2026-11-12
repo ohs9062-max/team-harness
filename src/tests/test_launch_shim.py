@@ -6,6 +6,8 @@ import sqlite3
 import subprocess
 import time
 
+import pytest
+
 from team_harness.deployment import install_shim
 from team_harness.deployment import remove_shim
 from team_harness.deployment import shim_status
@@ -182,3 +184,47 @@ def test_status_displays_observed_block(tmp_path: Path) -> None:
     )
     assert result.returncode == 0, result.stderr
     assert "ℹ 실행 전 판정(관찰): 1건 차단 대상" in result.stdout
+
+
+@pytest.mark.parametrize("name", ["codex", "agy"])
+@pytest.mark.parametrize("variable", ["TH_SHIM_TIMEOUT", "TH_SHIM_KILL_AFTER"])
+@pytest.mark.parametrize("value", ["0", "0.0", "-1", "inf", "1d", "abc", "", "100"])
+def test_invalid_durations_keep_real_command(
+    tmp_path: Path, name: str, variable: str, value: str
+) -> None:
+    shim = tmp_path / "shim"
+    shim.mkdir()
+    target = shim / name
+    target.write_bytes((ROOT / "shim" / name).read_bytes())
+    target.chmod(0o755)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    real = bin_dir / name
+    real.write_text(
+        '#!/bin/sh\nread -r line\nprintf "%s|%s|%s\\n" "$1" "$2" "$line"\nexit 37\n'
+    )
+    real.chmod(0o755)
+    python_dir = tmp_path / ".venv" / "bin"
+    python_dir.mkdir(parents=True)
+    (python_dir / "python").symlink_to("/usr/bin/python3")
+    (tmp_path / "sitecustomize.py").write_text(
+        "import signal, time\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\ntime.sleep(10)\n"
+    )
+    env = dict(os.environ, PATH=f"{shim}:{bin_dir}", PYTHONPATH=str(tmp_path))
+    env.pop("TH_SHIM_TIMEOUT", None)
+    env.pop("TH_SHIM_KILL_AFTER", None)
+    env[variable] = value
+    started = time.monotonic()
+    result = subprocess.run(
+        [name, "exec", "two words"],
+        env=env,
+        input="payload\n",
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=1.5,
+    )
+    assert time.monotonic() - started < 1.5
+    assert result.returncode == 37
+    assert result.stdout == "exec|two words|payload\n"
+    assert result.stderr == ""

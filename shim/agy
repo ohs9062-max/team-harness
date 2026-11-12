@@ -22,13 +22,37 @@ if [ -z "${real-}" ]; then
     printf '%s: command not found\n' "$tool" >&2
     exit 127
 fi
+# Accept decimal seconds from 0.05 through 2 without external commands.
+valid_duration() {
+    case $1 in ''|*[!0-9.]*|*.*.*|.) return 1 ;; esac
+    case $1 in
+        *.*) whole=${1%%.*}; fraction=${1#*.} ;;
+        *) whole=$1; fraction= ;;
+    esac
+    while [ "${whole#0}" != "$whole" ]; do whole=${whole#0}; done
+    case $whole in
+        '')
+            fraction=${fraction}00
+            case $fraction in
+                [1-9]*|0[5-9]*) return 0 ;;
+                *) return 1 ;;
+            esac ;;
+        1) return 0 ;;
+        2) case $fraction in *[!0]*) return 1 ;; *) return 0 ;; esac ;;
+        *) return 1 ;;
+    esac
+}
 if [ "${TH_SHIM-}" != 0 ] && [ -x /usr/bin/timeout ]; then
+    shim_timeout=${TH_SHIM_TIMEOUT-}
+    valid_duration "$shim_timeout" || shim_timeout=0.3
+    shim_kill_after=${TH_SHIM_KILL_AFTER-}
+    valid_duration "$shim_kill_after" || shim_kill_after=0.2
     python=$root/.venv/bin/python
     [ -x "$python" ] || python=python3
     tty=0
     [ -t 0 ] && tty=1
     if result_file=$(/usr/bin/mktemp 2>/dev/null); then
-        TH_SHIM_PARENT_PID=$$ /usr/bin/timeout -k "${TH_SHIM_KILL_AFTER:-0.2}" "${TH_SHIM_TIMEOUT:-0.3}" "$python" -c 'import sys; sys.path.insert(0, sys.argv.pop(1)); from team_harness.launch_shim import observe_child; observe_child()' "$root/src" "$tool" "$tty" "$@" </dev/null >"$result_file" 2>/dev/null || :
+        TH_SHIM_PARENT_PID=$$ /usr/bin/timeout -k "$shim_kill_after" "$shim_timeout" "$python" -c 'import sys; sys.path.insert(0, sys.argv.pop(1)); from team_harness.launch_shim import observe_child; observe_child()' "$root/src" "$tool" "$tty" "$@" </dev/null >"$result_file" 2>/dev/null || :
         depth=$(/bin/cat "$result_file" 2>/dev/null) || depth=
         /bin/rm -f "$result_file"
         case $depth in ''|*[!0-9]*) ;; *) TH_SHIM_DEPTH=$depth; export TH_SHIM_DEPTH ;; esac
