@@ -53,6 +53,7 @@ def observe() -> list[dict[str, Any]]:
                 continue
             proc[pid] = {
                 "parent": int(fields[1]),
+                "session": int(fields[3]),
                 "args": args,
                 "cwd": os.readlink(entry / "cwd"),
             }
@@ -183,9 +184,16 @@ def observe() -> list[dict[str, Any]]:
         inherited: dict[str, str] = {}
         cursor = pid
         readable = False
+        daemon = False
         seen: set[int] = set()
         while cursor > 1 and cursor not in seen and cursor in proc:
             seen.add(cursor)
+            if any(
+                os.path.basename(arg) == "th-watchd.sh"
+                or arg == "team_harness.maintenance"
+                for arg in proc[cursor]["args"]
+            ):
+                daemon = True
             values = env(cursor)
             if values is not None:
                 readable = True
@@ -226,7 +234,9 @@ def observe() -> list[dict[str, Any]]:
             session = session or resolved_session
             workspace = workspace or resolved_workspace
         origin = (
-            "worker"
+            "watchd"
+            if daemon
+            else "worker"
             if worker or inherited.get("TH_ROLE") == "worker"
             else "coordinator"
             if session or inherited.get("CLAUDE_PID")
@@ -245,16 +255,52 @@ def observe() -> list[dict[str, Any]]:
             "claude_pid": inherited.get("CLAUDE_PID"),
             "workspace": workspace,
             "worker_task": worker,
-            "kind": "하위 워커" if agent and worker else "job" if task else "스크립트",
+            "kind": "검수·유지보수"
+            if daemon
+            else "하위 워커"
+            if agent
+            else "job"
+            if task and info["session"] == pid
+            else "스크립트",
             "parent": info["parent"],
         }
-    # One representative per same-task process tree.
-    return [
-        row
-        for pid, row in candidates.items()
-        if not (
-            row["task"]
-            and row["parent"] in candidates
-            and candidates[row["parent"]]["task"] == row["task"]
-        )
-    ]
+    return list(candidates.values())
+
+
+def display_records(
+    records: list[dict[str, Any]], registered_tasks: set[str], registered_pids: set[int]
+) -> list[dict[str, Any]]:
+    """Exclude registered process trees and group remaining processes by task."""
+    grouped: dict[str, dict[str, Any]] = {}
+    result: list[dict[str, Any]] = []
+    for record in records:
+        pid = record["pid"]
+        task = record.get("task")
+        if task and task in registered_tasks:
+            continue
+        cursor = pid
+        seen: set[int] = set()
+        registered = False
+        while cursor > 1 and cursor not in seen:
+            if cursor in registered_pids:
+                registered = True
+                break
+            seen.add(cursor)
+            try:
+                stat = Path(f"/proc/{cursor}/stat").read_text()
+                cursor = int(stat[stat.rfind(")") + 2 :].split()[1])
+            except (OSError, ValueError, IndexError):
+                break
+        if registered:
+            continue
+        key = task or f"pid:{pid}"
+        if key in grouped:
+            grouped[key]["count"] += 1
+            if record["origin"] == "watchd" and grouped[key]["origin"] != "watchd":
+                count = grouped[key]["count"]
+                grouped[key].update(record, count=count)
+        else:
+            item = dict(record, count=1)
+            grouped[key] = item
+            result.append(item)
+    return result

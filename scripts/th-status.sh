@@ -1324,6 +1324,13 @@ try:
 except Exception as exc:
     print(f"ths: observation unavailable: {exc}", file=sys.stderr)
 
+def display_observed(tasks, pids):
+    try:
+        return proc_observer.display_records(observed, tasks, pids) if observed else []
+    except Exception as exc:
+        print(f"ths: observation unavailable: {exc}", file=sys.stderr)
+        return []
+
 if not all_mode:
     recent_cutoff = now_ts - 24 * 60 * 60
     running_recs = []
@@ -1433,19 +1440,19 @@ if not all_mode:
                 pass
     observed_groups = {}
     observed_under = {}
-    for item in observed:
+    for item in display_observed({rec["path"] for rec in task_records}, displayed_pids):
         if item["pid"] in displayed_pids:
             continue
-        parent = item.get("worker_task")
+        parent = item.get("worker_task") if item["origin"] != "watchd" else None
         if parent and any(rec["path"] == parent for rec in running_recs):
             observed_under.setdefault(parent, []).append(item)
             continue
-        matching = next((key for key in groups if (item.get("session_id") and key[1] == item["session_id"]) or (item.get("claude_pid") and key[2] == item["claude_pid"])), None)
+        matching = next((key for key in groups if item["origin"] != "watchd" and ((item.get("session_id") and key[1] == item["session_id"]) or (item.get("claude_pid") and key[2] == item["claude_pid"]))), None)
         if matching is None and item["origin"] in ("worker", "coordinator"):
             matching = (item.get("workspace") or "코디네이터 불명", item.get("session_id") or "", str(item.get("claude_pid") or "?"), "", "모델 미확인")
             groups.setdefault(matching, [])
         if matching is None:
-            matching = ("사용자 직접" if item["origin"] == "user" else "출처 불명", "", "?", "", "")
+            matching = ("감시 데몬" if item["origin"] == "watchd" else "사용자 직접" if item["origin"] == "user" else "출처 불명", "", "?", "", "")
         observed_groups.setdefault(matching, []).append(item)
 
     def print_observed(item):
@@ -1467,7 +1474,7 @@ if not all_mode:
             duration = f"{elapsed // 60}분"
         except (OSError, ValueError, IndexError):
             duration = "시간 미상"
-        print(fit_width(f"    ↳ {item['kind']} · {title or item['cmd']} · {duration} · {task.name if task else '-'} (PID {item['pid']})", term_cols).rstrip())
+        print(fit_width(f"    ↳ {item['kind']} ({item.get('count', 1)}개) · {title or item['cmd']} · {duration} · {task.name if task else '-'} (PID {item['pid']})", term_cols).rstrip())
 
     term_cols = 110
     env_cols = os.environ.get("COLUMNS", "").strip()
@@ -1717,14 +1724,14 @@ for task_path in raw_tasks:
 extra_groups = {}
 under_worker = {}
 row_paths = {r[9] for r in rows}
-for item in observed:
+for item in display_observed(set(raw_tasks), displayed_pids):
     if item["pid"] in displayed_pids:
         continue
-    if item.get("worker_task") in row_paths:
+    if item["origin"] != "watchd" and item.get("worker_task") in row_paths:
         under_worker.setdefault(item["worker_task"], []).append(item)
         continue
-    label = (item.get("workspace") or "코디네이터 불명") if item["origin"] in ("worker", "coordinator") else ("사용자 직접" if item["origin"] == "user" else "출처 불명")
-    key = (label, str(item.get("claude_pid") or "?"), item.get("session_id") or "")
+    label = (item.get("workspace") or "코디네이터 불명") if item["origin"] in ("worker", "coordinator") else ("감시 데몬" if item["origin"] == "watchd" else "사용자 직접" if item["origin"] == "user" else "출처 불명")
+    key = (label, str(item.get("claude_pid") or "?"), item.get("session_id") or "") if item["origin"] != "watchd" else (label, "?", "")
     extra_groups.setdefault(key, []).append(item)
 
 def print_all_observed(item):
@@ -1746,7 +1753,7 @@ def print_all_observed(item):
         duration = f"{elapsed // 60}분"
     except (OSError, ValueError, IndexError):
         duration = "시간 미상"
-    print(f"    ↳ {item['kind']} · {title or item['cmd']} · {duration} · {task_path.name if task_path else '-'} (PID {item['pid']})")
+    print(f"    ↳ {item['kind']} ({item.get('count', 1)}개) · {title or item['cmd']} · {duration} · {task_path.name if task_path else '-'} (PID {item['pid']})")
 
 for r in rows:
     print(render_row(r[:7]))
@@ -1756,7 +1763,7 @@ for r in rows:
     if r[8]:
         print(r[8])
 for (label, pid, session), items in extra_groups.items():
-    print(f"  {label} · 세션 {session or '미상'} (PID {pid})")
+    print(f"  {label}" if label == "감시 데몬" else f"  {label} · 세션 {session or '미상'} (PID {pid})")
     for item in items:
         print_all_observed(item)
 print_notice()
