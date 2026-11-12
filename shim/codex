@@ -24,6 +24,7 @@ if [ -z "${real-}" ]; then
 fi
 # Accept decimal seconds from 0.05 through 2 without external commands.
 valid_duration() {
+    [ ${#1} -le 8 ] || return 1
     case $1 in ''|*[!0-9.]*|*.*.*|.) return 1 ;; esac
     case $1 in
         *.*) whole=${1%%.*}; fraction=${1#*.} ;;

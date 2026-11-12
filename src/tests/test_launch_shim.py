@@ -188,7 +188,9 @@ def test_status_displays_observed_block(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("name", ["codex", "agy"])
 @pytest.mark.parametrize("variable", ["TH_SHIM_TIMEOUT", "TH_SHIM_KILL_AFTER"])
-@pytest.mark.parametrize("value", ["0", "0.0", "-1", "inf", "1d", "abc", "", "100"])
+@pytest.mark.parametrize(
+    "value", ["0", "0.0", "-1", "inf", "1d", "abc", "", "100", "0" * 100_000 + "1"]
+)
 def test_invalid_durations_keep_real_command(
     tmp_path: Path, name: str, variable: str, value: str
 ) -> None:
