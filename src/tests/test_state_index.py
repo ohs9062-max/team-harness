@@ -29,6 +29,65 @@ def rows(wd: Path, sql: str):
         return db.execute(sql).fetchall()
 
 
+@pytest.mark.parametrize(
+    ("field", "expected"),
+    [
+        (kind, kind)
+        for kind in (
+            "지시",
+            "시작",
+            "완료",
+            "실패",
+            "결정",
+            "진단",
+            "질문",
+            "교훈",
+            "실수",
+        )
+    ]
+    + [
+        ("결정: 내용", "결정"),
+        ("실수/원인: 내용", "실수"),
+        ("완료: 내용", "완료"),
+        ("시작 (내용)", "시작"),
+        ("원인: 내용", "진단"),
+        ("승인됨", "지시"),
+        ("지시: 내용", "지시"),
+        ("채택 FAIL 내용", "실패"),
+        ("채택 실패 내용", "실패"),
+        ("결정적인 버그 수정 시작", "기타"),
+        ("a" * 20 + "FAIL", "기타"),
+    ],
+)
+def test_coord_log_kind(field: str, expected: str):
+    assert state_index._coord_log_kind(f"2026-11-12 10:00 | {field}") == expected
+
+
+def test_coord_log_kind_migration_once(env: Path):
+    state_index.update([])
+    with sqlite3.connect(env / "th.db") as db:
+        db.execute("DELETE FROM meta WHERE key='coord_log_kind_version'")
+        db.executemany(
+            "INSERT INTO coord_log VALUES ('workspace', 'now', '기타', NULL, ?, ?)",
+            [
+                ("2026-11-12 10:00 | 결정: 내용", "one"),
+                ("2026-11-12 10:00 | 결정적인 내용", "two"),
+            ],
+        )
+    state_index.update([])
+    assert rows(env, "SELECT kind FROM coord_log ORDER BY line_hash") == [
+        ("결정",),
+        ("기타",),
+    ]
+    with sqlite3.connect(env / "th.db") as db:
+        db.execute("UPDATE coord_log SET kind='기타' WHERE line_hash='one'")
+    state_index.update([])
+    assert rows(env, "SELECT kind FROM coord_log ORDER BY line_hash") == [
+        ("기타",),
+        ("기타",),
+    ]
+
+
 def test_incremental_and_truncated(env: Path):
     log = env / "events.log"
     log.write_text("2000-01-01 00:00:00 old\n")

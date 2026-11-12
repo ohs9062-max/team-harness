@@ -115,6 +115,23 @@ def _modified(path: Path, start: datetime) -> bool:
         return False
 
 
+def _coord_log_kind(line: str) -> str:
+    parts = line.split("|", 2)
+    field = parts[1].strip() if len(parts) > 1 else ""
+    match = re.match(
+        r"^(지시|시작|완료|실패|결정|진단|질문|교훈|실수)(?:$|[:/ (])", field
+    )
+    if match:
+        return match.group(1)
+    if field.startswith("원인:"):
+        return "진단"
+    if field.startswith("승인"):
+        return "지시"
+    if "FAIL" in field[:20] or "실패" in field[:20]:
+        return "실패"
+    return "기타"
+
+
 def update(
     observations: list[dict] | None = None, *, maintenance: bool = False
 ) -> None:
@@ -124,6 +141,20 @@ def update(
         db.execute("PRAGMA journal_mode=WAL")
         db.execute("PRAGMA busy_timeout=10000")
         db.executescript(SCHEMA)
+        if not db.execute(
+            "SELECT 1 FROM meta WHERE key='coord_log_kind_version' AND value='1'"
+        ).fetchone():
+            for rowid, text in db.execute(
+                "SELECT rowid, text FROM coord_log WHERE kind='기타'"
+            ).fetchall():
+                kind = _coord_log_kind(text)
+                if kind != "기타":
+                    db.execute(
+                        "UPDATE coord_log SET kind=? WHERE rowid=?", (kind, rowid)
+                    )
+            db.execute(
+                "INSERT OR REPLACE INTO meta VALUES ('coord_log_kind_version','1')"
+            )
         now = datetime.now(UTC).isoformat()
         db.execute("INSERT OR REPLACE INTO meta VALUES ('schema_version','2')")
         db.execute("INSERT OR IGNORE INTO meta VALUES ('started_at',?)", (now,))
@@ -356,24 +387,7 @@ def update(
         for workspace in workspaces:
             path = workspace / ".claude" / "work_log.md"
             for line, stamp in _lines(db, path, start):
-                parts = [part.strip() for part in line.split("|")]
-                kind = (
-                    parts[1]
-                    if len(parts) > 1
-                    and parts[1]
-                    in (
-                        "지시",
-                        "시작",
-                        "완료",
-                        "실패",
-                        "결정",
-                        "진단",
-                        "질문",
-                        "교훈",
-                        "실수",
-                    )
-                    else "기타"
-                )
+                kind = _coord_log_kind(line)
                 matched = next(
                     (value for name, value in known.items() if name in line), None
                 )
