@@ -230,3 +230,31 @@ def test_invalid_durations_keep_real_command(
     assert result.returncode == 37
     assert result.stdout == "exec|two words|payload\n"
     assert result.stderr == ""
+
+
+@pytest.mark.parametrize("name", ["codex", "agy"])
+def test_fifo_result_does_not_block(tmp_path: Path, name: str) -> None:
+    shim = tmp_path / "shim"
+    shim.mkdir()
+    target = shim / name
+    target.write_bytes((ROOT / "shim" / name).read_bytes())
+    target.chmod(0o755)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    real = bin_dir / name
+    real.write_text("#!/bin/sh\nexit 37\n")
+    real.chmod(0o755)
+    python = tmp_path / ".venv/bin/python"
+    python.parent.mkdir(parents=True)
+    python.write_text(
+        '#!/bin/sh\np=$(/usr/bin/readlink /proc/$$/fd/1)\n/bin/rm -f "$p"\n/usr/bin/mkfifo "$p"\n'
+    )
+    python.chmod(0o755)
+    result = subprocess.run(
+        [name, "exec", "hello"],
+        env=dict(os.environ, PATH=f"{shim}:{bin_dir}"),
+        capture_output=True,
+        timeout=2,
+        check=False,
+    )
+    assert result.returncode == 37

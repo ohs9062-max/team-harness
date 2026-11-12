@@ -13,7 +13,9 @@
 
 ## 2차: 실행 전 관찰
 
-배포는 `~/.team-harness/shim/bin`에 저장소의 `codex`, `agy`를 링크하고 `.bashrc`, `.profile`의 관리 블록으로 PATH 앞에 추가한다. 기존 셸에는 적용되지 않는다. `th-sync.sh --status`의 `shim`으로 확인하고 `th-sync.sh --remove-shim`으로 관리 블록과 해당 링크를 제거한다. `claude`는 변경하지 않는다.
+shim은 기본 꺼짐이다. 상태 DB와 실행 후 관찰을 운영하고 사용자가 승인하면 `th-sync.sh --enable-shim`으로 켠다. `~/.team-harness/shim/enabled` 표식이 있는 동안 이후 전역 적용도 shim을 유지한다.
+
+shim 설치는 `~/.team-harness/shim/bin`에 저장소의 `codex`, `agy`를 링크하고 `.bashrc`, `.profile`의 관리 블록으로 PATH 앞에 추가한다. 기존 셸에는 적용되지 않는다. `th-sync.sh --status`의 `shim`으로 확인하고 `th-sync.sh --remove-shim`으로 관리 블록과 해당 링크를 제거한다. `claude`는 변경하지 않는다.
 
 대화형 codex, `th-launch.sh` 자손, `TH_SHIM=0`은 기록 없이 통과한다. 직접 비대화형 실행은 기존 정책 판정과 지시서 검사를 관찰하고 같은 PID로 원래 프로그램을 실행한다. stdin은 읽지 않으며 점검 불가로 기록한다. 예외나 잠금은 실행을 막지 않는다. `TH_SHIM_MODE`와 관계없이 이번 구현은 관찰만 수행한다. 깊이는 `TH_SHIM_DEPTH`로 전달한다. DB에 프롬프트 자체 대신 해시를 저장한다. 반복 실패는 상태 DB에 색인된 동일 작업 실패만 셀 수 있으며 직접 실행의 종료 결과는 exec 이후 알 수 없다. 관찰된 작업은 자동 재실행하지 않는다.
 

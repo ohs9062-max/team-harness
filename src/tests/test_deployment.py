@@ -406,3 +406,37 @@ def test_auto_sync_uses_only_clean_pushed_source(
     (repository / "tracked").write_text("new revision\n")
     dp.auto_sync()
     assert calls == [repository]
+
+
+def test_shim_opt_in_lifecycle(
+    deployable_repository: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import sys
+
+    home = tmp_path / "home"
+    marker = home / ".team-harness/shim/enabled"
+    monkeypatch.setattr(dp, "ROOT", deployable_repository)
+    dp.apply(deployable_repository, home)
+    assert "꺼짐" in dp.status(home)["shim"]
+    assert not (home / ".team-harness/shim/bin").exists()
+    for name in (".bashrc", ".profile"):
+        assert (
+            not (home / name).exists()
+            or "team-harness shim >>>" not in (home / name).read_text()
+        )
+    monkeypatch.setattr(
+        sys, "argv", ["deployment", "--enable-shim", "--home", str(home)]
+    )
+    assert dp.main() == 0
+    assert marker.is_file()
+    assert dp.shim_status(deployable_repository, home) == "installed"
+    dp.apply(deployable_repository, home)
+    assert "켜짐" in dp.status(home)["shim"]
+    monkeypatch.setattr(
+        sys, "argv", ["deployment", "--remove-shim", "--home", str(home)]
+    )
+    assert dp.main() == 0
+    assert not marker.exists()
+    assert "꺼짐" in dp.status(home)["shim"]
+    for name in (".bashrc", ".profile"):
+        assert "team-harness shim >>>" not in (home / name).read_text()

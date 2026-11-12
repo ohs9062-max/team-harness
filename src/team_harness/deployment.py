@@ -129,7 +129,15 @@ def install_shim(root: Path, home: Path) -> None:
             )
 
 
+def enable_shim(root: Path, home: Path) -> None:
+    marker = home / ".team-harness/shim/enabled"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.touch()
+    install_shim(root, home)
+
+
 def remove_shim(root: Path, home: Path) -> None:
+    (home / ".team-harness/shim/enabled").unlink(missing_ok=True)
     for name in (".bashrc", ".profile"):
         target = home / name
         if target.is_file():
@@ -156,6 +164,11 @@ def shim_status(root: Path, home: Path) -> str:
         for name in (".bashrc", ".profile")
     )
     return "installed" if links and blocks else "absent or drift"
+
+
+def shim_status_display(root: Path, home: Path) -> str:
+    enabled = (home / ".team-harness/shim/enabled").is_file()
+    return f"{'켜짐' if enabled else '꺼짐'} ({shim_status(root, home)})"
 
 
 INSTALLER_ASSETS = (
@@ -425,10 +438,12 @@ def apply(root: Path = ROOT, home: Path | None = None) -> dict:
             atomic_write(bin_dir / "th", wrapper.encode(), 0o755)
         installed[str(bin_dir / "th")] = digest(bin_dir / "th")
         installed.update(install_hooks(root, home))
-        install_shim(root, home)
+        shim_enabled = (home / ".team-harness/shim/enabled").is_file()
+        if shim_enabled:
+            install_shim(root, home)
         result = {
             "schema": 1,
-            "shim_installed": True,
+            "shim_installed": shim_enabled,
             "source": str(root),
             "revision": revision,
             "deployed_at": datetime.now().astimezone().isoformat(),
@@ -448,7 +463,7 @@ def status(home: Path | None = None) -> dict:
     home = home or Path.home()
     manifest = home / ".team-harness/deployment.json"
     if not manifest.exists():
-        return {"state": "not deployed", "shim": shim_status(ROOT, home)}
+        return {"state": "not deployed", "shim": shim_status_display(ROOT, home)}
     data = json.loads(manifest.read_text(encoding="utf-8"))
     drift = [
         name
@@ -464,8 +479,10 @@ def status(home: Path | None = None) -> dict:
     )
     source = Path(data["source"])
     source_dirty = bool(git(source, "diff", "--name-only", "HEAD").stdout)
-    data["shim"] = shim_status(source, home)
-    if data.get("shim_installed") and data["shim"] != "installed":
+    data["shim"] = shim_status_display(source, home)
+    if (home / ".team-harness/shim/enabled").is_file() and shim_status(
+        source, home
+    ) != "installed":
         drift.append("shim")
     data["source_dirty"] = source_dirty
     data["source_head"] = git(source, "rev-parse", "HEAD").stdout.strip()
@@ -522,10 +539,14 @@ def main() -> int:
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--status", action="store_true")
     parser.add_argument("--remove-shim", action="store_true")
+    parser.add_argument("--enable-shim", action="store_true")
     parser.add_argument("--home", type=Path)
     args = parser.parse_args()
     try:
-        if args.remove_shim:
+        if args.enable_shim:
+            enable_shim(ROOT, args.home or Path.home())
+            result = {"shim": "enabled"}
+        elif args.remove_shim:
             remove_shim(ROOT, args.home or Path.home())
             result = {"shim": "removed"}
         else:

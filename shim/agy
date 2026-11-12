@@ -54,7 +54,7 @@ if [ "${TH_SHIM-}" != 0 ] && [ -x /usr/bin/timeout ]; then
     [ -t 0 ] && tty=1
     if result_file=$(/usr/bin/mktemp 2>/dev/null); then
         TH_SHIM_PARENT_PID=$$ /usr/bin/timeout -k "$shim_kill_after" "$shim_timeout" "$python" -c 'import sys; sys.path.insert(0, sys.argv.pop(1)); from team_harness.launch_shim import observe_child; observe_child()' "$root/src" "$tool" "$tty" "$@" </dev/null >"$result_file" 2>/dev/null || :
-        depth=$(/bin/cat "$result_file" 2>/dev/null) || depth=
+        depth=$(/usr/bin/timeout -k 0.1 0.2 /bin/cat "$result_file" 2>/dev/null) || depth=
         /bin/rm -f "$result_file"
         case $depth in ''|*[!0-9]*) ;; *) TH_SHIM_DEPTH=$depth; export TH_SHIM_DEPTH ;; esac
     fi
