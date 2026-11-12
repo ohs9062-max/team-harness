@@ -6,6 +6,7 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from datetime import timezone
+import errno
 import fcntl
 import hashlib
 import json
@@ -41,6 +42,46 @@ def digest(path: Path) -> str:
         for block in iter(lambda: f.read(1024 * 1024), b""):
             h.update(block)
     return h.hexdigest()
+
+
+def special_kind(mode: int) -> str:
+    return next(
+        (
+            label
+            for check, label in (
+                (stat.S_ISFIFO, "fifo"),
+                (stat.S_ISSOCK, "socket"),
+                (stat.S_ISCHR, "character-device"),
+                (stat.S_ISBLK, "block-device"),
+            )
+            if check(mode)
+        ),
+        "unknown",
+    )
+
+
+def adopt_digest(path: Path) -> str:
+    """Hash the opened regular file, or describe the object observed instead."""
+    try:
+        fd = os.open(
+            path,
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0),
+        )
+    except OSError as exc:
+        if exc.errno != errno.ELOOP:
+            raise
+        try:
+            return "symlink:" + os.readlink(path)
+        except OSError:
+            return "special:changed"
+    with os.fdopen(fd, "rb") as f:
+        mode = os.fstat(f.fileno()).st_mode
+        if not stat.S_ISREG(mode):
+            return "special:" + special_kind(mode)
+        h = hashlib.sha256()
+        for block in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(block)
+        return h.hexdigest()
 
 
 def files(path: Path) -> list[Path]:
@@ -167,7 +208,7 @@ def adopt_snapshot(path: Path, task: Path) -> dict[str, str]:
         "verify_result.txt",
     }
     if path.is_file():
-        return {".": digest(path)}
+        return {".": adopt_digest(path)}
     if not path.is_dir():
         raise ValueError(f"파일 또는 폴더가 없습니다: {path}")
     result: dict[str, str] = {}
@@ -197,22 +238,9 @@ def adopt_snapshot(path: Path, task: Path) -> dict[str, str]:
                 continue
             mode = os.lstat(p).st_mode
             if not stat.S_ISREG(mode):
-                kind = next(
-                    (
-                        label
-                        for check, label in (
-                            (stat.S_ISFIFO, "fifo"),
-                            (stat.S_ISSOCK, "socket"),
-                            (stat.S_ISCHR, "character-device"),
-                            (stat.S_ISBLK, "block-device"),
-                        )
-                        if check(mode)
-                    ),
-                    "unknown",
-                )
-                result[str(p.relative_to(path))] = "special:" + kind
-                continue
-            result[str(p.relative_to(path))] = digest(p)
+                result[str(p.relative_to(path))] = "special:" + special_kind(mode)
+            else:
+                result[str(p.relative_to(path))] = adopt_digest(p)
     return result
 
 

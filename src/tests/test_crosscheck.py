@@ -20,6 +20,33 @@ def test_adopt_snapshot_records_fifo(tmp_path: Path) -> None:
     }
 
 
+@pytest.mark.parametrize("replacement", ["symlink", "fifo"])
+def test_adopt_snapshot_handles_replacement_after_lstat(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, replacement: str
+) -> None:
+    target = tmp_path / "target"
+    target.write_text("original")
+    original_lstat = os.lstat
+    calls = 0
+
+    def replace_after_lstat(path: Any, *args: Any, **kwargs: Any) -> os.stat_result:
+        nonlocal calls
+        result = original_lstat(path, *args, **kwargs)
+        if Path(path) == target:
+            calls += 1
+            if calls == 1:
+                target.unlink()
+                if replacement == "symlink":
+                    target.symlink_to("/dev/null")
+                else:
+                    os.mkfifo(target)
+        return result
+
+    monkeypatch.setattr(os, "lstat", replace_after_lstat)
+    expected = "symlink:/dev/null" if replacement == "symlink" else "special:fifo"
+    assert cc.adopt_snapshot(tmp_path, tmp_path) == {"target": expected}
+
+
 @pytest.fixture
 def sample(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
