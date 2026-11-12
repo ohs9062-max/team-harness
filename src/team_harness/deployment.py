@@ -85,6 +85,79 @@ def install_link(source: Path, target: Path, home: Path) -> None:
     temporary.replace(target)
 
 
+SHIM_BEGIN = "# >>> team-harness shim >>>"
+SHIM_END = "# <<< team-harness shim <<<"
+
+
+def _shim_block() -> str:
+    return (
+        SHIM_BEGIN
+        + "\n"
+        + 'export PATH="$HOME/.team-harness/shim/bin:$PATH"\n'
+        + SHIM_END
+        + "\n"
+    )
+
+
+def _without_shim_block(text: str) -> str:
+    return re.sub(
+        r"(?m)^" + re.escape(SHIM_BEGIN) + r"\n.*?^" + re.escape(SHIM_END) + r"\n?",
+        "",
+        text,
+        flags=re.S,
+    )
+
+
+def install_shim(root: Path, home: Path) -> None:
+    directory = home / ".team-harness/shim/bin"
+    directory.mkdir(parents=True, exist_ok=True)
+    for tool in ("codex", "agy"):
+        install_link(root / "shim" / tool, directory / tool, home)
+    for name in (".bashrc", ".profile"):
+        target = home / name
+        old = target.read_text() if target.exists() else ""
+        clean = _without_shim_block(old)
+        new = (
+            clean + ("\n" if clean and not clean.endswith("\n") else "") + _shim_block()
+        )
+        if old != new:
+            backup(target, home)
+            atomic_write(
+                target,
+                new.encode(),
+                (target.stat().st_mode & 0o777) if target.exists() else 0o644,
+            )
+
+
+def remove_shim(root: Path, home: Path) -> None:
+    for name in (".bashrc", ".profile"):
+        target = home / name
+        if target.is_file():
+            old = target.read_text()
+            new = _without_shim_block(old)
+            if old != new:
+                backup(target, home)
+                atomic_write(target, new.encode(), target.stat().st_mode & 0o777)
+    for tool in ("codex", "agy"):
+        target = home / ".team-harness/shim/bin" / tool
+        if target.is_symlink() and target.resolve() == (root / "shim" / tool).resolve():
+            target.unlink()
+
+
+def shim_status(root: Path, home: Path) -> str:
+    links = all(
+        (home / ".team-harness/shim/bin" / tool).is_symlink()
+        and (home / ".team-harness/shim/bin" / tool).resolve()
+        == (root / "shim" / tool).resolve()
+        for tool in ("codex", "agy")
+    )
+    blocks = all(
+        (home / name).is_file() and (home / name).read_text().count(_shim_block()) == 1
+        for name in (".bashrc", ".profile")
+    )
+    return "installed" if links and blocks else "absent or drift"
+
+
 INSTALLER_ASSETS = (
     ".claude/CLAUDE.md",
     ".codex/AGENTS.md",
@@ -352,8 +425,10 @@ def apply(root: Path = ROOT, home: Path | None = None) -> dict:
             atomic_write(bin_dir / "th", wrapper.encode(), 0o755)
         installed[str(bin_dir / "th")] = digest(bin_dir / "th")
         installed.update(install_hooks(root, home))
+        install_shim(root, home)
         result = {
             "schema": 1,
+            "shim_installed": True,
             "source": str(root),
             "revision": revision,
             "deployed_at": datetime.now().astimezone().isoformat(),
@@ -373,7 +448,7 @@ def status(home: Path | None = None) -> dict:
     home = home or Path.home()
     manifest = home / ".team-harness/deployment.json"
     if not manifest.exists():
-        return {"state": "not deployed"}
+        return {"state": "not deployed", "shim": shim_status(ROOT, home)}
     data = json.loads(manifest.read_text(encoding="utf-8"))
     drift = [
         name
@@ -389,6 +464,9 @@ def status(home: Path | None = None) -> dict:
     )
     source = Path(data["source"])
     source_dirty = bool(git(source, "diff", "--name-only", "HEAD").stdout)
+    data["shim"] = shim_status(source, home)
+    if data.get("shim_installed") and data["shim"] != "installed":
+        drift.append("shim")
     data["source_dirty"] = source_dirty
     data["source_head"] = git(source, "rev-parse", "HEAD").stdout.strip()
     data["source_matches_deployment"] = data["source_head"] == data["revision"]
@@ -443,10 +521,15 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--status", action="store_true")
+    parser.add_argument("--remove-shim", action="store_true")
     parser.add_argument("--home", type=Path)
     args = parser.parse_args()
     try:
-        result = apply(home=args.home) if args.apply else status(args.home)
+        if args.remove_shim:
+            remove_shim(ROOT, args.home or Path.home())
+            result = {"shim": "removed"}
+        else:
+            result = apply(home=args.home) if args.apply else status(args.home)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
     except (OSError, ValueError, RuntimeError) as exc:

@@ -27,6 +27,24 @@ def _task(path: str) -> str | None:
     return None
 
 
+def has_ancestor_command(name: str) -> bool:
+    """Check process ancestry without reading or modifying process state."""
+    pid = os.getppid()
+    seen: set[int] = set()
+    while pid > 1 and pid not in seen:
+        seen.add(pid)
+        try:
+            base = Path("/proc") / str(pid)
+            args = (base / "cmdline").read_bytes().split(b"\0")
+            if any(os.path.basename(os.fsdecode(arg)) == name for arg in args):
+                return True
+            raw = (base / "stat").read_text()
+            pid = int(raw[raw.rfind(")") + 2 :].split()[1])
+        except (OSError, ValueError, IndexError):
+            break
+    return False
+
+
 def observe() -> list[dict[str, Any]]:
     """Return a snapshot; individual processes can disappear while being read."""
     if os.environ.get("TH_OBSERVE") == "0":

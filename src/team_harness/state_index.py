@@ -19,6 +19,7 @@ from team_harness import usage_ledger
 from team_harness.workspace_archive import watch_dir
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS shim_decisions(at TEXT, pid INTEGER, session_id TEXT, workspace TEXT, worker_task TEXT, tool TEXT, model TEXT, effort TEXT, depth INTEGER, verdicts_json TEXT, would_block INTEGER, mode TEXT);
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS tasks(task TEXT PRIMARY KEY, owner TEXT, task_key TEXT, kind TEXT, first_seen TEXT, state TEXT, last_step TEXT, updated_at TEXT);
 CREATE TABLE IF NOT EXISTS attempts(task TEXT, attempt INTEGER, worker TEXT, model TEXT, effort TEXT, started_at TEXT, minutes REAL, tokens INTEGER, result TEXT, override TEXT, PRIMARY KEY(task, attempt));
