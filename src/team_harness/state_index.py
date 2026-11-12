@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS failures(task TEXT, attempt INTEGER, at TEXT, categor
 CREATE TABLE IF NOT EXISTS events(source TEXT, line_hash TEXT UNIQUE, at TEXT, task TEXT, kind TEXT, text TEXT);
 CREATE TABLE IF NOT EXISTS adoptions(folder TEXT, verifier TEXT, claim TEXT, verdict TEXT, counterexample TEXT, at TEXT, UNIQUE(folder, verifier, at));
 CREATE TABLE IF NOT EXISTS sessions(session_id TEXT PRIMARY KEY, claude_pid TEXT, workspace TEXT, model TEXT, first_seen TEXT, last_seen TEXT);
-CREATE TABLE IF NOT EXISTS processes(pid INTEGER, start TEXT, first_seen TEXT, last_seen TEXT, ended_at TEXT, kind TEXT, origin TEXT, session_id TEXT, workspace TEXT, worker_task TEXT, task TEXT, cmd TEXT, PRIMARY KEY(pid, start));
+CREATE TABLE IF NOT EXISTS processes(pid INTEGER, start TEXT, first_seen TEXT, last_seen TEXT, ended_at TEXT, kind TEXT, origin TEXT, session_id TEXT, workspace TEXT, worker_task TEXT, task TEXT, cmd TEXT, route_key TEXT, PRIMARY KEY(pid, start));
 CREATE TABLE IF NOT EXISTS observed_notices(identity TEXT PRIMARY KEY, at TEXT);
 CREATE TABLE IF NOT EXISTS breaker_events(at TEXT, session_id TEXT, workspace TEXT, reason TEXT, value TEXT);
 CREATE TABLE IF NOT EXISTS coord_log(workspace TEXT, at TEXT, kind TEXT, task TEXT, text TEXT, line_hash TEXT UNIQUE);
@@ -141,6 +141,10 @@ def update(
         db.execute("PRAGMA journal_mode=WAL")
         db.execute("PRAGMA busy_timeout=10000")
         db.executescript(SCHEMA)
+        if "route_key" not in {
+            row[1] for row in db.execute("PRAGMA table_info(processes)")
+        }:
+            db.execute("ALTER TABLE processes ADD COLUMN route_key TEXT")
         if not db.execute(
             "SELECT 1 FROM meta WHERE key='coord_log_kind_version' AND value='1'"
         ).fetchone():
@@ -156,7 +160,7 @@ def update(
                 "INSERT OR REPLACE INTO meta VALUES ('coord_log_kind_version','1')"
             )
         now = datetime.now(UTC).isoformat()
-        db.execute("INSERT OR REPLACE INTO meta VALUES ('schema_version','2')")
+        db.execute("INSERT OR REPLACE INTO meta VALUES ('schema_version','3')")
         db.execute("INSERT OR IGNORE INTO meta VALUES ('started_at',?)", (now,))
         start = datetime.fromisoformat(
             db.execute("SELECT value FROM meta WHERE key='started_at'").fetchone()[0]
@@ -190,11 +194,12 @@ def update(
                         ),
                     )
                 db.execute(
-                    """INSERT INTO processes VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                    """INSERT INTO processes (pid,start,first_seen,last_seen,ended_at,kind,origin,session_id,workspace,worker_task,task,cmd,route_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT(pid,start) DO UPDATE SET last_seen=excluded.last_seen,
                     ended_at=NULL, kind=excluded.kind, origin=excluded.origin,
                     session_id=excluded.session_id, workspace=excluded.workspace,
-                    worker_task=excluded.worker_task, task=excluded.task, cmd=excluded.cmd""",
+                    worker_task=excluded.worker_task, task=excluded.task, cmd=excluded.cmd,
+                    route_key=COALESCE(NULLIF(excluded.route_key, ''), processes.route_key)""",
                     (
                         row["pid"],
                         row["start"],
@@ -208,6 +213,7 @@ def update(
                         row["worker_task"],
                         row["task"],
                         row["cmd"],
+                        row.get("route_key"),
                     ),
                 )
             if observed is not None:

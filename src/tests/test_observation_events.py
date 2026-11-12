@@ -21,7 +21,7 @@ def test_notices_and_breaker_are_deduplicated(
     task.mkdir()
     (task / "FAILED").write_text("first\nfailed result\n")
     db.execute(
-        "INSERT INTO processes VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO processes VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             1,
             "start",
@@ -35,11 +35,26 @@ def test_notices_and_breaker_are_deduplicated(
             None,
             str(task),
             "job",
+            "s",
         ),
     )
     db.execute(
-        "INSERT INTO processes VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-        (2, "start", now, now, now, "job", "user", "s", owner, None, None, "user job"),
+        "INSERT INTO processes VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            2,
+            "start",
+            now,
+            now,
+            now,
+            "job",
+            "user",
+            "s",
+            owner,
+            None,
+            None,
+            "user job",
+            "s",
+        ),
     )
     for i in range(10):
         db.execute(
@@ -94,8 +109,8 @@ def test_repeated_failure_uses_prompt_and_cause(
     )
     observation_events.process_events(db, set(), now)
     observation_events.process_events(db, set(), now)
-    assert len(notices) == 1
-    assert "같은 원인 반복 실패 2회" in notices[0][2]
+    assert not notices
+    assert db.execute("SELECT count(*) FROM breaker_events").fetchone()[0] == 1
 
 
 def test_disabled_observation_does_not_end_processes(
@@ -163,7 +178,7 @@ def test_worktree_routing_and_coord_log(
     db = sqlite3.connect(":memory:")
     db.executescript(state_index.SCHEMA)
     db.execute(
-        "INSERT INTO processes VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO processes VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             99999999,
             "start",
@@ -177,6 +192,7 @@ def test_worktree_routing_and_coord_log(
             None,
             None,
             "run command",
+            "s",
         ),
     )
     observation_events.process_events(db, set(), now.isoformat())

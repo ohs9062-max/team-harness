@@ -14,6 +14,7 @@ import sqlite3
 import subprocess
 
 from team_harness import usage_ledger
+from team_harness.session_route import valid_route_key
 from team_harness.workspace_archive import watch_dir
 
 
@@ -70,13 +71,9 @@ def _append(workspace: str, session: str, message: str) -> None:
     directory = owner / ".claude"
     if not directory.is_dir():
         return
-    route = (
-        session
-        if session
-        and not any(c in session for c in "/\t\n")
-        and session not in {".", "..", "*"}
-        else "*"
-    )
+    if not valid_route_key(session):
+        return
+    route = session
     with (directory / ".inbox_cursor.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         inbox = directory / "inbox.md"
@@ -161,7 +158,7 @@ def process_events(db: sqlite3.Connection, registered: set[Path], now: str) -> N
     cutoff = (now_dt - timedelta(hours=1)).isoformat()
     if os.environ.get("TH_OBSERVED_NOTIFY") != "0":
         rows = db.execute(
-            "SELECT pid,start,session_id,workspace,worker_task,task,cmd, (SELECT claude_pid FROM sessions WHERE sessions.session_id=processes.session_id) FROM processes WHERE ended_at IS NOT NULL AND origin IN ('worker','coordinator')"
+            "SELECT pid,start,route_key,workspace,worker_task,task,cmd, (SELECT claude_pid FROM sessions WHERE sessions.session_id=processes.session_id) FROM processes WHERE ended_at IS NOT NULL AND origin IN ('worker','coordinator')"
         ).fetchall()
         for pid, start, session, workspace, worker_task, task, cmd, claude_pid in rows:
             location = task or worker_task or ""
@@ -273,4 +270,18 @@ def process_events(db: sqlite3.Connection, registered: set[Path], now: str) -> N
                 "INSERT INTO breaker_events VALUES (?,?,?,?,?)",
                 (now, session, workspace, reason, value),
             )
-            _append(coordinator_workspace(workspace), session, f"차단기(관찰): {value}")
+            routes = {
+                row[0]
+                for row in db.execute(
+                    "SELECT DISTINCT route_key FROM processes WHERE session_id=? AND workspace=?",
+                    (session, workspace),
+                )
+            }
+            if len(routes) == 1:
+                route = next(iter(routes))
+                if route and valid_route_key(route):
+                    _append(
+                        coordinator_workspace(workspace),
+                        route,
+                        f"차단기(관찰): {value}",
+                    )

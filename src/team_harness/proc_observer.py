@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from team_harness.agents.process_identity import capture_starttime
+from team_harness.session_route import th_session_key
 
 
 def _task(path: str) -> str | None:
@@ -200,6 +201,7 @@ def observe() -> list[dict[str, Any]]:
         if not identity:
             continue
         inherited: dict[str, str] = {}
+        route_key = ""
         cursor = pid
         readable = False
         daemon = False
@@ -215,6 +217,8 @@ def observe() -> list[dict[str, Any]]:
             values = env(cursor)
             if values is not None:
                 readable = True
+                if cursor == pid:
+                    route_key = th_session_key(values)
                 for key in (
                     "TH_ROLE",
                     "TH_WORKER_OUTPUT_DIR",
@@ -270,6 +274,7 @@ def observe() -> list[dict[str, Any]]:
             "task": task,
             "origin": origin,
             "session_id": session,
+            "route_key": route_key,
             "claude_pid": inherited.get("CLAUDE_PID"),
             "workspace": workspace,
             "worker_task": worker,

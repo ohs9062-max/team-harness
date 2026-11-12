@@ -5,19 +5,17 @@ import os
 import sys
 from pathlib import Path
 
-def th_session_key():
-    """Return the inherited coordinator session identity in precedence order."""
-    return (os.environ.get('ORCA_PANE_KEY') or os.environ.get('CLAUDE_CODE_SESSION_ID')
-            or os.environ.get('TH_SESSION_KEY') or '')
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
+from team_harness.session_route import th_session_key, valid_route_key
 
 owner, ack, mode = sys.argv[1:]
-session = th_session_key()
+session = th_session_key(os.environ)
 root = Path(owner) / '.claude'
 inbox = root / 'inbox.md'
 if not inbox.exists():
     sys.exit(1)
 # A session key is a single filename, never a path.
-if session in ('.', '..', '*') or '/' in session or '\n' in session or '\t' in session:
+if session and not valid_route_key(session):
     print('Invalid inbox session key', file=sys.stderr)
     sys.exit(2)
 cursor = root / '.inbox_cursor.d' / session if session else root / '.inbox_cursor'
@@ -67,7 +65,7 @@ with lock.open('a') as lock_file:
             sys.stdout.buffer.write(header.encode())
         sys.stdout.buffer.write(b''.join(result))
         sys.stdout.buffer.flush()
-    if ack == '1' and pos != start:
+    if ack == '1' and result and pos != start:
         cursor.parent.mkdir(parents=True, exist_ok=True)
         cursor.write_text(f'{pos}\n')
     sys.exit(0 if result else 1)
