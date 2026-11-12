@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
 
@@ -193,6 +194,23 @@ def adopt_snapshot(path: Path, task: Path) -> dict[str, str]:
                 or name.endswith(".pid")
                 or name.endswith(".log")
             ):
+                continue
+            mode = os.lstat(p).st_mode
+            if not stat.S_ISREG(mode):
+                kind = next(
+                    (
+                        label
+                        for check, label in (
+                            (stat.S_ISFIFO, "fifo"),
+                            (stat.S_ISSOCK, "socket"),
+                            (stat.S_ISCHR, "character-device"),
+                            (stat.S_ISBLK, "block-device"),
+                        )
+                        if check(mode)
+                    ),
+                    "unknown",
+                )
+                result[str(p.relative_to(path))] = "special:" + kind
                 continue
             result[str(p.relative_to(path))] = digest(p)
     return result

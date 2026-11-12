@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import subprocess
 from typing import Any
@@ -10,6 +11,13 @@ import pytest
 
 from team_harness import crosscheck as cc
 from team_harness import worker_digest as wd
+
+
+def test_adopt_snapshot_records_fifo(tmp_path: Path) -> None:
+    os.mkfifo(tmp_path / "verify_retry.fifo")
+    assert cc.adopt_snapshot(tmp_path, tmp_path) == {
+        "verify_retry.fifo": "special:fifo"
+    }
 
 
 @pytest.fixture
