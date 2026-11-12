@@ -301,10 +301,16 @@ def journal_records(
     return journal_items(workspace)
 
 
-def build_attempts(watch_dir: Path, workspace: Path) -> list[Attempt]:
-    tasks = task_dirs(watch_dir, workspace)
+def build_attempts(
+    watch_dir: Path,
+    workspace: Path,
+    *,
+    task_paths: set[Path] | None = None,
+    include_journals: bool = True,
+) -> list[Attempt]:
+    tasks = task_dirs(watch_dir, workspace) if task_paths is None else set(task_paths)
     launches = load_jsonl(watch_dir / "usage.jsonl")
-    journals = journal_records(tasks, workspace)
+    journals = journal_records(tasks, workspace) if include_journals else []
     by_task: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for record in launches:
         if record.get("task"):

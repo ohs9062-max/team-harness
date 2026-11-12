@@ -83,6 +83,13 @@ def run_once() -> None:
     from team_harness.workspace_archive import archive_daily
 
     now = datetime.now().astimezone()
+    if os.environ.get("TH_STATE_DB") != "0":
+        try:
+            from team_harness.state_index import update
+
+            update()
+        except Exception as exc:
+            print(f"maintenance state index failed: {exc}", file=sys.stderr)
     for name, operation in (
         ("deployment", auto_sync),
         ("report", lambda: daily(now)),
