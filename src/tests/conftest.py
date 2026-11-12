@@ -1,7 +1,12 @@
 # pyright: reportMissingParameterType=false
 
 import asyncio
+import os
 from pathlib import Path
+import tempfile
+
+# Establish HOME before application modules cache paths during test collection.
+os.environ["HOME"] = tempfile.mkdtemp(prefix="th-test-home-")
 
 import pytest
 
@@ -14,6 +19,12 @@ from team_harness.tracking.context import ContextTracker
 def isolate_worker_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     # Tests must never register real workers or start persistent maintenance.
     monkeypatch.setenv("TH_NO_MAINTENANCE", "1")
+    monkeypatch.setenv("TH_OBSERVE", "0")
+    monkeypatch.setenv("TH_SKIP_COORD_LOG", "1")
+    monkeypatch.setenv("GIT_AUTHOR_NAME", "Test User")
+    monkeypatch.setenv("GIT_AUTHOR_EMAIL", "test@example.invalid")
+    monkeypatch.setenv("GIT_COMMITTER_NAME", "Test User")
+    monkeypatch.setenv("GIT_COMMITTER_EMAIL", "test@example.invalid")
     monkeypatch.setenv("TH_WATCH_DIR", str(tmp_path / "isolated-watch"))
     monkeypatch.setenv("TH_CODEX_SESSIONS_DIR", str(tmp_path / "isolated-sessions"))
     for key in (

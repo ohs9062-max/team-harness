@@ -7,12 +7,14 @@ from datetime import datetime
 from datetime import UTC
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import sqlite3
 import sys
 
 from team_harness import loss_report
+from team_harness import proc_observer
 from team_harness import usage_ledger
 from team_harness.workspace_archive import watch_dir
 
@@ -23,6 +25,9 @@ CREATE TABLE IF NOT EXISTS attempts(task TEXT, attempt INTEGER, worker TEXT, mod
 CREATE TABLE IF NOT EXISTS failures(task TEXT, attempt INTEGER, at TEXT, category TEXT, detail TEXT, source TEXT, UNIQUE(task, attempt, source, detail));
 CREATE TABLE IF NOT EXISTS events(source TEXT, line_hash TEXT UNIQUE, at TEXT, task TEXT, kind TEXT, text TEXT);
 CREATE TABLE IF NOT EXISTS adoptions(folder TEXT, verifier TEXT, claim TEXT, verdict TEXT, counterexample TEXT, at TEXT, UNIQUE(folder, verifier, at));
+CREATE TABLE IF NOT EXISTS sessions(session_id TEXT PRIMARY KEY, claude_pid TEXT, workspace TEXT, model TEXT, first_seen TEXT, last_seen TEXT);
+CREATE TABLE IF NOT EXISTS processes(pid INTEGER, start TEXT, first_seen TEXT, last_seen TEXT, ended_at TEXT, kind TEXT, origin TEXT, session_id TEXT, workspace TEXT, worker_task TEXT, task TEXT, cmd TEXT, PRIMARY KEY(pid, start));
+CREATE TABLE IF NOT EXISTS coord_log(workspace TEXT, at TEXT, kind TEXT, task TEXT, text TEXT, line_hash TEXT UNIQUE);
 CREATE TABLE IF NOT EXISTS ingest_state(source TEXT PRIMARY KEY, inode INTEGER, offset INTEGER);
 """
 
@@ -107,7 +112,7 @@ def _modified(path: Path, start: datetime) -> bool:
         return False
 
 
-def update() -> None:
+def update(observations: list[dict] | None = None) -> None:
     wd = watch_dir()
     wd.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(wd / "th.db", timeout=10) as db:
@@ -115,12 +120,66 @@ def update() -> None:
         db.execute("PRAGMA busy_timeout=10000")
         db.executescript(SCHEMA)
         now = datetime.now(UTC).isoformat()
-        db.execute("INSERT OR IGNORE INTO meta VALUES ('schema_version','1')")
+        db.execute("INSERT OR REPLACE INTO meta VALUES ('schema_version','2')")
         db.execute("INSERT OR IGNORE INTO meta VALUES ('started_at',?)", (now,))
         start = datetime.fromisoformat(
             db.execute("SELECT value FROM meta WHERE key='started_at'").fetchone()[0]
         )
         tasks = _paths(wd)
+        observed = None
+        try:
+            observed = (
+                observations if observations is not None else proc_observer.observe()
+            )
+            for row in observed:
+                if row["task"]:
+                    tasks.add(Path(row["task"]))
+                if row["session_id"]:
+                    db.execute(
+                        """INSERT INTO sessions VALUES (?,?,?,?,?,?)
+                        ON CONFLICT(session_id) DO UPDATE SET claude_pid=excluded.claude_pid,
+                        workspace=excluded.workspace, last_seen=excluded.last_seen""",
+                        (
+                            row["session_id"],
+                            row["claude_pid"],
+                            row["workspace"],
+                            None,
+                            now,
+                            now,
+                        ),
+                    )
+                db.execute(
+                    """INSERT INTO processes VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(pid,start) DO UPDATE SET last_seen=excluded.last_seen,
+                    ended_at=NULL, kind=excluded.kind, origin=excluded.origin,
+                    session_id=excluded.session_id, workspace=excluded.workspace,
+                    worker_task=excluded.worker_task, task=excluded.task, cmd=excluded.cmd""",
+                    (
+                        row["pid"],
+                        row["start"],
+                        now,
+                        now,
+                        None,
+                        row["kind"],
+                        row["origin"],
+                        row["session_id"],
+                        row["workspace"],
+                        row["worker_task"],
+                        row["task"],
+                        row["cmd"],
+                    ),
+                )
+            alive = {(r["pid"], r["start"]) for r in observed}
+            for pid, identity in db.execute(
+                "SELECT pid,start FROM processes WHERE ended_at IS NULL"
+            ).fetchall():
+                if (pid, identity) not in alive:
+                    db.execute(
+                        "UPDATE processes SET ended_at=? WHERE pid=? AND start=?",
+                        (now, pid, identity),
+                    )
+        except Exception as exc:
+            _warn(wd / "th.db", exc)
         # Reuse the existing usage calculation, including retry and duration rules.
         entries = usage_ledger.build_attempts(
             wd, Path.cwd(), task_paths=tasks, include_journals=False
@@ -164,7 +223,11 @@ def update() -> None:
             existing = db.execute(
                 "SELECT first_seen FROM tasks WHERE task=?", (str(task),)
             ).fetchone()
-            if not existing and not any(_modified(p, start) for p in files):
+            if (
+                not existing
+                and not any(_modified(p, start) for p in files)
+                and not any(r["task"] == str(task) for r in (observed or []))
+            ):
                 continue
             first = existing[0] if existing else now
             task_text = _read(task / "task.md")
@@ -260,9 +323,59 @@ def update() -> None:
                         )
             except (ValueError, TypeError, OSError) as exc:
                 _warn(manifest, exc)
-        sources = [wd / "events.log"] + [
-            root / ".claude" / "inbox.md" for root in loss_report.owners(wd)
-        ]
+        workspaces = set(loss_report.owners(wd))
+        workspaces.update(
+            Path(r["workspace"])
+            for r in (observed or [])
+            if r["workspace"] and Path(r["workspace"]).is_absolute()
+        )
+        known = {p.name: str(p) for p in tasks}
+        if (
+            os.environ.get("TH_ROLE") == "worker"
+            or os.environ.get("TH_SKIP_COORD_LOG") == "1"
+        ):
+            workspaces.clear()
+        for workspace in workspaces:
+            path = workspace / ".claude" / "work_log.md"
+            for line, stamp in _lines(db, path, start):
+                parts = [part.strip() for part in line.split("|")]
+                kind = (
+                    parts[1]
+                    if len(parts) > 1
+                    and parts[1]
+                    in (
+                        "지시",
+                        "시작",
+                        "완료",
+                        "실패",
+                        "결정",
+                        "진단",
+                        "질문",
+                        "교훈",
+                        "실수",
+                    )
+                    else "기타"
+                )
+                matched = next(
+                    (value for name, value in known.items() if name in line), None
+                )
+                digest = hashlib.sha256((str(path) + "\0" + line).encode()).hexdigest()
+                db.execute(
+                    "INSERT OR IGNORE INTO coord_log VALUES (?,?,?,?,?,?)",
+                    (
+                        str(workspace),
+                        stamp.isoformat(),
+                        kind,
+                        matched,
+                        line[:400],
+                        digest,
+                    ),
+                )
+        sources = [wd / "events.log"]
+        if os.environ.get("TH_ROLE") != "worker":
+            sources += [
+                root / ".claude" / "inbox.md" for root in loss_report.owners(wd)
+            ]
         for path in sources:
             for line, stamp in _lines(db, path, start):
                 digest = hashlib.sha256((str(path) + "\0" + line).encode()).hexdigest()
@@ -295,6 +408,7 @@ def main() -> int:
             cursor = db.execute(query)
             if cursor.description is None:
                 raise ValueError("query must return rows")
+            print("\t".join(column[0] for column in cursor.description))
             for row in cursor.fetchmany(200):
                 print("\t".join("" if value is None else str(value) for value in row))
     except (sqlite3.Error, ValueError) as exc:

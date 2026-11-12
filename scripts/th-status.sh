@@ -1316,6 +1316,14 @@ for task in valid_tasks:
             "ctx_info": ctx_info,
         })
 
+observed = []
+try:
+    from team_harness import proc_observer, state_index
+    observed = proc_observer.observe()
+    state_index.update(observed)
+except Exception as exc:
+    print(f"ths: observation unavailable: {exc}", file=sys.stderr)
+
 if not all_mode:
     recent_cutoff = now_ts - 24 * 60 * 60
     running_recs = []
@@ -1415,6 +1423,51 @@ if not all_mode:
         except (OSError, ValueError, TypeError, KeyError):
             project = get_project_short_name(rec["path"])
             unknown.setdefault(f"코디네이터 불명 — {project} 후보 0개", []).append(rec)
+
+    displayed_pids = set()
+    for rec in task_records:
+        for name in ("worker.pid", "job.pid"):
+            try:
+                displayed_pids.add(int((Path(rec["path"]) / name).read_text().strip()))
+            except (OSError, ValueError):
+                pass
+    observed_groups = {}
+    observed_under = {}
+    for item in observed:
+        if item["pid"] in displayed_pids:
+            continue
+        parent = item.get("worker_task")
+        if parent and any(rec["path"] == parent for rec in running_recs):
+            observed_under.setdefault(parent, []).append(item)
+            continue
+        matching = next((key for key in groups if (item.get("session_id") and key[1] == item["session_id"]) or (item.get("claude_pid") and key[2] == item["claude_pid"])), None)
+        if matching is None and item["origin"] in ("worker", "coordinator"):
+            matching = (item.get("workspace") or "코디네이터 불명", item.get("session_id") or "", str(item.get("claude_pid") or "?"), "", "모델 미확인")
+            groups.setdefault(matching, [])
+        if matching is None:
+            matching = ("사용자 직접" if item["origin"] == "user" else "출처 불명", "", "?", "", "")
+        observed_groups.setdefault(matching, []).append(item)
+
+    def print_observed(item):
+        task = Path(item["task"]) if item.get("task") else None
+        title = ""
+        if task:
+            try:
+                title = next((line.lstrip("# ").strip() for line in (task / "task.md").read_text().splitlines() if line.startswith("# ")), "")
+            except OSError:
+                pass
+            if not title:
+                try:
+                    title = (task / "STATUS").read_text().splitlines()[-1]
+                except (OSError, IndexError):
+                    pass
+        try:
+            ticks = int(item["start"].rsplit(":", 1)[1])
+            elapsed = max(0, int(float(Path("/proc/uptime").read_text().split()[0]) - ticks / os.sysconf("SC_CLK_TCK")))
+            duration = f"{elapsed // 60}분"
+        except (OSError, ValueError, IndexError):
+            duration = "시간 미상"
+        print(fit_width(f"    ↳ {item['kind']} · {title or item['cmd']} · {duration} · {task.name if task else '-'} (PID {item['pid']})", term_cols).rstrip())
 
     term_cols = 110
     env_cols = os.environ.get("COLUMNS", "").strip()
@@ -1566,7 +1619,7 @@ if not all_mode:
         ("✓ 최근 끝남 (24h)", "90", done_rows, False, "done"),
     ]
     printed_header = False
-    if run_rows or groups:
+    if run_rows or groups or observed_groups:
         print()
         print(colorize("▶ 실행 중", "32"))
         if run_rows or any(records for _, records in groups.items()):
@@ -1579,6 +1632,14 @@ if not all_mode:
             print(fit_width(f"  {owner} · {short_model(model)} (PID {pid})", term_cols).rstrip())
             for rec in records:
                 print(format_section_row(build_display_row(rec, "running"), "running"))
+                for item in observed_under.get(rec["path"], []):
+                    print_observed(item)
+            for item in observed_groups.pop(key, []):
+                print_observed(item)
+        for key, items in observed_groups.items():
+            print(f"  {key[0]}")
+            for item in items:
+                print_observed(item)
         if unknown:
             if groups:
                 print()
@@ -1586,6 +1647,8 @@ if not all_mode:
                 print(fit_width(f"  {label}", term_cols).rstrip())
                 for rec in records:
                     print(format_section_row(build_display_row(rec, "running"), "running"))
+                    for item in observed_under.get(rec["path"], []):
+                        print_observed(item)
     for title_txt, color_code, srows, show_cols, section_kind in sections:
         if not srows:
             continue
@@ -1649,6 +1712,43 @@ for r in rows:
 for r in rows:
     if r[8]:
         print(r[8])
+displayed_pids = set()
+for task_path in raw_tasks:
+    for pid_file in ("worker.pid", "job.pid"):
+        try:
+            displayed_pids.add(int((Path(task_path) / pid_file).read_text().strip()))
+        except (OSError, ValueError):
+            pass
+extra_groups = {}
+for item in observed:
+    if item["pid"] in displayed_pids:
+        continue
+    label = (item.get("workspace") or "코디네이터 불명") if item["origin"] in ("worker", "coordinator") else ("사용자 직접" if item["origin"] == "user" else "출처 불명")
+    key = (label, str(item.get("claude_pid") or "?"), item.get("session_id") or "")
+    extra_groups.setdefault(key, []).append(item)
+for (label, pid, session), items in extra_groups.items():
+    print(f"  {label} · 세션 {session or '미상'} (PID {pid})")
+    for item in items:
+        task_path = Path(item["task"]) if item.get("task") else None
+        title = ""
+        if task_path:
+            try:
+                title = next((line.lstrip("# ").strip() for line in (task_path / "task.md").read_text().splitlines() if line.startswith("# ")), "")
+            except OSError:
+                pass
+            if not title:
+                try:
+                    title = (task_path / "STATUS").read_text().splitlines()[-1]
+                except (OSError, IndexError):
+                    pass
+        try:
+            ticks = int(item["start"].rsplit(":", 1)[1])
+            elapsed = max(0, int(float(Path("/proc/uptime").read_text().split()[0]) - ticks / os.sysconf("SC_CLK_TCK")))
+            duration = f"{elapsed // 60}분"
+        except (OSError, ValueError, IndexError):
+            duration = "시간 미상"
+        parent = f" [{Path(item['worker_task']).name}]" if item.get("worker_task") else ""
+        print(f"    ↳ {item['kind']} · {title or item['cmd']} · {duration} · {task_path.name if task_path else '-'}{parent} (PID {item['pid']})")
 print_notice()
 EOF
 }

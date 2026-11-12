@@ -1248,6 +1248,7 @@ def test_th_status_default_hides_old_completed_tasks_but_all_shows_them(test_env
     site = test_env["tmp_path"] / "sitecustomize.py"
     site.write_text(
         "import team_harness.coordinator_identity as i\ni.live_coordinators = lambda: []\n"
+        "import team_harness.proc_observer as p\np.observe = lambda: []\n"
     )
     isolated_env = {**test_env["env"], "PYTHONPATH": str(test_env["tmp_path"])}
 
@@ -2593,7 +2594,7 @@ def test_th_launch_and_watch_context_rollover_resume_and_status(test_env: dict):
     )
     assert status_active.returncode == 0
     assert "▶ 실행 중" in status_active.stdout
-    assert "맥락 58k/60k" in status_active.stdout
+    assert "맥락 58k/60k" in status_active.stdout, status_active.stdout
     assert "unknown" not in status_active.stdout
 
     status_active_all = subprocess.run(

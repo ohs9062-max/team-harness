@@ -15,6 +15,7 @@ from team_harness import state_index
 
 @pytest.fixture
 def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(state_index.proc_observer, "observe", lambda: [])
     wd = tmp_path / "watch"
     wd.mkdir()
     monkeypatch.setenv("TH_WATCH_DIR", str(wd))

@@ -30,7 +30,11 @@ if [[ ${1:-} == prompt ]]; then
   [[ $previous_size =~ ^[0-9]+$ ]] || previous_size=0
   if (( current_size > previous_size )); then
     printf '## 새 사건\n'
-    tail -c "+$(( previous_size + 1 ))" "$inbox"
+    if [[ ${TH_AUTO_RECALL:-1} != 0 ]]; then
+      tail -c "+$(( previous_size + 1 ))" "$inbox" | PYTHONPATH="$script_dir/../src${PYTHONPATH:+:$PYTHONPATH}" timeout 2s python3 -m team_harness.recall_hook events 2>/dev/null || tail -c "+$(( previous_size + 1 ))" "$inbox"
+    else
+      tail -c "+$(( previous_size + 1 ))" "$inbox"
+    fi
   fi
   printf '%s\n' "$current_size" > "$offset_file"
 else
@@ -38,5 +42,8 @@ else
   if (( $# == 0 )) && [[ -f $inbox ]]; then
     printf '## inbox (최근)\n'
     tail -n 10 "$inbox"
+    if [[ ${TH_AUTO_RECALL:-1} != 0 ]]; then
+      PYTHONPATH="$script_dir/../src${PYTHONPATH:+:$PYTHONPATH}" timeout 2s python3 -m team_harness.recall_hook recent "$workspace" 2>/dev/null || true
+    fi
   fi
 fi
