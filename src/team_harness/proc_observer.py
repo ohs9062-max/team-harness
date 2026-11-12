@@ -57,6 +57,59 @@ def _ancestors(pid: int, proc: dict[int, dict[str, Any]]) -> set[int]:
     return seen
 
 
+def _useful_command(args: list[str]) -> str:
+    args = list(args)
+    while args:
+        name = os.path.basename(args[0])
+        if name in {"sleep", "head", "tail", "cat", "tee"}:
+            return ""
+        if name in {"bash", "sh"}:
+            return (
+                " ".join(args)
+                if any(a.startswith("-") and "c" in a[1:] for a in args[1:])
+                else ""
+            )
+        if name in {"nohup", "setsid"}:
+            args = args[1:]
+        elif name == "env":
+            args = args[1:]
+            while args and (args[0].startswith("-") or "=" in args[0]):
+                args.pop(0)
+        elif name == "timeout":
+            args = args[1:]
+            while args and args[0].startswith("-"):
+                args.pop(0)
+            args = args[1:]
+        elif name == "flock":
+            args = args[1:]
+            while args and args[0].startswith("-"):
+                option = args.pop(0)
+                if option in {"-w", "--timeout", "-E", "--conflict-exit-code"} and args:
+                    args.pop(0)
+            args = args[1:]
+        else:
+            return " ".join(args)[:120]
+    return ""
+
+
+def _add_child_summaries(
+    rows: list[dict[str, Any]], proc: dict[int, dict[str, Any]]
+) -> None:
+    for row in rows:
+        if row["kind"] == "하위 워커":
+            continue
+        descendants = (
+            (info["ticks"], pid, command)
+            for pid, info in proc.items()
+            if pid != row["pid"]
+            and row["pid"] in _ancestors(pid, proc)
+            and (command := _useful_command(info["args"]))
+        )
+        oldest = min(descendants, default=None)
+        if oldest:
+            row["child_summary"] = oldest[2]
+
+
 def observe() -> list[dict[str, Any]]:
     """Return a snapshot; individual processes can disappear while being read."""
     if os.environ.get("TH_OBSERVE") == "0":
@@ -363,17 +416,13 @@ def observe() -> list[dict[str, Any]]:
             useful, key=lambda pid: (len(_ancestors(pid, proc)), proc[pid]["ticks"])
         )
         selected.add(top)
-        descendants = [
-            pid for pid in useful if pid != top and top in _ancestors(pid, proc)
-        ]
-        if descendants:
-            oldest = min(descendants, key=lambda pid: proc[pid]["ticks"])
-            jobs[top]["child_summary"] = jobs[oldest]["cmd"]
-    return [
+    rows = [
         row
         for pid, row in candidates.items()
         if row["kind"] != "작업" or pid in selected
     ]
+    _add_child_summaries(rows, proc)
+    return rows
 
 
 def display_command(command: str) -> str:
@@ -436,4 +485,37 @@ def display_records(
             item["cmd"] = display_command(record.get("display_cmd") or record["cmd"])
             grouped[key] = item
             result.append(item)
-    return result
+    hidden: set[int] = set()
+    for index, row in enumerate(result):
+        raw = row.get("display_cmd", "")
+        if not raw or display_command(raw) == raw:
+            continue
+        owner = (row.get("claude_pid"), row.get("session_id"), row.get("workspace"))
+        if not any(owner[:2]):
+            continue
+        try:
+            shell_words = shlex.split(row["cmd"])
+        except ValueError:
+            continue
+        matches = []
+        for other_index, other in enumerate(result):
+            if other_index == index or owner != (
+                other.get("claude_pid"),
+                other.get("session_id"),
+                other.get("workspace"),
+            ):
+                continue
+            try:
+                words = shlex.split(other["cmd"])
+            except ValueError:
+                continue
+            core = [
+                word
+                for word in words
+                if not word.startswith("-") and ("/" in word or "." in word)
+            ]
+            if core and all(word in shell_words for word in core):
+                matches.append(other_index)
+        if len(matches) == 1:
+            hidden.add(index)
+    return [row for index, row in enumerate(result) if index not in hidden]

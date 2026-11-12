@@ -869,3 +869,48 @@ def test_display_command_unwraps_snapshot_eval():
         display_command("source /tmp/shell-snapshots/x eval 'broken")
         == "source /tmp/shell-snapshots/x eval 'broken"
     )
+
+
+def test_raw_descendants_and_wrapped_commands():
+    proc = {
+        1: dict(parent=0, ticks=1, args=["bash", "runner.sh"]),
+        2: dict(parent=1, ticks=2, args=["flock", "/tmp/lock", "python", "-u", "x.py"]),
+        3: dict(parent=2, ticks=3, args=["python", "-u", "x.py"]),
+        4: dict(parent=1, ticks=1, args=["sleep", "10"]),
+    }
+    rows = [dict(pid=1, kind="job")]
+    proc_observer._add_child_summaries(rows, proc)
+    assert rows[0]["child_summary"] == "python -u x.py"
+    for args in (
+        ["timeout", "60", "python", "x.py"],
+        ["env", "A=B", "python", "x.py"],
+        ["nohup", "python", "x.py"],
+    ):
+        assert proc_observer._useful_command(args) == "python x.py"
+
+
+def test_tool_shell_deduplicates_only_unique_matching_row():
+    base = dict(
+        origin="coordinator",
+        claude_pid="10",
+        session_id="sid",
+        workspace="/work",
+        task=None,
+    )
+    raw = "bash -c source /tmp/shell-snapshots/x ';' eval 'O=/tmp/out bash experiments/runner.sh'"
+    shell = dict(base, pid=900001, kind="작업", cmd=raw, display_cmd=raw)
+    runner = dict(base, pid=900002, kind="job", cmd="bash experiments/runner.sh")
+    other = dict(
+        base,
+        pid=900003,
+        kind="작업",
+        cmd="bash -c other",
+        display_cmd="bash -c source /tmp/shell-snapshots/x ';' eval 'python other.py'",
+    )
+    rows = proc_observer.display_records([shell, runner, other], set(), set())
+    assert {row["pid"] for row in rows} == {900002, 900003}
+    duplicate = dict(runner, pid=900004, task="/different")
+    assert (
+        len(proc_observer.display_records([shell, runner, duplicate], set(), set()))
+        == 3
+    )
