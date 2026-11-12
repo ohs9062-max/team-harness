@@ -87,7 +87,7 @@ def run_once() -> None:
         try:
             from team_harness.state_index import update
 
-            update()
+            update(maintenance=True)
         except Exception as exc:
             print(f"maintenance state index failed: {exc}", file=sys.stderr)
     for name, operation in (

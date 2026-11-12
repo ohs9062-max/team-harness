@@ -1325,8 +1325,11 @@ try:
     from team_harness.workspace_archive import watch_dir as shim_watch_dir
     with sqlite3.connect(shim_watch_dir() / "th.db", timeout=0) as db:
         count = db.execute("SELECT count(*) FROM shim_decisions WHERE would_block=1 AND at >= ?", ((datetime.now(__import__("datetime").timezone.utc) - __import__("datetime").timedelta(hours=24)).isoformat(),)).fetchone()[0]
+        breaker_count = db.execute("SELECT count(*) FROM breaker_events WHERE at >= ?", ((datetime.now(__import__("datetime").timezone.utc) - __import__("datetime").timedelta(hours=24)).isoformat(),)).fetchone()[0]
     if count:
         print(f"ℹ 실행 전 판정(관찰): {count}건 차단 대상")
+    if breaker_count:
+        print(f"ℹ 차단기(관찰): 최근 24시간 {breaker_count}건")
 except Exception as exc:
     print(f"ths: observation unavailable: {exc}", file=sys.stderr)
 

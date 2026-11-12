@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS events(source TEXT, line_hash TEXT UNIQUE, at TEXT, t
 CREATE TABLE IF NOT EXISTS adoptions(folder TEXT, verifier TEXT, claim TEXT, verdict TEXT, counterexample TEXT, at TEXT, UNIQUE(folder, verifier, at));
 CREATE TABLE IF NOT EXISTS sessions(session_id TEXT PRIMARY KEY, claude_pid TEXT, workspace TEXT, model TEXT, first_seen TEXT, last_seen TEXT);
 CREATE TABLE IF NOT EXISTS processes(pid INTEGER, start TEXT, first_seen TEXT, last_seen TEXT, ended_at TEXT, kind TEXT, origin TEXT, session_id TEXT, workspace TEXT, worker_task TEXT, task TEXT, cmd TEXT, PRIMARY KEY(pid, start));
+CREATE TABLE IF NOT EXISTS observed_notices(identity TEXT PRIMARY KEY, at TEXT);
+CREATE TABLE IF NOT EXISTS breaker_events(at TEXT, session_id TEXT, workspace TEXT, reason TEXT, value TEXT);
 CREATE TABLE IF NOT EXISTS coord_log(workspace TEXT, at TEXT, kind TEXT, task TEXT, text TEXT, line_hash TEXT UNIQUE);
 CREATE TABLE IF NOT EXISTS ingest_state(source TEXT PRIMARY KEY, inode INTEGER, offset INTEGER);
 """
@@ -113,7 +115,9 @@ def _modified(path: Path, start: datetime) -> bool:
         return False
 
 
-def update(observations: list[dict] | None = None) -> None:
+def update(
+    observations: list[dict] | None = None, *, maintenance: bool = False
+) -> None:
     wd = watch_dir()
     wd.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(wd / "th.db", timeout=10) as db:
@@ -127,12 +131,17 @@ def update(observations: list[dict] | None = None) -> None:
             db.execute("SELECT value FROM meta WHERE key='started_at'").fetchone()[0]
         )
         tasks = _paths(wd)
+        registered_tasks = set(tasks)
         observed = None
         try:
             observed = (
-                observations if observations is not None else proc_observer.observe()
+                observations
+                if observations is not None
+                else None
+                if os.environ.get("TH_OBSERVE") == "0"
+                else proc_observer.observe()
             )
-            for row in observed:
+            for row in observed or []:
                 if row["task"]:
                     tasks.add(Path(row["task"]))
                 if row["session_id"]:
@@ -170,15 +179,16 @@ def update(observations: list[dict] | None = None) -> None:
                         row["cmd"],
                     ),
                 )
-            alive = {(r["pid"], r["start"]) for r in observed}
-            for pid, identity in db.execute(
-                "SELECT pid,start FROM processes WHERE ended_at IS NULL"
-            ).fetchall():
-                if (pid, identity) not in alive:
-                    db.execute(
-                        "UPDATE processes SET ended_at=? WHERE pid=? AND start=?",
-                        (now, pid, identity),
-                    )
+            if observed is not None:
+                alive = {(r["pid"], r["start"]) for r in observed}
+                for pid, identity in db.execute(
+                    "SELECT pid,start FROM processes WHERE ended_at IS NULL"
+                ).fetchall():
+                    if (pid, identity) not in alive:
+                        db.execute(
+                            "UPDATE processes SET ended_at=? WHERE pid=? AND start=?",
+                            (now, pid, identity),
+                        )
         except Exception as exc:
             _warn(wd / "th.db", exc)
         # Reuse the existing usage calculation, including retry and duration rules.
@@ -324,6 +334,13 @@ def update(observations: list[dict] | None = None) -> None:
                         )
             except (ValueError, TypeError, OSError) as exc:
                 _warn(manifest, exc)
+        if maintenance and observed is not None and os.environ.get("TH_OBSERVE") != "0":
+            try:
+                from team_harness.observation_events import process_events
+
+                process_events(db, registered_tasks, now)
+            except Exception as exc:
+                _warn(wd / "th.db", exc)
         workspaces = set(loss_report.owners(wd))
         workspaces.update(
             Path(r["workspace"])

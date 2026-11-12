@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import sqlite3
 import subprocess
+import time
 
 from team_harness.deployment import install_shim
 from team_harness.deployment import remove_shim
@@ -87,6 +88,44 @@ def test_install_remove(tmp_path: Path) -> None:
     remove_shim(ROOT, tmp_path)
     for name in (".bashrc", ".profile"):
         assert (tmp_path / name).read_text() == "export EXISTING=1\n"
+
+
+def test_broken_or_slow_observer_keeps_real_command(tmp_path: Path) -> None:
+    shim = tmp_path / "shim"
+    shim.mkdir()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    python_dir = tmp_path / ".venv" / "bin"
+    python_dir.mkdir(parents=True)
+    for name in ("codex", "agy"):
+        target = shim / name
+        target.write_bytes((ROOT / "shim" / name).read_bytes())
+        target.chmod(0o755)
+        real = bin_dir / name
+        real.write_text(
+            '#!/bin/sh\nread -r line\nprintf "%s|%s\\n" "$*" "$line"\nexit 37\n'
+        )
+        real.chmod(0o755)
+    env = dict(os.environ, PATH=f"{shim}:{bin_dir}", PYTHONPATH="")
+    python = python_dir / "python"
+    for contents in (None, "#!/bin/sh\nexit 42\n", "#!/bin/sh\nexec /bin/sleep 5\n"):
+        if contents is not None:
+            python.write_text(contents)
+            python.chmod(0o755)
+        for name in ("codex", "agy"):
+            started = time.monotonic()
+            result = subprocess.run(
+                [name, "exec", "two words"],
+                env=env,
+                input="payload\n",
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            assert result.returncode == 37
+            assert result.stdout == "exec two words|payload\n"
+            assert result.stderr == ""
+            assert time.monotonic() - started < 2
 
 
 def test_status_displays_observed_block(tmp_path: Path) -> None:

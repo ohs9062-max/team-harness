@@ -71,7 +71,7 @@ def _effort(args: list[str]) -> str:
     return ""
 
 
-def _record(tool: str, args: list[str], depth: int) -> None:
+def _record(tool: str, args: list[str], depth: int, pid: int | None = None) -> None:
     from team_harness import launch_policy
     from team_harness import resource_slots
     from team_harness.brief_check import check_brief_text
@@ -180,7 +180,7 @@ def _record(tool: str, args: list[str], depth: int) -> None:
             "INSERT INTO shim_decisions VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 datetime.now(UTC).isoformat(),
-                os.getpid(),
+                pid if pid is not None else os.getpid(),
                 os.environ.get("CLAUDE_CODE_SESSION_ID"),
                 workspace,
                 os.environ.get("TH_WORKER_OUTPUT_DIR") or os.environ.get("TH_JOB_TASK"),
@@ -227,3 +227,25 @@ def main(tool: str) -> None:
         except Exception:
             pass
     os.execv(real, [real, *args])
+
+
+def observe_child() -> None:
+    """Observe in an expendable subprocess, without consuming caller input."""
+    tool, tty, *args = sys.argv[1:]
+    noninteractive = (
+        (
+            "exec" in args
+            and ("resume" not in args or args.index("exec") < args.index("resume"))
+        )
+        if tool == "codex"
+        else bool(_option(args, "-p", "--prompt")) or tty == "0"
+    )
+    if not noninteractive:
+        return
+    from team_harness.proc_observer import has_ancestor_command
+
+    if has_ancestor_command("th-launch.sh"):
+        return
+    depth = int(os.environ.get("TH_SHIM_DEPTH", "0")) + 1
+    print(depth, flush=True)
+    _record(tool, args, depth, int(os.environ["TH_SHIM_PARENT_PID"]))

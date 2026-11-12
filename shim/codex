@@ -1,10 +1,33 @@
-#!/usr/bin/env python3
-import os
-from pathlib import Path
-import sys
-
-root = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(root / "src"))
-from team_harness.launch_shim import main
-
-main("codex")
+#!/bin/sh
+# Resolve the installed symlink and find the real executable before observation.
+self=$(/usr/bin/readlink -f "$0" 2>/dev/null) || self=$0
+shim_dir=${self%/*}
+root=${shim_dir%/*}
+tool=${0##*/}
+remaining=${PATH-}
+while :; do
+    case $remaining in *:*) dir=${remaining%%:*}; remaining=${remaining#*:}; more=1 ;; *) dir=$remaining; more=0 ;; esac
+    [ -n "$dir" ] || dir=.
+    candidate=$dir/$tool
+    if [ -f "$candidate" ] && [ -x "$candidate" ]; then
+        resolved=$(/usr/bin/readlink -f "$candidate" 2>/dev/null) || resolved=$candidate
+        if [ "$resolved" != "$self" ]; then
+            real=$candidate
+            break
+        fi
+    fi
+    [ "$more" = 1 ] || break
+done
+if [ -z "${real-}" ]; then
+    printf '%s: command not found\n' "$tool" >&2
+    exit 127
+fi
+if [ "${TH_SHIM-}" != 0 ] && [ -x /usr/bin/timeout ]; then
+    python=$root/.venv/bin/python
+    [ -x "$python" ] || python=python3
+    tty=0
+    [ -t 0 ] && tty=1
+    depth=$(TH_SHIM_PARENT_PID=$$ /usr/bin/timeout "${TH_SHIM_TIMEOUT:-0.3}" "$python" -c 'import sys; sys.path.insert(0, sys.argv.pop(1)); from team_harness.launch_shim import observe_child; observe_child()' "$root/src" "$tool" "$tty" "$@" </dev/null 2>/dev/null) || :
+    case $depth in ''|*[!0-9]*) ;; *) TH_SHIM_DEPTH=$depth; export TH_SHIM_DEPTH ;; esac
+fi
+exec "$real" "$@"
