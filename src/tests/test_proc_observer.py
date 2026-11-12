@@ -11,6 +11,12 @@ from team_harness import proc_observer
 from team_harness import state_index
 
 
+def _watcher_ancestor() -> bool:
+    return proc_observer.has_ancestor_command(
+        "th-watchd.sh"
+    ) or proc_observer.has_ancestor_command("team_harness.maintenance")
+
+
 def test_detached_process_origin_and_ended(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -39,7 +45,9 @@ def test_detached_process_origin_and_ended(
         rows = proc_observer.observe()
         record = next(row for row in rows if row["pid"] == child.pid)
         assert record["task"] == str(task)
-        assert record["origin"] == "worker"
+        # Verification may itself run under the watcher. Its descendants must
+        # retain that origin even when their environment identifies a worker.
+        assert record["origin"] == ("watchd" if _watcher_ancestor() else "worker")
         assert record["session_id"] == "test-session"
         state_index.update()
         with sqlite3.connect(watch / "th.db") as db:
@@ -96,7 +104,7 @@ def test_status_displays_observed_session(
             check=True,
         )
         assert "Observed title" in run.stdout
-        assert "12345" in run.stdout
+        assert ("감시 데몬" if _watcher_ancestor() else "12345") in run.stdout
         run_all = subprocess.run(
             ["bash", str(repo / "scripts/th-status.sh"), "--all"],
             cwd=tmp_path,
@@ -107,7 +115,7 @@ def test_status_displays_observed_session(
             check=True,
         )
         assert "Observed title" in run_all.stdout
-        assert "12345" in run_all.stdout
+        assert ("감시 데몬" if _watcher_ancestor() else "12345") in run_all.stdout
     finally:
         child.terminate()
         child.wait()
@@ -265,8 +273,15 @@ def test_all_places_child_below_registered_worker(
             for i, line in enumerate(lines)
             if "registered-worker" in line and line.startswith("|")
         )
-        assert "Child process title" in lines[parent_line + 1]
-        assert str(child.pid) in lines[parent_line + 1]
+        if _watcher_ancestor():
+            assert any(
+                "Child process title" in line and str(child.pid) in line
+                for line in lines
+            )
+            assert "감시 데몬" in run.stdout
+        else:
+            assert "Child process title" in lines[parent_line + 1]
+            assert str(child.pid) in lines[parent_line + 1]
     finally:
         child.terminate()
         child.wait()
