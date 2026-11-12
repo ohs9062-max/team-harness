@@ -128,6 +128,47 @@ def test_broken_or_slow_observer_keeps_real_command(tmp_path: Path) -> None:
             assert time.monotonic() - started < 2
 
 
+def test_observer_termination_and_inherited_stdout(tmp_path: Path) -> None:
+    shim = tmp_path / "shim"
+    shim.mkdir()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    python_dir = tmp_path / ".venv" / "bin"
+    python_dir.mkdir(parents=True)
+    (python_dir / "python").symlink_to("/usr/bin/python3")
+    for name in ("codex", "agy"):
+        target = shim / name
+        target.write_bytes((ROOT / "shim" / name).read_bytes())
+        target.chmod(0o755)
+        real = bin_dir / name
+        real.write_text(
+            '#!/bin/sh\nread -r line\nprintf "%s|%s\\n" "$*" "$line"\nexit 37\n'
+        )
+        real.chmod(0o755)
+    env = dict(os.environ, PATH=f"{shim}:{bin_dir}", PYTHONPATH=str(tmp_path))
+    scenarios = (
+        "import signal, time\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\ntime.sleep(10)\n",
+        "import os, time\nif os.fork() == 0:\n    time.sleep(2)\n    os._exit(0)\nos._exit(0)\n",
+    )
+    for scenario in scenarios:
+        (tmp_path / "sitecustomize.py").write_text(scenario)
+        for name in ("codex", "agy"):
+            started = time.monotonic()
+            result = subprocess.run(
+                [name, "exec", "two words"],
+                env=env,
+                input="payload\n",
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=1.5,
+            )
+            assert time.monotonic() - started < 1.5
+            assert result.returncode == 37
+            assert result.stdout == "exec two words|payload\n"
+            assert result.stderr == ""
+
+
 def test_status_displays_observed_block(tmp_path: Path) -> None:
     env, dbpath = setup_cli(tmp_path)
     run(dict(env, TH_SHIM_DEPTH="20"), "codex", "exec", "hello")
