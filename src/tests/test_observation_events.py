@@ -52,7 +52,7 @@ def test_notices_and_breaker_are_deduplicated(
     )
     observation_events.process_events(db, set(), now)
     observation_events.process_events(db, set(), now)
-    assert len([x for x in notices if x[2].startswith("관찰 작업 종료")]) == 1
+    assert len([x for x in notices if " | 관찰 종료 | " in x[2]]) == 1
     assert "failed result" in notices[0][2]
     assert len([x for x in notices if x[2].startswith("차단기(관찰)")]) == 2
     assert db.execute("SELECT count(*) FROM breaker_events").fetchone()[0] == 2
@@ -122,3 +122,118 @@ def test_disabled_observation_does_not_end_processes(
         assert db.execute("SELECT ended_at FROM processes WHERE pid=42").fetchone() == (
             None,
         )
+
+
+def test_worktree_routing_and_coord_log(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import timedelta
+    import subprocess
+
+    main = tmp_path / "main"
+    main.mkdir()
+    subprocess.run(["git", "init", "-q", str(main)], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(main),
+            "-c",
+            "user.name=test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "init",
+        ],
+        check=True,
+    )
+    worktree = tmp_path / "worktree"
+    subprocess.run(
+        ["git", "-C", str(main), "worktree", "add", "-q", "-b", "other", str(worktree)],
+        check=True,
+    )
+    journal = main / ".claude"
+    journal.mkdir()
+    monkeypatch.setenv("TH_WATCH_DIR", str(tmp_path / "watch"))
+    monkeypatch.delenv("TH_ROLE", raising=False)
+    monkeypatch.delenv("TH_SKIP_COORD_LOG", raising=False)
+    now = datetime.now(UTC)
+    db = sqlite3.connect(":memory:")
+    db.executescript(state_index.SCHEMA)
+    db.execute(
+        "INSERT INTO processes VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            99999999,
+            "start",
+            now.isoformat(),
+            now.isoformat(),
+            now.isoformat(),
+            "job",
+            "worker",
+            "s",
+            str(worktree),
+            None,
+            None,
+            "run command",
+        ),
+    )
+    observation_events.process_events(db, set(), now.isoformat())
+    line = (journal / "inbox.md").read_text().strip()
+    assert (
+        line
+        == f"{now.astimezone().strftime('%Y-%m-%d %H:%M')} | 관찰:run command | 관찰 종료 | 결과 표식 없음 | -"
+    )
+    assert not (worktree / ".claude").exists()
+    stamp = (now + timedelta(days=1)).strftime("%Y-%m-%d %H:%M")
+    (journal / "work_log.md").write_text(f"{stamp} | 결정 | test | recorded\n")
+    row = {
+        "pid": 99999999,
+        "start": "start",
+        "task": None,
+        "session_id": "s",
+        "claude_pid": None,
+        "workspace": str(worktree),
+        "kind": "job",
+        "origin": "worker",
+        "worker_task": None,
+        "cmd": "run command",
+    }
+    state_index.update([row])
+    with sqlite3.connect(tmp_path / "watch" / "th.db") as index:
+        assert index.execute("SELECT workspace FROM processes").fetchone() == (
+            str(worktree),
+        )
+        assert index.execute("SELECT workspace FROM coord_log").fetchone() == (
+            str(main),
+        )
+
+
+def test_missing_journal_and_explicit_owner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os
+    import subprocess
+    import sys
+
+    monkeypatch.setenv("TH_WATCH_DIR", str(tmp_path / "watch"))
+    observation_events._append(str(tmp_path), "s", "message")
+    assert not (tmp_path / ".claude").exists()
+    owner = tmp_path / "owner"
+    owner.mkdir()
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import time; print(1, flush=True); time.sleep(60)"],
+        env={**os.environ, "TH_WORKSPACE": str(owner)},
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert child.stdout is not None
+        assert child.stdout.readline().strip() == "1"
+        assert observation_events.coordinator_workspace(
+            str(tmp_path), child.pid
+        ) == str(owner)
+    finally:
+        child.terminate()
+        child.wait()

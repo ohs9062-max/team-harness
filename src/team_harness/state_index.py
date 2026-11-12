@@ -373,8 +373,12 @@ def update(
             except Exception as exc:
                 _warn(wd / "th.db", exc)
         workspaces = set(loss_report.owners(wd))
+        from team_harness.observation_events import coordinator_workspace
+
         workspaces.update(
-            Path(r["workspace"])
+            Path(
+                coordinator_workspace(r["workspace"], r.get("pid"), r.get("claude_pid"))
+            )
             for r in (observed or [])
             if r["workspace"] and Path(r["workspace"]).is_absolute()
         )

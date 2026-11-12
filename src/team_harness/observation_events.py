@@ -11,9 +11,56 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import subprocess
 
 from team_harness import usage_ledger
 from team_harness.workspace_archive import watch_dir
+
+
+def coordinator_workspace(
+    workspace: str, pid: int | str | None = None, session_pid: int | str | None = None
+) -> str:
+    """Resolve the observed session owner without changing its stored workspace."""
+    for candidate in (pid, session_pid):
+        if not candidate:
+            continue
+        try:
+            entries = (
+                (Path("/proc") / str(int(candidate)) / "environ")
+                .read_bytes()
+                .split(b"\0")
+            )
+            for entry in entries:
+                if entry.startswith(b"TH_WORKSPACE="):
+                    value = os.fsdecode(entry.partition(b"=")[2])
+                    if value and Path(value).is_absolute():
+                        return value
+        except (OSError, ValueError):
+            pass
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                workspace,
+                "rev-parse",
+                "--is-inside-work-tree",
+                "--path-format=absolute",
+                "--git-common-dir",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5,
+        )
+        lines = result.stdout.splitlines()
+        if len(lines) == 2 and lines[0] == "true":
+            common = Path(lines[1])
+            if common.is_absolute():
+                return str(common.parent)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return workspace
 
 
 def _append(workspace: str, session: str, message: str) -> None:
@@ -21,7 +68,8 @@ def _append(workspace: str, session: str, message: str) -> None:
     if not owner.is_absolute() or not owner.is_dir():
         return
     directory = owner / ".claude"
-    directory.mkdir(exist_ok=True)
+    if not directory.is_dir():
+        return
     route = (
         session
         if session
@@ -113,9 +161,9 @@ def process_events(db: sqlite3.Connection, registered: set[Path], now: str) -> N
     cutoff = (now_dt - timedelta(hours=1)).isoformat()
     if os.environ.get("TH_OBSERVED_NOTIFY") != "0":
         rows = db.execute(
-            "SELECT pid,start,session_id,workspace,worker_task,task,cmd FROM processes WHERE ended_at IS NOT NULL AND origin IN ('worker','coordinator')"
+            "SELECT pid,start,session_id,workspace,worker_task,task,cmd, (SELECT claude_pid FROM sessions WHERE sessions.session_id=processes.session_id) FROM processes WHERE ended_at IS NOT NULL AND origin IN ('worker','coordinator')"
         ).fetchall()
-        for pid, start, session, workspace, worker_task, task, cmd in rows:
+        for pid, start, session, workspace, worker_task, task, cmd, claude_pid in rows:
             location = task or worker_task or ""
             if not workspace or (location and Path(location) in registered):
                 continue
@@ -133,10 +181,15 @@ def process_events(db: sqlite3.Connection, registered: set[Path], now: str) -> N
             ):
                 continue
             summary = _summary(location, cmd or "")
+            command = cmd or ""
+            label = command[:60] or (
+                os.path.relpath(location, workspace) if location else "관찰 작업"
+            )
+            detail = f"{summary} — " if summary and summary != command else ""
             _append(
-                workspace,
+                coordinator_workspace(workspace, pid, claude_pid),
                 session or "",
-                f"관찰 작업 종료 — {summary} — {location or cmd} — {_result(location)}",
+                f"{now_dt.astimezone().strftime('%Y-%m-%d %H:%M')} | 관찰:{label} | 관찰 종료 | {detail}{_result(location)} | -",
             )
             db.execute(
                 "INSERT OR IGNORE INTO observed_notices VALUES (?,?)", (identity, now)
@@ -220,4 +273,4 @@ def process_events(db: sqlite3.Connection, registered: set[Path], now: str) -> N
                 "INSERT INTO breaker_events VALUES (?,?,?,?,?)",
                 (now, session, workspace, reason, value),
             )
-            _append(workspace, session, f"차단기(관찰): {value}")
+            _append(coordinator_workspace(workspace), session, f"차단기(관찰): {value}")
