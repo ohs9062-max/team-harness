@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -58,6 +59,60 @@ def observe() -> list[dict[str, Any]]:
         except (OSError, ValueError, IndexError):
             continue
     env_cache: dict[int, dict[str, str] | None] = {}
+    session_cache: dict[tuple[str, str], tuple[str | None, str | None]] = {}
+    session_index: dict[str, str] | None = None
+
+    def session_details(
+        pid: str | None, session: str | None
+    ) -> tuple[str | None, str | None]:
+        """Resolve coordinator metadata from Claude's per-process session record."""
+        nonlocal session_index
+        key = (pid or "", session or "")
+        if key in session_cache:
+            return session_cache[key]
+        result = (session, None)
+        if pid and pid.isdigit():
+            try:
+                path = Path.home() / ".claude" / "sessions" / f"{pid}.json"
+                data = json.loads(path.read_text())
+                file_session = data.get("sessionId")
+                cwd = data.get("cwd") or data.get("workspace")
+                identity = capture_starttime(int(pid)) if not session else None
+                pid_matches = bool(
+                    identity
+                    and str(data.get("procStart")) == identity.rsplit(":", 1)[-1]
+                )
+                if (
+                    session == file_session or (not session and pid_matches)
+                ) and isinstance(file_session, str):
+                    result = (
+                        file_session,
+                        cwd if isinstance(cwd, str) and os.path.isabs(cwd) else None,
+                    )
+            except (OSError, ValueError, TypeError, AttributeError):
+                pass
+        elif session:
+            if session_index is None:
+                session_index = {}
+                try:
+                    for path in (Path.home() / ".claude" / "sessions").glob("*.json"):
+                        try:
+                            data = json.loads(path.read_text())
+                            sid = data.get("sessionId")
+                            cwd = data.get("cwd") or data.get("workspace")
+                            if (
+                                isinstance(sid, str)
+                                and isinstance(cwd, str)
+                                and os.path.isabs(cwd)
+                            ):
+                                session_index[sid] = cwd
+                        except (OSError, ValueError, TypeError, AttributeError):
+                            continue
+                except OSError:
+                    pass
+            result = (session, session_index.get(session))
+        session_cache[key] = result
+        return result
 
     def env(pid: int) -> dict[str, str] | None:
         if pid not in env_cache:
@@ -145,12 +200,31 @@ def observe() -> list[dict[str, Any]]:
                 ):
                     if values.get(key) and not inherited.get(key):
                         inherited[key] = values[key]
+                if not inherited.get("TH_WORKSPACE") and not inherited.get(
+                    "ORCA_WORKTREE_ID"
+                ):
+                    resolved_session, resolved_workspace = session_details(
+                        inherited.get("CLAUDE_PID"),
+                        inherited.get("CLAUDE_CODE_SESSION_ID"),
+                    )
+                    if resolved_session:
+                        inherited.setdefault("CLAUDE_CODE_SESSION_ID", resolved_session)
+                    if resolved_workspace:
+                        inherited["TH_WORKSPACE"] = resolved_workspace
             cursor = proc[cursor]["parent"]
         worker = inherited.get("TH_WORKER_OUTPUT_DIR") or inherited.get("TH_JOB_TASK")
         session = inherited.get("CLAUDE_CODE_SESSION_ID")
         workspace = inherited.get("TH_WORKSPACE") or inherited.get("ORCA_WORKTREE_ID")
         if workspace and "::/" in workspace:
             workspace = workspace.split("::", 1)[1]
+        if workspace and not os.path.isabs(workspace):
+            workspace = None
+        if not workspace or not session:
+            resolved_session, resolved_workspace = session_details(
+                inherited.get("CLAUDE_PID"), session
+            )
+            session = session or resolved_session
+            workspace = workspace or resolved_workspace
         origin = (
             "worker"
             if worker or inherited.get("TH_ROLE") == "worker"

@@ -1,8 +1,11 @@
+import json
 import os
 from pathlib import Path
 import sqlite3
 import subprocess
 import sys
+
+import pytest
 
 from team_harness import proc_observer
 from team_harness import state_index
@@ -152,6 +155,113 @@ def test_status_index_failure_preserves_output(tmp_path):
     )
     assert first.stdout == second.stdout
     assert "observation unavailable" in second.stderr
+
+
+def test_status_observer_failure_preserves_output(tmp_path):
+    repo = Path(__file__).resolve().parents[2]
+    injection = tmp_path / "injection"
+    injection.mkdir()
+    (injection / "sitecustomize.py").write_text(
+        "import os\n"
+        "if os.environ.get('TEST_OBSERVER_FAILURE') == '1':\n"
+        " import team_harness.proc_observer as observer\n"
+        " def fail(): raise RuntimeError('test observer failure')\n"
+        " observer.observe = fail\n"
+    )
+    env = dict(
+        os.environ,
+        PYTHONPATH=f"{injection}:{repo / 'src'}",
+        TH_WATCH_DIR=str(tmp_path / "watch"),
+        HOME=str(tmp_path),
+    )
+    command = ["bash", str(repo / "scripts/th-status.sh")]
+    first = subprocess.run(
+        command, cwd=tmp_path, env=env, text=True, capture_output=True, check=True
+    )
+    env["TEST_OBSERVER_FAILURE"] = "1"
+    second = subprocess.run(
+        command, cwd=tmp_path, env=env, text=True, capture_output=True, check=True
+    )
+    assert first.stdout == second.stdout
+    assert "test observer failure" in second.stderr
+
+
+@pytest.mark.parametrize("with_pid", [True, False])
+def test_session_file_workspace_fallback(tmp_path, monkeypatch, with_pid):
+    monkeypatch.setenv("TH_OBSERVE", "1")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    sessions = tmp_path / ".claude" / "sessions"
+    sessions.mkdir(parents=True)
+    (sessions / "12345.json").write_text(
+        json.dumps({"sessionId": "fixture-session", "cwd": str(tmp_path)})
+    )
+    task = tmp_path / "task"
+    task.mkdir()
+    (task / "task.md").write_text("# Test task\n")
+    env = dict(os.environ, CLAUDE_PID="12345", CLAUDE_CODE_SESSION_ID="fixture-session")
+    if not with_pid:
+        env.pop("CLAUDE_PID", None)
+    env.pop("TH_WORKSPACE", None)
+    env.pop("ORCA_WORKTREE_ID", None)
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"], cwd=task, env=env
+    )
+    try:
+        record = next(row for row in proc_observer.observe() if row["pid"] == child.pid)
+        assert record["workspace"] == str(tmp_path)
+        assert record["session_id"] == "fixture-session"
+    finally:
+        child.terminate()
+        child.wait()
+
+
+def test_all_places_child_below_registered_worker(tmp_path, monkeypatch):
+    monkeypatch.setenv("TH_OBSERVE", "1")
+    repo = Path(__file__).resolve().parents[2]
+    watch = tmp_path / "watch"
+    watch.mkdir()
+    worker = tmp_path / "registered-worker"
+    child_task = tmp_path / "child-task"
+    worker.mkdir()
+    child_task.mkdir()
+    (worker / "task.md").write_text("# Registered worker title\n")
+    (child_task / "task.md").write_text("# Child process title\n")
+    (watch / "tasks.txt").write_text(f"{worker}\n")
+    env = dict(
+        os.environ,
+        PYTHONPATH="",
+        HOME=str(tmp_path),
+        TH_WATCH_DIR=str(watch),
+        TH_WORKER_OUTPUT_DIR=str(worker),
+        TH_ROLE="worker",
+        CLAUDE_PID="12345",
+        CLAUDE_CODE_SESSION_ID="test-session",
+        TH_WORKSPACE=str(tmp_path),
+    )
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"], cwd=child_task, env=env
+    )
+    try:
+        run = subprocess.run(
+            ["bash", str(repo / "scripts/th-status.sh"), "--all"],
+            cwd=tmp_path,
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=True,
+        )
+        lines = run.stdout.splitlines()
+        parent_line = next(
+            i
+            for i, line in enumerate(lines)
+            if "registered-worker" in line and line.startswith("|")
+        )
+        assert "Child process title" in lines[parent_line + 1]
+        assert str(child.pid) in lines[parent_line + 1]
+    finally:
+        child.terminate()
+        child.wait()
 
 
 def test_coord_log_incremental_and_why(tmp_path, monkeypatch):
