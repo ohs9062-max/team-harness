@@ -1318,14 +1318,15 @@ for task in valid_tasks:
 
 observed = []
 try:
-    from team_harness import proc_observer, state_index
+    from team_harness import proc_observer
     observed = proc_observer.observe()
-    state_index.update(observed)
     import sqlite3
     from team_harness.workspace_archive import watch_dir as shim_watch_dir
-    with sqlite3.connect(shim_watch_dir() / "th.db", timeout=0) as db:
-        count = db.execute("SELECT count(*) FROM shim_decisions WHERE would_block=1 AND at >= ?", ((datetime.now(__import__("datetime").timezone.utc) - __import__("datetime").timedelta(hours=24)).isoformat(),)).fetchone()[0]
-        breaker_count = db.execute("SELECT count(*) FROM breaker_events WHERE at >= ?", ((datetime.now(__import__("datetime").timezone.utc) - __import__("datetime").timedelta(hours=24)).isoformat(),)).fetchone()[0]
+    with sqlite3.connect((shim_watch_dir() / "th.db").as_uri() + "?mode=ro", timeout=0, uri=True) as db:
+        tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        cutoff = ((datetime.now(__import__("datetime").timezone.utc) - __import__("datetime").timedelta(hours=24)).isoformat(),)
+        count = db.execute("SELECT count(*) FROM shim_decisions WHERE would_block=1 AND at >= ?", cutoff).fetchone()[0] if "shim_decisions" in tables else 0
+        breaker_count = db.execute("SELECT count(*) FROM breaker_events WHERE at >= ?", cutoff).fetchone()[0] if "breaker_events" in tables else 0
     if count:
         print(f"ℹ 실행 전 판정(관찰): {count}건 차단 대상")
     if breaker_count:

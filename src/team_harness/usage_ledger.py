@@ -14,6 +14,7 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import tzinfo
 from datetime import UTC
+from functools import lru_cache
 import importlib.util
 import json
 import os
@@ -78,6 +79,7 @@ def format_time(value: datetime | None) -> str | None:
     return value.isoformat(timespec="seconds").replace("+00:00", "Z") if value else None
 
 
+@lru_cache(maxsize=4096)
 def _main_checkout(candidate: Path) -> Path | None:
     """Resolve a path to its main checkout, sharing project_owner's rule."""
 

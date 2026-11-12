@@ -3,7 +3,41 @@
 import os
 import re
 import sys
+import time
 from pathlib import Path
+
+
+_snapshot = None
+_snapshot_at = 0.0
+
+
+def _process_snapshot():
+    """Collect the process fields used by all task checks, at most once a second."""
+    global _snapshot, _snapshot_at
+    now = time.monotonic()
+    if _snapshot is not None and now - _snapshot_at < 1.0:
+        return _snapshot
+    rows = []
+    for proc in Path("/proc").glob("[0-9]*"):
+        try:
+            if proc.stat().st_uid != os.getuid():
+                continue
+            pid = int(proc.name)
+            stat = (proc / "stat").read_text().rsplit(") ", 1)[1].split()
+            if stat[0] == "Z":
+                continue
+            environ = (proc / "environ").read_bytes().split(b"\0")
+            args = None
+            if int(stat[3]) == pid:
+                try:
+                    args = (proc / "cmdline").read_bytes().split(b"\0")
+                except OSError:
+                    pass
+            rows.append((pid, environ, args))
+        except (OSError, ValueError, IndexError):
+            continue
+    _snapshot, _snapshot_at = rows, now
+    return rows
 
 
 def live_processes(task):
@@ -25,24 +59,16 @@ def live_processes(task):
                 continue
     tag = f"TH_JOB_TASK={task}".encode()
     excluded = ("th-status", "th-watch", "th-inbox-wait", "tail", "less", "grep", "vim", "nvim", "emacs", "nano", "code", "claude", "codex", "shell-snapshots")
-    for proc in Path("/proc").glob("[0-9]*"):
+    for pid, environ, args in _process_snapshot():
         try:
-            if proc.stat().st_uid != os.getuid():
-                continue
-            pid = int(proc.name)
-            stat = (proc / "stat").read_text().rsplit(") ", 1)[1].split()
-            if stat[0] == "Z":
-                continue
-            environ = (proc / "environ").read_bytes().split(b"\0")
             worker_dirs = [entry.split(b"=", 1)[1] for entry in environ if entry.startswith(b"TH_WORKER_OUTPUT_DIR=")]
             if tag in environ:
                 if worker_dirs and Path(os.fsdecode(worker_dirs[0])).resolve() != task:
                     direct.discard(pid)
                     continue
                 tagged.add(pid)
-            if int(stat[3]) != pid:
+            if args is None:
                 continue
-            args = (proc / "cmdline").read_bytes().split(b"\0")
             cmd = b" ".join(args).decode(errors="replace")
             is_shell = os.path.basename(os.fsdecode(args[0])) in ("sh", "bash", "dash", "zsh")
             matches = task.name in cmd

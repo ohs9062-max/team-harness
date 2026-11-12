@@ -221,3 +221,45 @@ def test_mismatched_worker_tag_cannot_use_pid_or_guess(tmp_path: Path) -> None:
     finally:
         proc.terminate()
         proc.wait()
+
+
+def test_snapshot_matches_uncached_and_expires(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "test_liveness_snapshot", SCRIPTS / "th-job-liveness.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    old_spec = importlib.util.spec_from_file_location(
+        "old_liveness", Path(__file__).parent / "fixtures/th_job_liveness_before.py"
+    )
+    assert old_spec and old_spec.loader
+    old = importlib.util.module_from_spec(old_spec)
+    old_spec.loader.exec_module(old)
+    task = tmp_path / "snapshot_target"
+    task.mkdir()
+    env = {**os.environ, "TH_JOB_TASK": str(task), "TH_WORKER_OUTPUT_DIR": str(task)}
+    proc = subprocess.Popen(["sleep", "30"], env=env)
+    try:
+        clock = [100.0]
+        monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+        first = module.live_processes(task)
+        assert first == old.live_processes(task)
+        snapshot = module._snapshot
+        assert proc.pid in first[0]
+        assert module.live_processes(task) == first
+        assert module._snapshot is snapshot
+        # A fresh /proc scan and a reused scan make the same decision.
+        monkeypatch.setattr(module, "_snapshot", None)
+        assert module.live_processes(task) == first
+        snapshot = module._snapshot
+        clock[0] += 1.0
+        assert module.live_processes(task) == first
+        assert module._snapshot is not snapshot
+    finally:
+        proc.terminate()
+        proc.wait()
