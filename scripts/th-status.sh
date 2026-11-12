@@ -1452,12 +1452,13 @@ if not all_mode:
     for item in display_observed({rec["path"] for rec in task_records}, displayed_pids):
         if item["pid"] in displayed_pids:
             continue
-        parent = item.get("worker_task") if item["origin"] != "watchd" else None
+        dead = item["origin"] != "watchd" and str(item.get("claude_pid") or "").isdigit() and not Path("/proc", str(item["claude_pid"])).exists()
+        parent = item.get("worker_task") if item["origin"] != "watchd" and not dead else None
         if parent and any(rec["path"] == parent for rec in running_recs):
             observed_under.setdefault(parent, []).append(item)
             continue
-        matching = next((key for key in groups if item["origin"] != "watchd" and ((item.get("claude_pid") and key[2] == item["claude_pid"]) or ((item["kind"] != "작업" or not item.get("claude_pid")) and item.get("session_id") and key[1] == item["session_id"]))), None)
-        if matching is None and item["kind"] == "작업" and item.get("claude_pid"):
+        matching = next((key for key in groups if not dead and item["origin"] != "watchd" and ((item.get("claude_pid") and key[2] == item["claude_pid"]) or (not item.get("claude_pid") and item.get("session_id") and key[1] == item["session_id"]))), None)
+        if matching is None and dead:
             matching = (f"{item.get('workspace') or item['cwd']} · 코디네이터 종료됨", "", "?", "", "")
             groups.setdefault(matching, [])
         if matching is None and item["origin"] in ("worker", "coordinator"):
@@ -1743,13 +1744,14 @@ row_paths = {r[9] for r in rows}
 for item in display_observed(set(raw_tasks), displayed_pids):
     if item["pid"] in displayed_pids:
         continue
-    if item["origin"] != "watchd" and item.get("worker_task") in row_paths:
+    dead = item["origin"] != "watchd" and str(item.get("claude_pid") or "").isdigit() and not Path("/proc", str(item["claude_pid"])).exists()
+    if not dead and item["origin"] != "watchd" and item.get("worker_task") in row_paths:
         under_worker.setdefault(item["worker_task"], []).append(item)
         continue
     label = (item.get("workspace") or "코디네이터 불명") if item["origin"] in ("worker", "coordinator") else ("감시 데몬" if item["origin"] == "watchd" else "사용자 직접" if item["origin"] == "user" else "출처 불명")
-    if item["kind"] == "작업" and str(item.get("claude_pid") or "").isdigit() and not Path("/proc", str(item["claude_pid"])).exists():
+    if dead:
         label += " · 코디네이터 종료됨"
-    key = (label, str(item.get("claude_pid") or "?"), item.get("session_id") or "") if item["origin"] != "watchd" else (label, "?", "")
+    key = (label, str(item.get("claude_pid") or "?"), item.get("session_id") or "") if item["origin"] != "watchd" and not dead else (label, "?", "")
     extra_groups.setdefault(key, []).append(item)
 
 def print_all_observed(item):

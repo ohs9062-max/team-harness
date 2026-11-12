@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shlex
 from typing import Any
 
 from team_harness.agents.process_identity import capture_starttime
@@ -19,6 +20,8 @@ def _task(path: str) -> str | None:
         if not candidate.is_dir():
             candidate = candidate.parent
         for parent in (candidate, *candidate.parents):
+            if (parent / ".git").exists():
+                break
             if any(
                 (parent / name).is_file() for name in ("STATUS", "job.pid", "task.md")
             ):
@@ -293,6 +296,9 @@ def observe() -> list[dict[str, Any]]:
             "pid": pid,
             "start": identity,
             "cmd": " ".join(args)[:120],
+            "display_cmd": " ".join(args)
+            if "shell-snapshots/" in " ".join(args)
+            else "",
             "cwd": info["cwd"],
             "task": task,
             "origin": origin,
@@ -370,13 +376,29 @@ def observe() -> list[dict[str, Any]]:
     ]
 
 
+def display_command(command: str) -> str:
+    """Unwrap Claude tool shell commands for display without executing them."""
+    if "shell-snapshots/" not in command:
+        return command
+    try:
+        words = shlex.split(command)
+        for index, word in enumerate(words[:-1]):
+            if word == "eval":
+                return words[index + 1]
+    except ValueError:
+        pass
+    return command
+
+
 def display_records(
     records: list[dict[str, Any]], registered_tasks: set[str], registered_pids: set[int]
 ) -> list[dict[str, Any]]:
     """Exclude registered process trees and group remaining processes by task."""
-    grouped: dict[str, dict[str, Any]] = {}
+    grouped: dict[tuple[Any, ...], dict[str, Any]] = {}
     result: list[dict[str, Any]] = []
     for record in records:
+        if record.get("origin") == "user":
+            continue
         pid = record["pid"]
         task = record.get("task")
         if task and task in registered_tasks:
@@ -396,10 +418,13 @@ def display_records(
                 break
         if registered:
             continue
+        owner = (record.get("claude_pid") or "", record.get("session_id") or "")
         key = (
-            f"job:{record.get('workspace')}:{record.get('session_id')}:{record['cmd']}"
+            ("job", owner, record.get("workspace"), record["cmd"])
             if record.get("kind") == "작업"
-            else task or f"pid:{pid}"
+            else ("task", owner, task)
+            if task
+            else ("pid", pid)
         )
         if key in grouped:
             grouped[key]["count"] += 1
@@ -408,6 +433,7 @@ def display_records(
                 grouped[key].update(record, count=count)
         else:
             item = dict(record, count=1)
+            item["cmd"] = display_command(record.get("display_cmd") or record["cmd"])
             grouped[key] = item
             result.append(item)
     return result

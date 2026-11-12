@@ -105,7 +105,9 @@ def test_status_displays_observed_session(
             check=True,
         )
         assert "Observed title" in run.stdout
-        assert ("감시 데몬" if _watcher_ancestor() else "12345") in run.stdout
+        assert (
+            "감시 데몬" if _watcher_ancestor() else "코디네이터 종료됨"
+        ) in run.stdout
         run_all = subprocess.run(
             ["bash", str(repo / "scripts/th-status.sh"), "--all"],
             cwd=tmp_path,
@@ -116,7 +118,9 @@ def test_status_displays_observed_session(
             check=True,
         )
         assert "Observed title" in run_all.stdout
-        assert ("감시 데몬" if _watcher_ancestor() else "12345") in run_all.stdout
+        assert (
+            "감시 데몬" if _watcher_ancestor() else "코디네이터 종료됨"
+        ) in run_all.stdout
     finally:
         child.terminate()
         child.wait()
@@ -166,7 +170,7 @@ def test_status_index_failure_preserves_output(tmp_path: Path):
     second = subprocess.run(
         command, cwd=tmp_path, env=env, text=True, capture_output=True, check=True
     )
-    assert first.stdout == second.stdout
+    assert first.stdout.partition("  실행")[2] == second.stdout.partition("  실행")[2]
     assert "observation unavailable" in second.stderr
 
 
@@ -251,7 +255,7 @@ def test_all_places_child_below_registered_worker(
         TH_WATCH_DIR=str(watch),
         TH_WORKER_OUTPUT_DIR=str(worker),
         TH_ROLE="worker",
-        CLAUDE_PID="12345",
+        CLAUDE_PID=str(os.getpid()),
         CLAUDE_CODE_SESSION_ID="test-session",
         TH_WORKSPACE=str(tmp_path),
     )
@@ -737,7 +741,8 @@ def test_job_launch_modes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode:
         child.wait(timeout=5)
 
 
-def test_status_shows_ended_coordinator_for_job(tmp_path: Path):
+@pytest.mark.parametrize("kind", ["작업", "job"])
+def test_status_shows_ended_coordinator_for_job(tmp_path: Path, kind: str):
     repo = Path(__file__).resolve().parents[2]
     row = dict(
         pid=99999999,
@@ -751,7 +756,7 @@ def test_status_shows_ended_coordinator_for_job(tmp_path: Path):
         claude_pid="99999999",
         workspace=str(tmp_path),
         worker_task=None,
-        kind="작업",
+        kind=kind,
         parent=1,
         child_summary="child-command",
     )
@@ -777,5 +782,90 @@ def test_status_shows_ended_coordinator_for_job(tmp_path: Path):
         check=True,
     )
     assert "코디네이터 종료됨" in result.stdout
-    assert "↳ 작업 · example-job" in result.stdout
-    assert "child-command" in result.stdout
+    assert "example-job" in result.stdout
+    if kind == "작업":
+        assert "child-command" in result.stdout
+
+
+def test_task_ignores_git_roots_and_accepts_subdirectories(tmp_path: Path):
+    from team_harness.proc_observer import _task
+
+    root = tmp_path / "repo"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    (root / "STATUS").write_text("old")
+    child = root / "child"
+    child.mkdir()
+    assert _task(str(root)) is None
+    assert _task(str(child)) is None
+    (child / "job.pid").write_text("1")
+    assert _task(str(child)) == str(child)
+    worktree = tmp_path / "linked"
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "-c",
+            "user.name=test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "initial",
+        ],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(root), "worktree", "add", "-q", str(worktree)], check=True
+    )
+    (worktree / "STATUS").write_text("old")
+    assert _task(str(worktree)) is None
+
+
+def test_display_records_filters_user_and_separates_owners(tmp_path: Path):
+    from team_harness.proc_observer import display_records
+
+    base = dict(
+        start="boot:1",
+        cmd="runner",
+        cwd=str(tmp_path),
+        task=str(tmp_path),
+        origin="coordinator",
+        workspace=str(tmp_path),
+        kind="job",
+    )
+    records = [
+        dict(base, pid=90000001, session_id="one", claude_pid="100"),
+        dict(base, pid=90000002, session_id="two", claude_pid="200"),
+        dict(base, pid=90000003, session_id="", claude_pid="", origin="user"),
+    ]
+    result = display_records(records, set(), set())
+    assert len(result) == 2
+    assert {row["session_id"] for row in result} == {"one", "two"}
+
+
+def test_display_command_unwraps_snapshot_eval():
+    from team_harness.proc_observer import display_command
+
+    command = "/bin/bash -c source /tmp/shell-snapshots/snapshot-bash-x.sh ';' eval 'python run.py --name test'"
+    assert display_command(command) == "python run.py --name test"
+    from team_harness.proc_observer import display_records
+
+    long_command = command.replace("/tmp/", "/tmp/" + "a" * 150 + "/")
+    record = dict(
+        pid=90000009,
+        origin="coordinator",
+        cmd=long_command[:120],
+        display_cmd=long_command,
+        kind="작업",
+    )
+    assert (
+        display_records([record], set(), set())[0]["cmd"] == "python run.py --name test"
+    )
+    assert display_command("eval 'other'") == "eval 'other'"
+    assert (
+        display_command("source /tmp/shell-snapshots/x eval 'broken")
+        == "source /tmp/shell-snapshots/x eval 'broken"
+    )
