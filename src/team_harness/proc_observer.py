@@ -46,6 +46,14 @@ def has_ancestor_command(name: str) -> bool:
     return False
 
 
+def _ancestors(pid: int, proc: dict[int, dict[str, Any]]) -> set[int]:
+    seen: set[int] = set()
+    while pid in proc and pid not in seen:
+        seen.add(pid)
+        pid = proc[pid]["parent"]
+    return seen
+
+
 def observe() -> list[dict[str, Any]]:
     """Return a snapshot; individual processes can disappear while being read."""
     if os.environ.get("TH_OBSERVE") == "0":
@@ -73,6 +81,8 @@ def observe() -> list[dict[str, Any]]:
             proc[pid] = {
                 "parent": int(fields[1]),
                 "session": int(fields[3]),
+                "pgrp": int(fields[2]),
+                "ticks": int(fields[19]),
                 "args": args,
                 "cwd": os.readlink(entry / "cwd"),
             }
@@ -147,6 +157,9 @@ def observe() -> list[dict[str, Any]]:
         return env_cache[pid]
 
     candidates: dict[int, dict[str, Any]] = {}
+    uptime = float(Path("/proc/uptime").read_text().split()[0])
+    ticks_per_second = os.sysconf("SC_CLK_TCK")
+    helpers = {"sleep", "head", "tail", "cat", "flock", "timeout", "tee"}
     for pid, info in proc.items():
         args = info["args"]
         name = os.path.basename(args[0].split(" ", 1)[0])
@@ -177,6 +190,7 @@ def observe() -> list[dict[str, Any]]:
                     "journal-hook.sh",
                     "th-watchd.sh",
                     "th-watch.sh",
+                    "th-inbox-wait.sh",
                 )
             )
             for a in args
@@ -193,7 +207,14 @@ def observe() -> list[dict[str, Any]]:
         task = _task(info["cwd"]) or next(
             (p for a in args[1:] if (p := _task(a))), None
         )
-        if not agent and not task:
+        own_env = env(pid) or {}
+        is_job = (
+            not agent
+            and not task
+            and bool(own_env.get("CLAUDE_PID") or own_env.get("CLAUDE_CODE_SESSION_ID"))
+            and uptime - info["ticks"] / ticks_per_second >= 30
+        )
+        if not agent and not task and not is_job:
             continue
         if name == "claude" and not agent:
             continue
@@ -242,6 +263,8 @@ def observe() -> list[dict[str, Any]]:
                     if resolved_workspace:
                         inherited["TH_WORKSPACE"] = resolved_workspace
             cursor = proc[cursor]["parent"]
+        if is_job and daemon:
+            continue
         worker = inherited.get("TH_WORKER_OUTPUT_DIR") or inherited.get("TH_JOB_TASK")
         session = inherited.get("CLAUDE_CODE_SESSION_ID")
         workspace = inherited.get("TH_WORKSPACE") or inherited.get("ORCA_WORKTREE_ID")
@@ -276,9 +299,11 @@ def observe() -> list[dict[str, Any]]:
             "session_id": session,
             "route_key": route_key,
             "claude_pid": inherited.get("CLAUDE_PID"),
-            "workspace": workspace,
+            "workspace": workspace or (info["cwd"] if is_job else None),
             "worker_task": worker,
-            "kind": "검수·유지보수"
+            "kind": "작업"
+            if is_job
+            else "검수·유지보수"
             if daemon
             else "하위 워커"
             if agent
@@ -286,8 +311,63 @@ def observe() -> list[dict[str, Any]]:
             if task and info["session"] == pid
             else "스크립트",
             "parent": info["parent"],
+            "pgrp": info["pgrp"],
+            "helper": name in helpers,
         }
-    return list(candidates.values())
+    jobs = {pid: row for pid, row in candidates.items() if row["kind"] == "작업"}
+    for pid, row in list(jobs.items()):
+        cursor = row["parent"]
+        seen: set[int] = set()
+        while cursor in proc and cursor not in seen:
+            seen.add(cursor)
+            ancestor = candidates.get(cursor)
+            if ancestor and (
+                ancestor["kind"] == "하위 워커"
+                or (ancestor.get("task") and ancestor["origin"] == "worker")
+            ):
+                jobs.pop(pid, None)
+                break
+            cursor = proc[cursor]["parent"]
+    roots: dict[tuple[Any, ...], list[int]] = {}
+    for pid, row in jobs.items():
+        root = pid
+        seen = set()
+        while root in jobs and root not in seen:
+            seen.add(root)
+            parent = jobs[root]["parent"]
+            if parent not in jobs or (
+                row["pgrp"] and jobs[parent]["pgrp"] != row["pgrp"]
+            ):
+                break
+            root = parent
+        root_row = jobs[root]
+        group_key = (
+            root_row["pgrp"],
+            root_row["parent"],
+            root_row["claude_pid"],
+            root_row["session_id"],
+        )
+        roots.setdefault(group_key, []).append(pid)
+    selected: set[int] = set()
+    for members in roots.values():
+        useful = [pid for pid in members if not jobs[pid]["helper"]]
+        if not useful:
+            continue
+        top = min(
+            useful, key=lambda pid: (len(_ancestors(pid, proc)), proc[pid]["ticks"])
+        )
+        selected.add(top)
+        descendants = [
+            pid for pid in useful if pid != top and top in _ancestors(pid, proc)
+        ]
+        if descendants:
+            oldest = min(descendants, key=lambda pid: proc[pid]["ticks"])
+            jobs[top]["child_summary"] = jobs[oldest]["cmd"]
+    return [
+        row
+        for pid, row in candidates.items()
+        if row["kind"] != "작업" or pid in selected
+    ]
 
 
 def display_records(
@@ -316,7 +396,11 @@ def display_records(
                 break
         if registered:
             continue
-        key = task or f"pid:{pid}"
+        key = (
+            f"job:{record.get('workspace')}:{record.get('session_id')}:{record['cmd']}"
+            if record.get("kind") == "작업"
+            else task or f"pid:{pid}"
+        )
         if key in grouped:
             grouped[key]["count"] += 1
             if record["origin"] == "watchd" and grouped[key]["origin"] != "watchd":

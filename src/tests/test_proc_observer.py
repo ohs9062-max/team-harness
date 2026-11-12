@@ -4,6 +4,7 @@ from pathlib import Path
 import sqlite3
 import subprocess
 import sys
+from typing import Any
 
 import pytest
 
@@ -617,3 +618,164 @@ def test_watchd_descendants_and_grouped_registered_processes(
         if daemon_children:
             os.kill(daemon_children[0]["pid"], 15)
         daemon.wait(timeout=5)
+
+
+def test_session_job_age_and_helpers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("TH_OBSERVE", "1")
+    child_env = dict(
+        os.environ,
+        CLAUDE_PID="99999999",
+        CLAUDE_CODE_SESSION_ID="job-test",
+        TH_WORKSPACE=str(tmp_path),
+    )
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        cwd=tmp_path,
+        env=child_env,
+        start_new_session=True,
+    )
+    helper = subprocess.Popen(
+        ["sleep", "60"], cwd=tmp_path, env=child_env, start_new_session=True
+    )
+    clean_env = {
+        key: value
+        for key, value in child_env.items()
+        if key not in ("CLAUDE_PID", "CLAUDE_CODE_SESSION_ID")
+    }
+    unrelated = subprocess.Popen(
+        ["/usr/bin/python3", "-c", "import time; time.sleep(60)"],
+        cwd=tmp_path,
+        env=clean_env,
+        start_new_session=True,
+    )
+    try:
+        assert not any(r["pid"] == child.pid for r in proc_observer.observe())
+        original = Path.read_text
+
+        def advanced(path: Path, *args: Any, **kwargs: Any) -> str:
+            value = original(path, *args, **kwargs)
+            if str(path) in {
+                f"/proc/{pid}/stat" for pid in (child.pid, helper.pid, unrelated.pid)
+            }:
+                prefix, fields = value.rsplit(") ", 1)
+                parts = fields.split()
+                parts[1] = "1"
+                return prefix + ") " + " ".join(parts)
+            if str(path) == "/proc/uptime":
+                return f"{float(value.split()[0]) + 31} 0"
+            return value
+
+        monkeypatch.setattr(Path, "read_text", advanced)
+        rows = proc_observer.observe()
+        row = next(r for r in rows if r["pid"] == child.pid)
+        assert row["kind"] == "작업"
+        assert row["session_id"] == "job-test"
+        assert not any(r["pid"] in (helper.pid, unrelated.pid) for r in rows)
+    finally:
+        unrelated.terminate()
+        unrelated.wait()
+        child.terminate()
+        helper.terminate()
+        child.wait()
+        helper.wait()
+
+
+@pytest.mark.parametrize("mode", ["background", "nohup", "setsid", "script", "popen"])
+def test_job_launch_modes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str):
+    import shlex
+
+    monkeypatch.setenv("TH_OBSERVE", "1")
+    executable = shlex.quote("/usr/bin/python3")
+    command = f"{executable} -c 'import time; time.sleep(2)'"
+    if mode == "nohup":
+        command = "nohup " + command
+    if mode == "setsid":
+        command = "setsid " + command
+    if mode == "script":
+        script = tmp_path / "runner.sh"
+        script.write_text(command + " &\nwait\n")
+        args = ["bash", str(script)]
+    elif mode == "popen":
+        args = ["/usr/bin/python3", "-c", "import time; time.sleep(2)"]
+    else:
+        args = ["bash", "-c", command + " & wait"]
+    env = dict(
+        os.environ,
+        CLAUDE_PID="99999999",
+        CLAUDE_CODE_SESSION_ID="launch-test",
+        TH_WORKSPACE=str(tmp_path),
+    )
+    child = subprocess.Popen(
+        args,
+        cwd=tmp_path,
+        env=env,
+        start_new_session=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        original = Path.read_text
+
+        def advanced(path: Path, *args: Any, **kwargs: Any) -> str:
+            value = original(path, *args, **kwargs)
+            if str(path) == f"/proc/{child.pid}/stat":
+                prefix, fields = value.rsplit(") ", 1)
+                parts = fields.split()
+                parts[1] = "1"
+                return prefix + ") " + " ".join(parts)
+            if str(path) == "/proc/uptime":
+                return f"{float(value.split()[0]) + 31} 0"
+            return value
+
+        monkeypatch.setattr(Path, "read_text", advanced)
+        rows = proc_observer.observe()
+        row = next(r for r in rows if r["pid"] == child.pid)
+        assert row["kind"] == "작업"
+        assert row["session_id"] == "launch-test"
+        assert row["claude_pid"] == "99999999"
+    finally:
+        child.wait(timeout=5)
+
+
+def test_status_shows_ended_coordinator_for_job(tmp_path: Path):
+    repo = Path(__file__).resolve().parents[2]
+    row = dict(
+        pid=99999999,
+        start="boot:1",
+        cmd="example-job",
+        cwd=str(tmp_path),
+        task=None,
+        origin="coordinator",
+        session_id="job-test",
+        route_key="",
+        claude_pid="99999999",
+        workspace=str(tmp_path),
+        worker_task=None,
+        kind="작업",
+        parent=1,
+        child_summary="child-command",
+    )
+    (tmp_path / "sitecustomize.py").write_text(
+        "import team_harness.coordinator_identity as i\ni.live_coordinators = lambda: []\n"
+        f"import team_harness.proc_observer as p\np.observe = lambda: [{row!r}]\n"
+    )
+    env = dict(
+        os.environ,
+        PYTHONPATH=str(tmp_path),
+        HOME=str(tmp_path),
+        TH_WATCH_DIR=str(tmp_path / "watch"),
+        TH_ROLE="worker",
+        TH_SKIP_COORD_LOG="1",
+    )
+    result = subprocess.run(
+        ["bash", str(repo / "scripts/th-status.sh")],
+        cwd=tmp_path,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=20,
+        check=True,
+    )
+    assert "코디네이터 종료됨" in result.stdout
+    assert "↳ 작업 · example-job" in result.stdout
+    assert "child-command" in result.stdout

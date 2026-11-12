@@ -158,7 +158,7 @@ def process_events(db: sqlite3.Connection, registered: set[Path], now: str) -> N
     cutoff = (now_dt - timedelta(hours=1)).isoformat()
     if os.environ.get("TH_OBSERVED_NOTIFY") != "0":
         rows = db.execute(
-            "SELECT pid,start,route_key,workspace,worker_task,task,cmd, (SELECT claude_pid FROM sessions WHERE sessions.session_id=processes.session_id) FROM processes WHERE ended_at IS NOT NULL AND origin IN ('worker','coordinator')"
+            "SELECT pid,start,route_key,workspace,worker_task,task,cmd, (SELECT claude_pid FROM sessions WHERE sessions.session_id=processes.session_id) FROM processes WHERE ended_at IS NOT NULL AND COALESCE(kind, '') != '작업' AND origin IN ('worker','coordinator')"
         ).fetchall()
         for pid, start, session, workspace, worker_task, task, cmd, claude_pid in rows:
             location = task or worker_task or ""
