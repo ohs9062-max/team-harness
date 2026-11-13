@@ -186,3 +186,58 @@ def test_maintenance_isolated(env: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(state_index, "update", lambda: pytest.fail("disabled"))
     maintenance.run_once()
     assert len(called) == 8
+
+
+def test_retention_and_indexes(env: Path, monkeypatch: pytest.MonkeyPatch):
+    state_index.update([])
+    now = datetime.now(UTC)
+    with sqlite3.connect(env / "th.db") as db:
+
+        def add(pid: int, kind: str, days: int):
+            stamp = (now - timedelta(days=days)).isoformat()
+            db.execute(
+                "INSERT INTO processes(pid,start,ended_at,kind) VALUES (?,?,?,?)",
+                (pid, "start", stamp, kind),
+            )
+
+        add(1, "스크립트", 6)
+        add(2, "스크립트", 8)
+        for pid, kind in enumerate(state_index.WORKER_KINDS, 3):
+            add(pid, kind, 8)
+        add(6, "job", 91)
+        old = (now - timedelta(days=31)).isoformat()
+        db.executemany(
+            "INSERT INTO observed_notices VALUES (?,?)",
+            [("task:reused", old), ("pid:1:start", old), ("pid:2:start", old)],
+        )
+        assert state_index.prune(db, now)
+        assert not state_index.prune(db, now + timedelta(hours=23))
+        assert [
+            row[0] for row in db.execute("SELECT pid FROM processes ORDER BY pid")
+        ] == [1, 3, 4, 5]
+        assert {
+            row[0] for row in db.execute("SELECT identity FROM observed_notices")
+        } == {"task:reused", "pid:1:start"}
+        for table, expected in {
+            "tasks": 2,
+            "failures": 1,
+            "events": 2,
+            "coord_log": 1,
+            "processes": 3,
+            "sessions": 1,
+        }.items():
+            assert (
+                len(
+                    [
+                        row
+                        for row in db.execute(f"PRAGMA index_list({table})")
+                        if row[1].startswith("idx_")
+                    ]
+                )
+                == expected
+            )
+        monkeypatch.setenv("TH_DB_KEEP_AUX_DAYS", "5")
+        assert state_index.prune(db, now + timedelta(days=1))
+        assert (
+            db.execute("SELECT count(*) FROM processes WHERE pid=1").fetchone()[0] == 0
+        )

@@ -230,3 +230,43 @@ def test_installed_session_hook_migrates_old_matcher_and_initializes_clear(
     assert "current policy already loaded on clear" not in result.stdout
     state = json.loads((workspace / ".claude/.policy_versions.json").read_text())
     assert list(state.values()) == [hashlib.sha256(policy.read_bytes()).hexdigest()]
+
+
+def test_policy_history_diff_and_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from team_harness.deployment import remember_policy
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("TH_ROLE", raising=False)
+    directory = tmp_path / ".team-harness"
+    directory.mkdir()
+    policy = directory / "operating_policy.md"
+    workspace = tmp_path / "workspace"
+
+    def deploy(content: str):
+        policy.write_text(content)
+        (directory / "deployment.json").write_text(
+            json.dumps(
+                {
+                    "revision": "a" * 40,
+                    "files": {
+                        str(policy): hashlib.sha256(content.encode()).hexdigest()
+                    },
+                }
+            )
+        )
+
+    deploy("# 절\nunchanged\nold\n")
+    assert "unchanged" in notice(workspace, {"session_id": "s"})
+    remember_policy(policy, directory)
+    deploy("# 절\nunchanged\nnew\n")
+    result = notice(workspace, {"session_id": "s"})
+    assert "# 절" in result and "-old" in result and "+new" in result
+    assert (
+        "unchanged" not in result
+        and "전문: ~/.team-harness/operating_policy.md" in result
+    )
+    remember_policy(policy, directory)
+    for i in range(21):
+        policy.write_text(str(i))
+        remember_policy(policy, directory)
+    assert len(list((directory / "policy_history").glob("*.md"))) == 20

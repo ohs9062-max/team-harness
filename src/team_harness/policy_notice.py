@@ -1,5 +1,6 @@
 """Deliver deployed policy changes once per coordinator session."""
 
+import difflib
 import fcntl
 import hashlib
 import json
@@ -8,6 +9,31 @@ from pathlib import Path
 import sys
 
 MAX_SESSIONS = 128
+
+
+def policy_diff(previous: str, current: str) -> str:
+    old, new = previous.splitlines(), current.splitlines()
+    changes: list[str] = []
+    last_heading = ""
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(
+        None, old, new, autojunk=False
+    ).get_opcodes():
+        if tag == "equal":
+            continue
+        heading = next(
+            (line for line in reversed(new[: j1 + 1]) if line.startswith("#")), ""
+        )
+        if not heading:
+            heading = next(
+                (line for line in reversed(old[: i1 + 1]) if line.startswith("#")), ""
+            )
+        if heading and heading != last_heading:
+            changes.append(heading)
+            last_heading = heading
+        changes.extend("-" + line for line in old[i1:i2])
+        changes.extend("+" + line for line in new[j1:j2])
+    truncated = len(changes) > 30
+    return "\n".join(changes[:30]) + ("\n… (이하 생략)" if truncated else "")
 
 
 def notice(workspace: Path, payload: dict, *, session_start: bool = False) -> str:
@@ -57,7 +83,24 @@ def notice(workspace: Path, payload: dict, *, session_start: bool = False) -> st
             legacy.unlink(missing_ok=True)
         if session_start:
             return ""
-        return f"## team-harness 정책 업데이트 {deployment['revision'][:12]}\n{policy}"
+        body = policy
+        if (
+            isinstance(previous, str)
+            and len(previous) == 64
+            and all(c in "0123456789abcdef" for c in previous)
+        ):
+            try:
+                old = (directory / "policy_history" / f"{previous}.md").read_text(
+                    encoding="utf-8"
+                )
+                if hashlib.sha256(old.encode()).hexdigest() == previous:
+                    body = (
+                        policy_diff(old, policy)
+                        + "\n전문: ~/.team-harness/operating_policy.md"
+                    )
+            except OSError:
+                pass
+        return f"## team-harness 정책 업데이트 {deployment['revision'][:12]}\n{body}"
     except (OSError, ValueError, KeyError, TypeError):
         return ""
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime
+from datetime import timedelta
 from datetime import UTC
 import hashlib
 import json
@@ -32,6 +33,16 @@ CREATE TABLE IF NOT EXISTS observed_notices(identity TEXT PRIMARY KEY, at TEXT);
 CREATE TABLE IF NOT EXISTS breaker_events(at TEXT, session_id TEXT, workspace TEXT, reason TEXT, value TEXT);
 CREATE TABLE IF NOT EXISTS coord_log(workspace TEXT, at TEXT, kind TEXT, task TEXT, text TEXT, line_hash TEXT UNIQUE);
 CREATE TABLE IF NOT EXISTS ingest_state(source TEXT PRIMARY KEY, inode INTEGER, offset INTEGER);
+CREATE INDEX IF NOT EXISTS idx_tasks_owner ON tasks(owner);
+CREATE INDEX IF NOT EXISTS idx_tasks_task_key ON tasks(task_key);
+CREATE INDEX IF NOT EXISTS idx_failures_task_at ON failures(task, at);
+CREATE INDEX IF NOT EXISTS idx_events_task ON events(task);
+CREATE INDEX IF NOT EXISTS idx_events_at ON events(at);
+CREATE INDEX IF NOT EXISTS idx_coord_log_workspace_kind_at ON coord_log(workspace, kind, at);
+CREATE INDEX IF NOT EXISTS idx_processes_workspace ON processes(workspace);
+CREATE INDEX IF NOT EXISTS idx_processes_session ON processes(session_id);
+CREATE INDEX IF NOT EXISTS idx_processes_ended ON processes(ended_at);
+CREATE INDEX IF NOT EXISTS idx_sessions_workspace ON sessions(workspace);
 """
 
 
@@ -130,6 +141,49 @@ def _coord_log_kind(line: str) -> str:
     if "FAIL" in field[:20] or "실패" in field[:20]:
         return "실패"
     return "기타"
+
+
+WORKER_KINDS = ("하위 워커", "job", "작업")
+
+
+def _keep_days(name: str, default: int) -> int:
+    try:
+        return max(0, int(os.environ.get(name, str(default))))
+    except ValueError:
+        return default
+
+
+def prune(db: sqlite3.Connection, now: datetime) -> bool:
+    """Prune at most once per day, within the caller's transaction."""
+    previous = db.execute("SELECT value FROM meta WHERE key='last_prune'").fetchone()
+    if previous:
+        try:
+            if now - datetime.fromisoformat(previous[0]) < timedelta(days=1):
+                return False
+        except (ValueError, TypeError):
+            pass
+    aux = (now - timedelta(days=_keep_days("TH_DB_KEEP_AUX_DAYS", 7))).isoformat()
+    worker = (
+        now - timedelta(days=_keep_days("TH_DB_KEEP_WORKER_DAYS", 90))
+    ).isoformat()
+    db.execute(
+        "DELETE FROM processes WHERE ended_at IS NOT NULL AND "
+        "((COALESCE(kind, '') IN (?,?,?) AND julianday(ended_at)<julianday(?)) OR "
+        "(COALESCE(kind, '') NOT IN (?,?,?) AND julianday(ended_at)<julianday(?)))",
+        (*WORKER_KINDS, worker, *WORKER_KINDS, aux),
+    )
+    cutoff = (now - timedelta(days=30)).isoformat()
+    db.execute(
+        "DELETE FROM observed_notices WHERE identity LIKE 'pid:%' AND "
+        "julianday(at)<julianday(?) AND NOT EXISTS "
+        "(SELECT 1 FROM processes WHERE observed_notices.identity = "
+        "'pid:' || processes.pid || ':' || processes.start)",
+        (cutoff,),
+    )
+    db.execute(
+        "INSERT OR REPLACE INTO meta VALUES ('last_prune',?)", (now.isoformat(),)
+    )
+    return True
 
 
 def update(
@@ -428,6 +482,12 @@ def update(
                     "INSERT OR IGNORE INTO events VALUES (?,?,?,?,?,?)",
                     (str(path), digest, stamp.isoformat(), task, kind, line[:400]),
                 )
+        if maintenance and prune(db, datetime.now(UTC)):
+            db.commit()
+            try:
+                db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            except sqlite3.Error:
+                pass
 
 
 def main() -> int:

@@ -32,3 +32,9 @@
 ## 실행 관찰 확장
 
 실행 중인 프로세스의 PID와 시작 신원, 세션과 출처를 processes와 sessions에 기록하며 사라진 항목의 종료 관찰 시각을 채운다. 관찰된 작업과 해당 워크스페이스의 코디네이터 work_log도 색인한다. ths에서 갱신하고 th-why에서 원인과 유사 실패를 조회한다. 관찰 실패는 기존 실행을 차단하지 않는다.
+
+## 색인과 보존
+
+tasks의 owner·task_key, failures의 task·at, events의 task와 at, coord_log의 workspace·kind·at, processes의 workspace·session_id·ended_at, sessions의 workspace에 색인을 둔다. attempts의 task는 기본키 색인을 사용한다. 기존 DB에도 갱신 시 색인을 추가한다.
+
+유지보수 갱신은 meta의 마지막 정리 시각을 기준으로 하루에 한 번 이하 정리한다. 종료된 보조 프로세스는 7일, 하위 워커·job·작업은 90일 보존하며 각각 `TH_DB_KEEP_AUX_DAYS`, `TH_DB_KEEP_WORKER_DAYS`로 일수를 조정한다. 실행 중인 프로세스와 작업·시도·실패·채택·일지·사건 이력은 지우지 않는다. PID와 시작 시각으로 식별한 관찰 알림은 30일이 지나고 해당 프로세스도 삭제된 경우 정리한다. 작업 경로 신원은 재사용 가능하므로 재알림 방지를 위해 유지한다. 정리 후 WAL truncate 체크포인트를 시도하며 다른 연결이 방해하면 다음 기회에 맡긴다.

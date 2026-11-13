@@ -75,6 +75,21 @@ def install_file(source: Path, target: Path, home: Path) -> None:
     atomic_write(target, source.read_bytes(), mode)
 
 
+def remember_policy(path: Path, directory: Path) -> None:
+    if not path.is_file():
+        return
+    content = path.read_bytes()
+    history = directory / "policy_history"
+    target = history / (hashlib.sha256(content).hexdigest() + ".md")
+    atomic_write(target, content, 0o600)
+    for old in sorted(
+        history.glob("[0-9a-f]" * 64 + ".md"),
+        key=lambda p: p.stat().st_mtime_ns,
+        reverse=True,
+    )[20:]:
+        old.unlink()
+
+
 def install_link(source: Path, target: Path, home: Path) -> None:
     if target.is_symlink() and target.resolve() == source.resolve():
         return
@@ -395,7 +410,11 @@ def apply(root: Path = ROOT, home: Path | None = None) -> dict:
             ("design/designs/operating_policy.md", directory / "operating_policy.md"),
             ("design/user_config/worker_suffix.md", directory / "worker_suffix.md"),
         ):
+            if relative == "design/designs/operating_policy.md":
+                remember_policy(target, directory)
             install_file(root / relative, target, home)
+            if relative == "design/designs/operating_policy.md":
+                remember_policy(target, directory)
             installed[str(target)] = digest(target)
         for skill in ("orca-harness-protocol", "team-harness"):
             for client in (".agents", ".claude", ".codex"):
