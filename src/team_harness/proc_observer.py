@@ -260,10 +260,15 @@ def observe() -> list[dict[str, Any]]:
         )
         if name.startswith("codex") and not agent:
             continue
-        task = _task(info["cwd"]) or next(
-            (p for a in args[1:] if (p := _task(a))), None
-        )
         own_env = env(pid) or {}
+        task = _task(info["cwd"]) or next(
+            (
+                p
+                for key in ("TH_TASK_DIR", "TH_WORKER_OUTPUT_DIR", "TH_JOB_TASK")
+                if (p := _task(own_env.get(key, "")))
+            ),
+            None,
+        )
         is_job = (
             not agent
             and not task

@@ -19,6 +19,46 @@ UNRESOLVED = """t.state IN ('failed','verify_failed') AND NOT EXISTS (
  AND lower(a.result) IN ('done','verified'))"""
 
 
+def failure_signature(detail: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Return normalized failing checks and causes, excluding diagnostic noise."""
+    checks = tuple(
+        sorted(set(re.findall(r"(?m)^\s*-?\s*([^\n:]+):\s*\[FAIL\]", detail)))
+    )
+    checks = tuple(x.strip() for x in checks)
+    causes = []
+    for pattern, label in (
+        (r"STOPPED_BY_USER", "STOPPED_BY_USER"),
+        (r"\b429\b|rate[ -]?limit|quota|쿼터", "quota"),
+        (r"\bQUEUED\b|프로세스 소실", "process_lost"),
+        (r"\bauth(?:entication|orization)?\b|unauthorized|forbidden|인증", "auth"),
+    ):
+        if re.search(pattern, detail, re.I):
+            causes.append(label)
+    step = re.search(r"\bstep=([^\s,]+).*?\brc=(\d+)", detail)
+    if step:
+        causes.append(f"{step.group(1)} rc={step.group(2)}")
+    for line in detail.splitlines():
+        if re.search(r"error|exception|오류|실패", line, re.I) and not re.search(
+            r"\[(?:SKIP|FAIL)\]|Traceback", line, re.I
+        ):
+            line = re.sub(r"(?:/[^\s:]+)+", "<path>", line.strip())
+            line = re.sub(r"\b[0-9a-f]{8,}\b|\d+", "#", line, flags=re.I)
+            causes.append(line.lower()[:120])
+            break
+    if not checks and not causes and len(detail.splitlines()) == 1:
+        line = re.sub(r"(?:/[^\s:]+)+", "<path>", detail.strip())
+        line = re.sub(r"\b[0-9a-f]{8,}\b|\d+", "#", line, flags=re.I)
+        if line:
+            causes.append(line.lower()[:120])
+    return checks, tuple(sorted(causes))
+
+
+def _failure_summary(category: str, detail: str) -> str:
+    checks, causes = failure_signature(detail or "")
+    parts = [category, *(causes or ()), *(f"FAIL {item}" for item in checks)]
+    return " · ".join(parts)[:200]
+
+
 def normalize_workspace(workspace: str) -> str:
     path = Path(workspace).expanduser().resolve()
     try:
@@ -142,23 +182,50 @@ def why(target: str, limit: int = 30, *, readonly: bool = False) -> str:
             (task,),
         ).fetchone()
         if failure:
-            lines.append(f"실패: {failure[0]} · {' '.join(failure[1].splitlines())}")
-            for other, detail in db.execute(
-                f"SELECT f.task,f.detail FROM failures f JOIN tasks t ON t.task=f.task WHERE f.category=? AND f.task!=? AND datetime(f.at)>=datetime('now','-7 days') AND {UNRESOLVED} GROUP BY f.task ORDER BY f.at DESC LIMIT 3",
-                (failure[0], task),
-            ):
-                lines.append(f"유사 실패: {other} · {detail}")
-                for (text,) in db.execute(
-                    "SELECT text FROM coord_log WHERE task=? AND kind IN ('진단','결정','실패') ORDER BY at DESC LIMIT 1",
-                    (other,),
-                ):
-                    lines.append(f"  관련 기록: {text}")
-        try:
-            failed_text = (Path(task) / "FAILED").read_text(errors="replace")[:1000]
-            if failed_text:
-                lines.append("FAILED: " + " ".join(failed_text.splitlines()))
-        except OSError:
-            pass
+            unresolved = db.execute(
+                f"SELECT 1 FROM failures f JOIN tasks t ON t.task=f.task WHERE f.task=? AND {UNRESOLVED} LIMIT 1",
+                (task,),
+            ).fetchone()
+            summary = _failure_summary(failure[0], failure[1])
+            if not unresolved:
+                lines.append(f"지난 실패(해결됨): {summary}")
+            else:
+                lines.append(f"실패: {summary}")
+                signature = failure_signature(failure[1] or "")
+                owner, key = db.execute(
+                    "SELECT owner,task_key FROM tasks WHERE task=?", (task,)
+                ).fetchone()
+                prefix = (key or "").split("_")[0]
+                candidates = db.execute(
+                    f"SELECT f.task,f.detail,t.owner,t.task_key FROM failures f JOIN tasks t ON t.task=f.task WHERE f.category=? AND f.task!=? AND datetime(f.at)>=datetime('now','-7 days') AND {UNRESOLVED} ORDER BY f.at DESC",
+                    (failure[0], task),
+                ).fetchall()
+                matches = []
+                seen = set()
+                for other, detail, other_owner, other_key in candidates:
+                    if other in seen:
+                        continue
+                    seen.add(other)
+                    if (
+                        signature != ((), ())
+                        and failure_signature(detail or "") == signature
+                    ):
+                        priority = bool(owner and owner == other_owner) or bool(
+                            prefix and (other_key or "").split("_")[0] == prefix
+                        )
+                        matches.append((not priority, other, detail))
+                matches.sort(key=lambda item: item[0])
+                if not matches:
+                    lines.append("유사 실패 없음")
+                for _, other, detail in matches[:3]:
+                    lines.append(
+                        f"유사 실패: {other} · {_failure_summary(failure[0], detail)}"
+                    )
+                    for (text,) in db.execute(
+                        "SELECT text FROM coord_log WHERE task=? AND kind IN ('진단','결정','실패') ORDER BY at DESC LIMIT 1",
+                        (other,),
+                    ):
+                        lines.append(f"  관련 기록: {text}")
         for (text,) in db.execute(
             "SELECT text FROM events WHERE task=? OR text LIKE ? ORDER BY at DESC LIMIT 3",
             (task, f"%{Path(task).name}%"),
