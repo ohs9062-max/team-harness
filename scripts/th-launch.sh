@@ -39,6 +39,10 @@ journal_append() {
 (( $# >= 1 )) || { echo '사용: th-launch.sh <작업폴더> [codex|agy|claude] <모델> <effort> <작업트리> [추가 인자]'; exit 2; }
 task_dir=$(realpath "$1"); shift
 py_src=$(cd "$script_dir/../src" && pwd)
+if [[ ${TH_PREFLIGHT_ONLY:-0} != 1 && ${TH_AUTO_RECALL:-1} != 0 ]]; then
+  recall_key=$(sed -n 's/^task_key:[[:space:]]*//p' "$task_dir/task.md" 2>/dev/null | head -n 1 || true)
+  PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" timeout 2s python3 -m team_harness.recall_hook launch "$task_dir" "$recall_key" 2>/dev/null || true
+fi
 # Preflight must remain usable while a worker is alive. Real launches serialize
 # all checks and mutations for the task until the new identity is registered.
 if [[ ${TH_PREFLIGHT_ONLY:-0} != 1 ]]; then

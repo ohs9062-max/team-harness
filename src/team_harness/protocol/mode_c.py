@@ -11,10 +11,12 @@ import asyncio
 from datetime import datetime
 from datetime import UTC
 import json
+import os
 from pathlib import Path
 import re
 import signal
 import subprocess
+import sys
 from threading import Lock
 import time
 from typing import Any
@@ -258,6 +260,31 @@ class TeamHarnessAgentRunner:
         **extra_kwargs: Any,
     ) -> AgentResult:
         from team_harness.brief_check import log_brief_warnings
+
+        # Isolate best-effort recall so a locked or damaged index cannot delay a worker.
+        if os.environ.get("TH_AUTO_RECALL") != "0":
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    sys.executable,
+                    "-m",
+                    "team_harness.recall_hook",
+                    "launch",
+                    cwd,
+                    task_key or "",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                output, _ = await asyncio.wait_for(process.communicate(), timeout=2)
+                if output.strip():
+                    text = output.decode(errors="replace").strip()
+                    if state_mgr is not None:
+                        state_mgr.append_event(
+                            "TASK_HISTORY", task_key=task_key, text=text
+                        )
+                    else:
+                        print(text)
+            except Exception:
+                pass
 
         log_brief_warnings(prompt)
         resolve_template(agent_type=agent_type, config=self.config)

@@ -40,6 +40,7 @@ from team_harness.skills.loader import load_skill_metadata
 from team_harness.tools import shell_tools
 from team_harness.tools.agent_tools import build_agent_tool_bindings
 from team_harness.tools.fs_tools import build_fs_tool_bindings
+from team_harness.tools.history_tools import build_history_tool_bindings
 from team_harness.tools.registry import ToolRegistry
 from team_harness.tools.todo_tools import build_todo_tool_bindings
 from team_harness.tracking.context import ContextTracker
@@ -1050,6 +1051,9 @@ def _build_registry(
     # Todo tools (per-run closures)
     todo_bindings = build_todo_tool_bindings(run_dir=run_dir)
     for schema, fn in todo_bindings:
+        registry.register(schema=schema, fn=fn)
+
+    for schema, fn in build_history_tool_bindings():
         registry.register(schema=schema, fn=fn)
 
     return registry

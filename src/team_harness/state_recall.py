@@ -6,11 +6,88 @@ import os
 from pathlib import Path
 import re
 import sqlite3
+import subprocess
 import sys
 import time
 
 from team_harness.state_index import update
 from team_harness.workspace_archive import watch_dir
+
+# A successful later attempt resolves an earlier failure even if the task snapshot lags.
+UNRESOLVED = """t.state IN ('failed','verify_failed') AND NOT EXISTS (
+ SELECT 1 FROM attempts a WHERE a.task=t.task AND a.attempt>f.attempt
+ AND lower(a.result) IN ('done','verified'))"""
+
+
+def normalize_workspace(workspace: str) -> str:
+    path = Path(workspace).expanduser().resolve()
+    try:
+        common = subprocess.run(
+            ["git", "-C", str(path), "rev-parse", "--git-common-dir"],
+            capture_output=True,
+            text=True,
+            timeout=1,
+            check=True,
+        ).stdout.strip()
+        git_dir = Path(common)
+        if not git_dir.is_absolute():
+            git_dir = path / git_dir
+        return str(git_dir.resolve().parent)
+    except (OSError, subprocess.SubprocessError):
+        return str(path)
+
+
+def resolve_target(db: sqlite3.Connection, target: str) -> str | None:
+    if target.isdigit():
+        row = db.execute(
+            "SELECT task FROM processes WHERE pid=? ORDER BY last_seen DESC LIMIT 1",
+            (int(target),),
+        ).fetchone()
+    else:
+        path = str(Path(target).expanduser().resolve())
+        row = db.execute(
+            "SELECT task FROM tasks WHERE task=? OR task_key=? ORDER BY updated_at DESC LIMIT 1",
+            (path, target),
+        ).fetchone()
+    return str(row[0]) if row else None
+
+
+def launch_recall(target: str, task_key: str = "") -> str:
+    if os.environ.get("TH_AUTO_RECALL") == "0":
+        return ""
+    path = watch_dir() / "th.db"
+    if not path.exists():
+        return ""
+    with sqlite3.connect(
+        f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=1
+    ) as db:
+        tasks = db.execute(
+            "SELECT task FROM tasks WHERE task=? OR (task_key != '' AND task_key=?)",
+            (str(Path(target).expanduser().resolve()), task_key or Path(target).name),
+        ).fetchall()
+        lines = []
+        for (task,) in tasks:
+            (count,) = db.execute(
+                "SELECT count(*) FROM attempts WHERE task=?", (task,)
+            ).fetchone()
+            if not count:
+                continue
+            last = db.execute(
+                "SELECT result FROM attempts WHERE task=? ORDER BY attempt DESC LIMIT 1",
+                (task,),
+            ).fetchone()
+            failure = db.execute(
+                "SELECT category,detail FROM failures WHERE task=? ORDER BY attempt DESC, at DESC LIMIT 1",
+                (task,),
+            ).fetchone()
+            lines.append(
+                f"이전 작업: {task} · 시도 {count}회 · 마지막 결과 {last[0] or '미상'}"
+            )
+            if failure:
+                lines.append(
+                    f"실패 원인: {failure[0]} · {' '.join((failure[1] or '').splitlines())}"
+                )
+        return "\n".join(lines[:6])
 
 
 def connect() -> sqlite3.Connection:
@@ -28,16 +105,15 @@ def connect() -> sqlite3.Connection:
     return db
 
 
-def why(target: str, limit: int = 30) -> str:
-    with connect() as db:
-        if target.isdigit():
-            row = db.execute(
-                "SELECT task FROM processes WHERE pid=? ORDER BY last_seen DESC LIMIT 1",
-                (int(target),),
-            ).fetchone()
-            task = row[0] if row else None
-        else:
-            task = str(Path(target).expanduser().resolve())
+def why(target: str, limit: int = 30, *, readonly: bool = False) -> str:
+    path = watch_dir() / "th.db"
+    connection = (
+        sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=1)
+        if readonly
+        else connect()
+    )
+    with connection as db:
+        task = resolve_target(db, target)
         if not task:
             return "작업을 찾지 못했습니다."
         lines = [f"작업: {task}"]
@@ -68,7 +144,7 @@ def why(target: str, limit: int = 30) -> str:
         if failure:
             lines.append(f"실패: {failure[0]} · {' '.join(failure[1].splitlines())}")
             for other, detail in db.execute(
-                "SELECT task,detail FROM failures WHERE category=? AND task!=? AND datetime(at)>=datetime('now','-7 days') GROUP BY task ORDER BY at DESC LIMIT 3",
+                f"SELECT f.task,f.detail FROM failures f JOIN tasks t ON t.task=f.task WHERE f.category=? AND f.task!=? AND datetime(f.at)>=datetime('now','-7 days') AND {UNRESOLVED} GROUP BY f.task ORDER BY f.at DESC LIMIT 3",
                 (failure[0], task),
             ):
                 lines.append(f"유사 실패: {other} · {detail}")
@@ -116,14 +192,14 @@ def main() -> None:
     ):
         return
     if len(sys.argv) > 1 and sys.argv[1] == "recent":
-        workspace = str(Path(sys.argv[2]).resolve())
+        workspace = normalize_workspace(sys.argv[2])
         with connect() as db:
             rows = db.execute(
                 "SELECT text FROM coord_log WHERE workspace=? AND kind='결정' AND datetime(at)>=datetime('now','-1 day') ORDER BY at DESC LIMIT 5",
                 (workspace,),
             ).fetchall()
             failures = db.execute(
-                "SELECT t.task,f.category FROM failures f JOIN tasks t ON t.task=f.task WHERE t.owner=? AND datetime(f.at)>=datetime('now','-1 day') AND t.state NOT IN ('완료','DONE') ORDER BY f.at DESC LIMIT 4",
+                f"SELECT t.task,f.category FROM failures f JOIN tasks t ON t.task=f.task WHERE t.owner=? AND datetime(f.at)>=datetime('now','-1 day') AND {UNRESOLVED} GROUP BY t.task ORDER BY f.at DESC LIMIT 4",
                 (workspace,),
             ).fetchall()
         if rows or failures:

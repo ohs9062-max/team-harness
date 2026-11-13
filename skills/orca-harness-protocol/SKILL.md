@@ -26,4 +26,5 @@ description: Claude 코디네이터에서 th cord로 작업 분담·워커 실�
 - inbox는 Git 공통 디렉터리의 메인 체크아웃에 있다. 다른 세션의 사건을 대신 소비하지 않는다.
 - 상태 요청은 짧은 `ths` 한 번, 지속 표시는 사용자의 별도 터미널 `ths -w`를 사용한다. 정상 표를 대화에 다시 복사하지 않는다.
 - 완료는 스크립트 판정과 산출물로 확인한다. FAIL/WARN이면 원본 검수 결과·관련 로그를 필요한 범위만 확인한다. important 결론은 `th-adopt.sh`로 독립 검증하고 채택 이유를 기록한다.
+- 사건·완료 판단 시 정본 운영 정책의 `th-why.sh`/`th-db.sh` 조회를 따른다 (테이블: tasks, attempts, failures, events, adoptions, coord_log).
 - 정책·기능 배포 상태는 `th-sync.sh --status`로 확인한다. 배포 변경 알림을 받은 세션은 변경된 정책만 한 번 반영하고 진행 작업은 유지한다.

@@ -16,6 +16,17 @@ def main() -> None:
         if sys.argv[1] == "events":
             print(sys.stdin.read(), end="")
         return
+    if sys.argv[1] == "launch":
+        try:
+            print(
+                state_recall.launch_recall(
+                    sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else ""
+                ),
+                end="\n",
+            )
+        except Exception:
+            pass
+        return
     if sys.argv[1] == "recent":
         try:
             sys.argv = [sys.argv[0], "recent", sys.argv[2]]

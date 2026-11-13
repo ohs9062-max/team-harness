@@ -376,6 +376,9 @@ def test_why_similar_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     state_index.update()
     first, second = str(tmp_path / "first"), str(tmp_path / "second")
     with sqlite3.connect(watch / "th.db") as db:
+        db.executemany(
+            "INSERT INTO tasks(task,state) VALUES (?, 'failed')", [(first,), (second,)]
+        )
         db.execute(
             "INSERT INTO failures VALUES (?,1,datetime('now'),'쿼터','quota','first')",
             (first,),
