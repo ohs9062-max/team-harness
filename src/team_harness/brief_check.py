@@ -11,6 +11,9 @@ import shutil
 import sys
 from typing import Literal
 
+from team_harness.cause_check import has_cause_hypothesis
+from team_harness.cause_check import has_symptom_section
+
 
 @dataclass(frozen=True)
 class Finding:
@@ -202,6 +205,10 @@ def check_brief_text(text: str, task_dir: Path | None = None) -> list[Finding]:
                     "커밋 로그 외의 동작 검수가 필요합니다",
                 )
             )
+    if has_cause_hypothesis(text) and not has_symptom_section(text):
+        findings.append(
+            Finding("warn", "missing_symptom", 1, "증상 재현 절이 없습니다")
+        )
     return findings
 
 

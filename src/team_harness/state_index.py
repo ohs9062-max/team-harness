@@ -23,6 +23,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS shim_decisions(at TEXT, pid INTEGER, session_id TEXT, workspace TEXT, worker_task TEXT, tool TEXT, model TEXT, effort TEXT, depth INTEGER, verdicts_json TEXT, would_block INTEGER, mode TEXT);
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS tasks(task TEXT PRIMARY KEY, owner TEXT, task_key TEXT, kind TEXT, first_seen TEXT, state TEXT, last_step TEXT, updated_at TEXT);
+CREATE TABLE IF NOT EXISTS cause_verdicts(task TEXT PRIMARY KEY, verdict TEXT);
 CREATE TABLE IF NOT EXISTS attempts(task TEXT, attempt INTEGER, worker TEXT, model TEXT, effort TEXT, started_at TEXT, minutes REAL, tokens INTEGER, result TEXT, override TEXT, PRIMARY KEY(task, attempt));
 CREATE TABLE IF NOT EXISTS failures(task TEXT, attempt INTEGER, at TEXT, category TEXT, detail TEXT, source TEXT, UNIQUE(task, attempt, source, detail));
 CREATE TABLE IF NOT EXISTS events(source TEXT, line_hash TEXT UNIQUE, at TEXT, task TEXT, kind TEXT, text TEXT);
@@ -354,6 +355,20 @@ def update(
                     now,
                 ),
             )
+            report = "\n".join(
+                _read(task / name) for name in ("REPORT.md", "report.md", "WORKLOG.md")
+            )
+            verdict = re.search(
+                r"(?m)^\s*(?:[-*]\s*)?지시 원인\s*:\s*(지지|반박)(?=\s|$|[—–:.,(])",
+                report,
+            )
+            if verdict:
+                db.execute(
+                    "INSERT OR REPLACE INTO cause_verdicts VALUES (?,?)",
+                    (str(task), verdict.group(1)),
+                )
+            else:
+                db.execute("DELETE FROM cause_verdicts WHERE task=?", (str(task),))
             for name in ("FAILED", "VERIFY_FAILED"):
                 path = task / name
                 if _modified(path, start):

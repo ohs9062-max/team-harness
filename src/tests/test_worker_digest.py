@@ -510,3 +510,19 @@ def test_force_verification_bypasses_declared_cache(tmp_path: Path):
     assert (tmp_path / "attempts").read_text().splitlines() == ["run"]
     wd.check_script(tmp_path, force=True)
     assert (tmp_path / "attempts").read_text().splitlines() == ["run", "run"]
+
+
+def test_cause_warnings_th_verify(tmp_path: Path, sandbox: tuple[Path, Path, Path]):
+    task = make_task(tmp_path, "cause")
+    (task / "task.md").write_text("## 원인 가설\n설정 오류\n")
+    result = shell("th-verify.sh", str(task))
+    assert result.returncode == 0
+    text = (task / "verify_result.txt").read_text()
+    assert "- 지시 원인: [WARN]" in text
+    assert "- 증상 재현: [WARN]" in text
+    (task / "task.md").write_text("## 원인 가설\n설정 오류\n## 증상 재현\n명령\n")
+    (task / "REPORT.md").write_text("지시 원인: 지지\n")
+    shell("th-verify.sh", str(task))
+    text = (task / "verify_result.txt").read_text()
+    assert "- 지시 원인: [WARN]" not in text
+    assert "- 증상 재현: [WARN]" not in text

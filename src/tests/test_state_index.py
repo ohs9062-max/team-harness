@@ -241,3 +241,20 @@ def test_retention_and_indexes(env: Path, monkeypatch: pytest.MonkeyPatch):
         assert (
             db.execute("SELECT count(*) FROM processes WHERE pid=1").fetchone()[0] == 0
         )
+
+
+def test_cause_verdict_index_and_why(env: Path, tmp_path: Path):
+    from team_harness import state_recall
+
+    state_index.update([])
+    task = tmp_path / "task"
+    task.mkdir()
+    (task / "task.md").write_text("kind: code\n")
+    (task / "REPORT.md").write_text("지시 원인: 반박 — 실제 원인 설정 (a.py:1)\n")
+    (env / "tasks.txt").write_text(str(task) + "\n")
+    state_index.update([])
+    assert rows(env, "SELECT verdict FROM cause_verdicts") == [("반박",)]
+    assert "지시 원인: 반박" in state_recall.why(str(task))
+    (task / "REPORT.md").write_text("지시 원인: 지지\n")
+    state_index.update([])
+    assert rows(env, "SELECT verdict FROM cause_verdicts") == [("지지",)]
