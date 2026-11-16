@@ -41,20 +41,30 @@ def main() -> None:
     try:
         with state_recall.connect() as db:
             tasks = [row[0] for row in db.execute("SELECT task FROM tasks")]
+        tasks = [
+            task
+            for task in tasks
+            if not any(other.startswith(task.rstrip("/") + "/") for other in tasks)
+        ]
         for line in data.splitlines():
             result.append(line)
             if count >= 2 or not re.search(
                 r"실패|워커 중단|검증 실패|채택 검증\s*FAIL", line, re.I
             ):
                 continue
-            task = next(
-                (
-                    task
-                    for task in tasks
-                    if task in line or os.path.basename(task) in line
-                ),
-                None,
-            )
+            matches = []
+            for task in tasks:
+                parts = task.strip("/").split("/")
+                suffixes = [task] + [
+                    "/".join(parts[index:]) for index in range(len(parts))
+                ]
+                for suffix in suffixes:
+                    if re.search(
+                        r"(?<![\w./-])" + re.escape(suffix) + r"(?![\w./-])", line
+                    ):
+                        matches.append((len(suffix), task))
+                        break
+            task = max(matches, default=(0, ""))[1]
             if task:
                 extra = state_recall.why(task, 12).splitlines()[: 40 - additions]
                 result.extend(extra)

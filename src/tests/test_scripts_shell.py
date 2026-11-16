@@ -643,6 +643,11 @@ def test_install_journal_rule_replaces_existing_block_and_keeps_surroundings(
         assert text.count("TEAM-HARNESS-COORDINATOR-JOURNAL:BEGIN") == 1
         assert "TH_ROLE=worker" in text
         assert "old rule" not in text
+        assert (
+            text.index("TEAM-HARNESS-COORDINATOR-JOURNAL:END")
+            < text.index("TEAM-HARNESS-CAUSE-CHECK:BEGIN")
+            < text.index("\nafter\n")
+        )
 
 
 def test_journal_hook_is_noop_for_worker(tmp_path: Path):

@@ -1,4 +1,5 @@
 import asyncio
+import io
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -9,6 +10,7 @@ from typing import Any
 import pytest
 
 from team_harness import harness
+from team_harness import recall_hook
 from team_harness import state_index
 from team_harness import state_recall
 
@@ -116,3 +118,27 @@ def test_worktree_normalization(tmp_path: Path) -> None:
     (worktree / "sub").mkdir()
     assert state_recall.normalize_workspace(str(worktree / "sub")) == str(root)
     assert state_recall.normalize_workspace(str(tmp_path)) == str(tmp_path)
+
+
+def test_events_recall_uses_specific_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: Any
+) -> None:
+    monkeypatch.setenv("TH_WATCH_DIR", str(tmp_path))
+    monkeypatch.setattr(recall_hook.signal, "alarm", lambda seconds: 0)
+    db_path = tmp_path / "th.db"
+    with sqlite3.connect(db_path) as db:
+        db.executescript(state_index.SCHEMA)
+        for task in ("/x/repo", "/x/repo/_outputs/t1"):
+            db.execute("INSERT INTO tasks(task, state) VALUES (?, ?)", (task, "failed"))
+    monkeypatch.setattr(sys, "argv", ["recall_hook", "events"])
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        io.StringIO(
+            "time | repo/_outputs/t1 | 실패 | detail\ntime | /x/repo/_outputs/t1 | 실패 | detail\n"
+        ),
+    )
+    recall_hook.main()
+    output = capsys.readouterr().out
+    assert output.count("작업: /x/repo/_outputs/t1") == 2
+    assert "작업: /x/repo\n" not in output

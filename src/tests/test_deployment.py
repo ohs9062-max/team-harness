@@ -458,6 +458,12 @@ def test_cause_check_deployment_preserves_user_text_and_detects_drift(
         content = (home / relative).read_text()
         assert content.count(marker) == 1
         assert "user before\nuser after\n" in content
+        if "GEMINI" in relative:
+            assert content.startswith(marker)
+        else:
+            assert content.index(
+                "TEAM-HARNESS-COORDINATOR-JOURNAL:END"
+            ) < content.index(marker)
         if "GEMINI" not in relative:
             assert content.count("TEAM-HARNESS-COORDINATOR-JOURNAL:BEGIN") == 1
     dp.apply(deployable_repository, home)

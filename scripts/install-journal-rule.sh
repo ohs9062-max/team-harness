@@ -29,7 +29,13 @@ current = target.read_text(encoding="utf-8")
 rule = template.read_text(encoding="utf-8").rstrip()
 first = current.find(begin)
 if first < 0:
-    rewritten = f"{rule}\n\n{current}"
+    journal_end = "<!-- TEAM-HARNESS-COORDINATOR-JOURNAL:END -->"
+    anchor = current.find(journal_end) if "CAUSE-CHECK" in begin else -1
+    if anchor >= 0:
+        anchor += len(journal_end)
+        rewritten = current[:anchor] + "\n\n" + rule + current[anchor:]
+    else:
+        rewritten = f"{rule}\n\n{current}"
 else:
     last = current.find(end, first)
     if last < 0:
