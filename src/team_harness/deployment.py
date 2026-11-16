@@ -189,6 +189,7 @@ def shim_status_display(root: Path, home: Path) -> str:
 INSTALLER_ASSETS = (
     ".claude/CLAUDE.md",
     ".codex/AGENTS.md",
+    ".gemini/GEMINI.md",
     ".agy/AGENTS.md",
     ".agy/INSTRUCTIONS.md",
     ".config/agy/AGENTS.md",
