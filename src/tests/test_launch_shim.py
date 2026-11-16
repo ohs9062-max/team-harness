@@ -258,3 +258,79 @@ def test_fifo_result_does_not_block(tmp_path: Path, name: str) -> None:
         check=False,
     )
     assert result.returncode == 37
+
+
+def test_active_direct_execution(tmp_path: Path) -> None:
+    import json
+
+    from team_harness import docs_migrate
+    from team_harness import resource_slots
+
+    env, dbpath = setup_cli(tmp_path)
+    owner = tmp_path / "repo"
+    owner.mkdir()
+    (owner / ".git").mkdir()
+    env["TH_WORKER_OUTPUT_DIR"] = str(owner)
+    env.pop("TH_NO_MAINTENANCE", None)
+    env.pop("TH_ONCE", None)
+    prompt = "---\nallow_paths: /tmp\n---"
+    proc = run(env, "codex", "exec", prompt)
+    assert proc.returncode == 7
+    assert proc.stdout.startswith("depth=1 args=exec ")
+    assert "[th] warn allow_paths_ambiguous:1:" in proc.stderr
+    rows = json.loads((tmp_path / "watch/admission.json").read_text())
+    assert len(rows) == 1
+    assert not resource_slots.active(next(iter(rows.values())))
+    old = os.environ.get("TH_WATCH_DIR")
+    os.environ["TH_WATCH_DIR"] = env["TH_WATCH_DIR"]
+    try:
+        assert owner in docs_migrate.owners()
+    finally:
+        if old is None:
+            os.environ.pop("TH_WATCH_DIR")
+        else:
+            os.environ["TH_WATCH_DIR"] = old
+    quiet_env = dict(
+        env,
+        TH_SHIM_QUIET="1",
+        TH_WATCH_DIR=str(tmp_path / "quiet"),
+        TH_NO_MAINTENANCE="1",
+    )
+    quiet = run(quiet_env, "codex", "exec", prompt)
+    assert quiet.stderr == ""
+    with sqlite3.connect(tmp_path / "quiet/th.db") as db:
+        assert db.execute("select count(*) from shim_decisions").fetchone()[0] == 1
+
+
+def test_active_slot_visible_during_execution(tmp_path: Path) -> None:
+    from team_harness.resource_slots import current_workers
+
+    env, _ = setup_cli(tmp_path)
+    fake = tmp_path / "bin/codex"
+    fake.write_text('#!/bin/sh\nprintf ready > "$HOME/ready"\nread line\n')
+    proc = subprocess.Popen(["codex", "exec", "hello"], env=env, stdin=subprocess.PIPE)
+    try:
+        for _ in range(200):
+            if (tmp_path / "ready").exists():
+                break
+            time.sleep(0.01)
+        assert (tmp_path / "ready").exists()
+        assert current_workers(tmp_path, "codex", tmp_path / "watch")
+    finally:
+        assert proc.stdin is not None
+        proc.stdin.write(b"done\n")
+        proc.stdin.close()
+        proc.wait(timeout=5)
+    assert not current_workers(tmp_path, "codex", tmp_path / "watch")
+
+
+def test_quota_and_depth_warn_without_blocking(tmp_path: Path) -> None:
+    env, _ = setup_cli(tmp_path)
+    watch = tmp_path / "watch"
+    watch.mkdir()
+    (watch / "quota_lock.codex").write_text("quota exhausted")
+    proc = run(dict(env, TH_SHIM_MAX_DEPTH="0"), "codex", "exec", "hello")
+    assert proc.returncode == 7
+    assert "[th] codex: quota lock active" in proc.stderr
+    assert "[th] 실행 깊이" in proc.stderr
+    assert (watch / "admission.json").exists()

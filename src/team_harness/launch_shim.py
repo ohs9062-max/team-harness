@@ -11,6 +11,7 @@ from pathlib import Path
 import shutil
 import sqlite3
 import sys
+import uuid
 
 
 def _option(args: list[str], *names: str) -> str:
@@ -28,7 +29,11 @@ def _prompt(tool: str, args: list[str]) -> str | None:
         return _option(args, "-p", "--prompt") or None
     # Only inspect an unambiguous final positional prompt. Option values and
     # stdin are never read or mistaken for a brief.
-    if not args or args[-1] in {"-", "exec", "resume"} or args[-1].startswith("-"):
+    if (
+        not args
+        or args[-1] in {"-", "exec", "resume"}
+        or (args[-1].startswith("-") and "\n" not in args[-1])
+    ):
         return None
     options_with_values = {
         "-m",
@@ -71,7 +76,9 @@ def _effort(args: list[str]) -> str:
     return ""
 
 
-def _record(tool: str, args: list[str], depth: int, pid: int | None = None) -> None:
+def _record(
+    tool: str, args: list[str], depth: int, pid: int | None = None
+) -> list[str]:
     from team_harness import launch_policy
     from team_harness import resource_slots
     from team_harness.brief_check import check_brief_text
@@ -86,17 +93,45 @@ def _record(tool: str, args: list[str], depth: int, pid: int | None = None) -> N
     )
     model = _option(args, "-m", "--model")
     effort = _effort(args)
-    try:
-        rows = json.loads((wd / "admission.json").read_text())
-        rows = {key: row for key, row in rows.items() if resource_slots.active(row)}
+    from team_harness import maintenance
+    from team_harness.agents.process_identity import capture_starttime
+
+    task = task.resolve()
+    cwd = Path.cwd().resolve()
+    if (cwd / "task.md").is_file():
+        task = cwd
+    owner = next(
+        (
+            p
+            for base in (task, cwd)
+            for p in (base, *base.parents)
+            if (p / ".git").exists()
+        ),
+        cwd,
+    )
+    source = str(Path(__file__).resolve().parents[1])
+    os.environ["PYTHONPATH"] = os.pathsep.join(
+        filter(None, [source, os.environ.get("PYTHONPATH", "")])
+    )
+    maintenance.start(owner=owner)
+    with resource_slots.ledger(wd) as rows:
+        for key in list(rows):
+            if not resource_slots.active(rows[key]):
+                del rows[key]
         workers = resource_slots._workers(
             rows, task, resource_slots.worker_family(tool), wd
         )
-    except FileNotFoundError:
-        workers = launch_policy._active_workers(task, tool, wd)
-    violations = launch_policy.check(
-        task, tool, model, effort, wd, active_workers=workers
-    )
+        violations = launch_policy.check(
+            task, tool, model, effort, wd, active_workers=workers
+        )
+        owner_pid = pid if pid is not None else os.getpid()
+        rows[uuid.uuid4().hex] = {
+            "pid": owner_pid,
+            "start": capture_starttime(owner_pid),
+            "worker": resource_slots.worker_family(tool),
+            "task": str(task),
+            "bound": False,
+        }
     verdicts: dict = {
         "policy": [v._asdict() for v in violations],
         "warnings": launch_policy.check_warnings(tool),
@@ -122,7 +157,7 @@ def _record(tool: str, args: list[str], depth: int, pid: int | None = None) -> N
     max_depth = int(os.environ.get("TH_SHIM_MAX_DEPTH", "4"))
     verdicts["depth_exceeded"] = depth > max_depth
     wd.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(wd / "th.db", timeout=0) as db:
+    with sqlite3.connect(wd / "th.db", timeout=0.1) as db:
         db.execute(
             "CREATE TABLE IF NOT EXISTS shim_decisions(at TEXT, pid INTEGER, session_id TEXT, workspace TEXT, worker_task TEXT, tool TEXT, model TEXT, effort TEXT, depth INTEGER, verdicts_json TEXT, would_block INTEGER, mode TEXT)"
         )
@@ -183,7 +218,12 @@ def _record(tool: str, args: list[str], depth: int, pid: int | None = None) -> N
                 pid if pid is not None else os.getpid(),
                 os.environ.get("CLAUDE_CODE_SESSION_ID"),
                 workspace,
-                os.environ.get("TH_WORKER_OUTPUT_DIR") or os.environ.get("TH_JOB_TASK"),
+                str(task)
+                if (task / "task.md").is_file()
+                else (
+                    os.environ.get("TH_WORKER_OUTPUT_DIR")
+                    or os.environ.get("TH_JOB_TASK")
+                ),
                 tool,
                 model,
                 effort,
@@ -193,6 +233,20 @@ def _record(tool: str, args: list[str], depth: int, pid: int | None = None) -> N
                 "observe",
             ),
         )
+
+    warnings = [f"{f.level} {f.rule}:{f.line}: {f.message}" for f in findings]
+    warnings.extend(
+        v.message.replace("거부", "상한 초과")
+        for v in violations
+        if v.code in {"parallel", "budget"}
+    )
+    if quota:
+        warnings.append(f"{tool}: quota lock active")
+    if verdicts["depth_exceeded"]:
+        warnings.append(f"실행 깊이 {depth}가 상한 {max_depth}을 초과했습니다")
+    if verdicts["recent_failures"] is not None and verdicts["recent_failures"] >= 2:
+        warnings.append(f"같은 작업의 최근 실패 {verdicts['recent_failures']}회")
+    return [" ".join(w.splitlines()) for w in warnings]
 
 
 def main(tool: str) -> None:
@@ -223,7 +277,12 @@ def main(tool: str) -> None:
             if not has_ancestor_command("th-launch.sh"):
                 depth = int(os.environ.get("TH_SHIM_DEPTH", "0")) + 1
                 os.environ["TH_SHIM_DEPTH"] = str(depth)
-                _record(tool, args, depth)
+                warnings = _record(tool, args, depth)
+                if os.environ.get("TH_SHIM_QUIET") != "1":
+                    for warning in warnings[:5]:
+                        print(f"[th] {warning}", file=sys.stderr)
+                    if len(warnings) > 5:
+                        print(f"[th] 외 {len(warnings) - 5}건", file=sys.stderr)
         except Exception:
             pass
     os.execv(real, [real, *args])
@@ -247,5 +306,10 @@ def observe_child() -> None:
     if has_ancestor_command("th-launch.sh"):
         return
     depth = int(os.environ.get("TH_SHIM_DEPTH", "0")) + 1
-    print(depth, flush=True)
-    _record(tool, args, depth, int(os.environ["TH_SHIM_PARENT_PID"]))
+    warnings = _record(tool, args, depth, int(os.environ["TH_SHIM_PARENT_PID"]))
+    print(depth)
+    if os.environ.get("TH_SHIM_QUIET") != "1":
+        for warning in warnings[:5]:
+            print(f"[th] {warning}")
+        if len(warnings) > 5:
+            print(f"[th] 외 {len(warnings) - 5}건")
