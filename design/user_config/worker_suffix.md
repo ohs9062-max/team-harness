@@ -57,3 +57,5 @@ Do not read or write the coordinator journal (`.claude/current_status.md`, `.cla
 
 - AGENTS.md와 CLAUDE.md에는 현재 유효한 규칙만 명령문으로 쓰고, 경위·사례·폐기 규칙·원문 인용·사고 기록은 `docs/archive/AGENTS_이관_<YYYYMMDD>.md`로 옮겨 `(경위: docs/archive/...md §<절>)`만 남긴다.
 - 문서별 상한은 `TH_DOCS_MAX_LINES`(기본 300줄)이며 내용을 삭제하지 않고 옮긴다. 현재 유효한 규칙 문장은 본문에 남긴다.
+
+- 원인 가설이 있는 작업은 REPORT에 `지시 원인: 지지` 또는 `지시 원인: 반박 — 실제 원인 <…> (근거 파일:줄)`을 기록한다. 실제 원인을 고치되 범위가 달라지면 REPORT에 명시한다.

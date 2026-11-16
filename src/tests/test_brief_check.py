@@ -202,3 +202,24 @@ def test_sibling_task_path():
 
 def test_sibling_task_excluded_from_worktree_add():
     assert "foreign_path" not in rules("git worktree add /tmp/other -b branch")
+
+
+def test_cause_detection_and_warning():
+    from team_harness.cause_check import has_cause_hypothesis
+
+    for text in ("## 원인 가설\n설명", "원인은 설정 오류이다.", "원인: 설정 오류"):
+        assert has_cause_hypothesis(text)
+        assert any(f.rule == "missing_symptom" for f in check_brief_text(text))
+    for text in (
+        "일반 기능 추가",
+        "```\n원인: 오류\n```",
+        "> 원인은 오류이다.",
+        "## 배경\n원인: 과거 오류\n## 할 일\n수정",
+        "이전 원인은 오류이다.",
+        "---\ncause_check: off\n---\n## 원인 가설\n오류",
+    ):
+        assert not has_cause_hypothesis(text)
+    assert not any(
+        f.rule == "missing_symptom"
+        for f in check_brief_text("## 원인 가설\n오류\n## 증상 재현\n명령")
+    )

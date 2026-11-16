@@ -162,6 +162,14 @@ def why(target: str, limit: int = 30, *, readonly: bool = False) -> str:
         ).fetchone()
         if row:
             lines.append(f"상태: {row[0]} · 마지막 단계: {row[1] or '없음'}")
+        if db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='cause_verdicts'"
+        ).fetchone():
+            verdict = db.execute(
+                "SELECT verdict FROM cause_verdicts WHERE task=?", (task,)
+            ).fetchone()
+            if verdict:
+                lines.append(f"지시 원인: {verdict[0]}")
         processes = db.execute(
             "SELECT pid,ended_at,origin,session_id,workspace,worker_task FROM processes WHERE task=? ORDER BY last_seen DESC LIMIT 3",
             (task,),

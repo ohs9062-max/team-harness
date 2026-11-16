@@ -76,6 +76,8 @@ def test_status_displays_observed_session(
     task = tmp_path / "detached"
     task.mkdir()
     (task / "task.md").write_text("# Observed title\n")
+    absent_pid = 999999999
+    assert not Path(f"/proc/{absent_pid}").exists()
     env = dict(
         os.environ,
         PYTHONPATH="",
@@ -85,7 +87,7 @@ def test_status_displays_observed_session(
         HOME=str(tmp_path),
         TH_WORKER_OUTPUT_DIR=str(task),
         CLAUDE_CODE_SESSION_ID="isolated-session",
-        CLAUDE_PID="12345",
+        CLAUDE_PID=str(absent_pid),
         TH_WORKSPACE=str(tmp_path),
     )
     child = subprocess.Popen(

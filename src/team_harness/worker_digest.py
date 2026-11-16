@@ -29,6 +29,13 @@ import time
 from typing import Any
 from typing import Iterator
 
+# This file is also executed directly by th-verify.sh with system Python.
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from team_harness.cause_check import has_cause_hypothesis
+from team_harness.cause_check import has_symptom_section
+
 FIXED_PROMPT = """verify 결과와 report·STATUS를 읽고 5줄 이내:
 1)결론 2)핵심 수치와 출처 파일 3)이상한 점 4)다음 할 일.
 verify의 FAIL/WARN 줄은 한 글자도 바꾸지 말고 포함. 판정을 뒤집지 말 것.
@@ -468,6 +475,17 @@ def verify(
             "수치 대조": check_numeric(task),
             "verify": check_script(task, force=force),
         }
+        brief = read(task / "task.md")
+        if has_cause_hypothesis(brief):
+            reports = "\n".join(
+                read(task / name) for name in ("REPORT.md", "report.md", "WORKLOG.md")
+            )
+            if not re.search(r"(?m)^\s*(?:[-*]\s*)?지시 원인\s*:", reports):
+                checks["지시 원인"] = item(
+                    "WARN", "REPORT/WORKLOG에 지시 원인 판정 없음"
+                )
+            if not has_symptom_section(brief):
+                checks["증상 재현"] = item("WARN", "task.md에 증상 재현 절 없음")
         checks.update(check_hooks(task))
         if event in {"quota", "dead", "stall"}:
             checks["사건"] = item(
