@@ -57,3 +57,4 @@
 | th-launch·agent_tools·MODE C·launch_shim | 공통 brief_check 경고 | brief_check 테스트 |
 | th-verify·watchd digest | 공통 판별 후 검수 WARN | worker_digest 테스트 |
 | state index·th-why | REPORT 수집 및 조회 | state_index 테스트 |
+| th 밖(직접 실행) | 전역 CAUSE-CHECK 지시 블록이 원인 확인·재현·판정 기록을 요구; `th-why`는 수집된 원인을 수동 조회 (`templates/cause_check_rule_block.md`, `scripts/install-journal-rule.sh`, `scripts/th-why.sh`) | 전역 지시 이행에 의존; 직접 실행 자체에 brief_check 경고·검수 및 자동 REPORT 수집은 없음 |

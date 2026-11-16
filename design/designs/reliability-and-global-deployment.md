@@ -72,6 +72,7 @@ watchd는 사건·검수 결과 전달을 담당한다. 별도 maintenance 프�
 | 전역 배포 / 다른 worktree | deployment와 공통 명령·정책, 이관 산출물 제외 | test_deployment, test_policy_notice |
 | journal·image·zone 설치기 | 공통 hook_identity로 실제 관리 호출만 교체 | test_hook_identity, test_deployment, test_policy_notice |
 | 코디네이터 정책 | 전역 지시문·스킬, config의 operating_policy_file | test_config, test_policy_notice |
+| th 밖(직접 실행) | 설치된 전역 지시문·hook과 명령, 별도 maintenance 및 Git pre-push 관문 (`src/team_harness/deployment.py`, `scripts/install-journal-rule.sh`, `src/team_harness/maintenance.py`, `.githooks/pre-push`) | 설치·기동 및 hook 설정에 의존; 직접 실행만으로 th 워커 슬롯 예약·검수·문서 이관이 자동 실행되지는 않음 |
 
 ## 호환성
 

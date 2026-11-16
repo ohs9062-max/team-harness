@@ -26,6 +26,7 @@
 | th run/repl, SDK | 공유 admission 예약과 유지보수 시작; 작업 표식 | 등록부 또는 활성 admission에 작업 경로가 있을 때 수집. 예약 해제 후 등록부에 없는 작업은 누락 가능 |
 | protocol | 유지보수 시작과 공유 admission; 하위 실행 경로의 장부 | 등록되지 않고 예약이 해제된 작업은 누락 가능 |
 | watchd/watch/ths | watchd가 유지보수 시작, tasks 및 events | 사건 증분 테스트; watch/ths 자체는 DB를 직접 갱신하지 않음 |
+| th 밖(직접 실행) | `th-db.sh update` 수동 갱신과 `th-why` 조회, 기동된 maintenance의 주기 갱신 (`scripts/th-db.sh`, `scripts/th-why.sh`, `src/team_harness/maintenance.py`) | 직접 실행만으로 maintenance가 시작되거나 작업이 등록되지는 않음; 등록·관찰 가능한 흔적에 한정 |
 
 채택 검증은 등록된 작업 경로가 검증 폴더 또는 그 직계 검증자 폴더일 때만 발견한다. 등록되지 않은 검증 폴더는 탐색하지 않는다. 유지보수 소유자 등록부는 inbox 출처 발견에 사용한다. 사용량 원본에 없는 모델·토큰·비용은 추정하지 않는다. 비용 열은 원본에 일관된 비용이 없어 이번 단계에서 제공하지 않는다.
 
