@@ -54,6 +54,9 @@ def test_tag_and_session_fallback(tmp_path: Path) -> None:
         tagged.terminate()
         tagged.wait()
     env.pop("TH_JOB_TASK")
+    watch = Path(os.environ["TH_WATCH_DIR"])
+    watch.mkdir(exist_ok=True)
+    env["TH_WATCH_DIR"] = str(watch)
     leader = subprocess.Popen(
         [
             str(Path(sys.executable).resolve()),
@@ -66,8 +69,6 @@ def test_tag_and_session_fallback(tmp_path: Path) -> None:
     )
     try:
         assert leader.pid in found(task)
-        watch = tmp_path / "watch"
-        watch.mkdir()
         (watch / "tasks.txt").write_text(f"{task}\n")
         (task / "STATUS").write_text("2026-10-27 01:02:03 exact status\n")
         env["TH_WATCH_DIR"] = str(watch)
@@ -263,3 +264,18 @@ def test_snapshot_matches_uncached_and_expires(
     finally:
         proc.terminate()
         proc.wait()
+
+
+def test_other_watch_process_is_not_live(tmp_path: Path) -> None:
+    task = tmp_path / "isolated_liveness"
+    task.mkdir()
+    env = dict(
+        os.environ, TH_WATCH_DIR=str(tmp_path / "other-watch"), TH_JOB_TASK=str(task)
+    )
+    child = subprocess.Popen(["sleep", "30"], env=env)
+    try:
+        (task / "job.pid").write_text(str(child.pid))
+        assert child.pid not in found(task)
+    finally:
+        child.terminate()
+        child.wait()

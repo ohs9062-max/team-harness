@@ -99,7 +99,7 @@ def test_claude_process_session_file(tmp_path: Any, monkeypatch: Any):
     assert session_for("claude", ["claude", "-r", old], {}, 123, "456") == old
 
 
-def test_repository_adoption_display(tmp_path: Any):
+def test_repository_adoption_display(tmp_path: Any, request: Any):
     repo = Path(__file__).resolve().parents[2]
     main = tmp_path / "project"
     main.mkdir()
@@ -133,7 +133,11 @@ def test_repository_adoption_display(tmp_path: Any):
     task = tmp_path / "task"
     task.mkdir()
     (task / "STATUS").write_text("working\n")
-    (task / "worker.pid").write_text(str(os.getpid()))
+    worker = subprocess.Popen(
+        ["sleep", "120"], env={**os.environ, "TH_WATCH_DIR": str(watch)}
+    )
+    request.addfinalizer(lambda: (worker.terminate(), worker.wait()))
+    (task / "worker.pid").write_text(str(worker.pid))
     (task / ".th_owner").write_text(str(main))
     (task / ".th_coordinator.json").write_text(
         json.dumps({"pid": 99999999, "start": "1", "boot": "boot"})
@@ -197,7 +201,7 @@ def test_repository_adoption_display(tmp_path: Any):
     nested = main / "outputs" / "job"
     nested.mkdir(parents=True)
     (nested / "STATUS").write_text("working\n")
-    (nested / "job.pid").write_text(str(os.getpid()))
+    (nested / "job.pid").write_text(str(worker.pid))
     (watch / "tasks.txt").write_text(str(nested))
     assert "인수됨" in output([worktree])
     ambiguous = output([main, worktree])
@@ -254,10 +258,14 @@ def test_empty_coordinator_groups(tmp_path: Any):
     assert "secret-" not in out
 
 
-def test_groups_and_recent_five(tmp_path: Any):
+def test_groups_and_recent_five(tmp_path: Any, request: Any):
     repo = Path(__file__).resolve().parents[2]
     watch = tmp_path / "watch"
     watch.mkdir()
+    worker = subprocess.Popen(
+        ["sleep", "120"], env={**os.environ, "TH_WATCH_DIR": str(watch)}
+    )
+    request.addfinalizer(lambda: (worker.terminate(), worker.wait()))
     pid = os.getpid()
     stat = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
     start = stat[19]
@@ -269,7 +277,7 @@ def test_groups_and_recent_five(tmp_path: Any):
         (task / "task.md").write_text(f"# {kind}{i:02}\n")
         (task / "STATUS").write_text("progress\n")
         if i < 5:
-            (task / "worker.pid").write_text(str(pid))
+            (task / "worker.pid").write_text(str(worker.pid))
             (task / ".th_owner").write_text("프로젝트")
             meta = {
                 "pid": pid,

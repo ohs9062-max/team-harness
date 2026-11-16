@@ -7,6 +7,8 @@ from typing import Any
 
 from team_harness.coordinator_models import resolve_model
 from team_harness.coordinator_models import session_for
+from team_harness.proc_observer import matches_watch_dir
+from team_harness.workspace_archive import watch_dir
 
 
 def process(pid: Any):
@@ -104,6 +106,7 @@ def live_coordinators():
         if info:
             processes[pid] = info
     candidates = []
+    current_watch = watch_dir().expanduser().resolve()
     for pid, (parent, start, state, args) in processes.items():
         name = os.path.basename(args[0]) if args else ""
         if state == "Z" or not (
@@ -123,6 +126,9 @@ def live_coordinators():
                 or env.get(b"TH_SESSION_KEY", b"").decode()
             )
             cwd = os.readlink(f"/proc/{pid}/cwd")
+            decoded_env = {os.fsdecode(k): os.fsdecode(v) for k, v in env.items()}
+            if not matches_watch_dir(decoded_env, cwd, current_watch):
+                continue
         except (OSError, UnicodeError):
             continue
         if not session or env.get(b"TH_ROLE", b"").lower() == b"worker":

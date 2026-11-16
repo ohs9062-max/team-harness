@@ -5,11 +5,13 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import pwd
 import shlex
 from typing import Any
 
 from team_harness.agents.process_identity import capture_starttime
 from team_harness.session_route import th_session_key
+from team_harness.workspace_archive import watch_dir
 
 
 def _task(path: str) -> str | None:
@@ -108,6 +110,18 @@ def _add_child_summaries(
         oldest = min(descendants, default=None)
         if oldest:
             row["child_summary"] = oldest[2]
+
+
+def matches_watch_dir(values: dict[str, str], cwd: str, current: Path) -> bool:
+    """Compare a process's effective registry with the caller's registry."""
+    home = Path(values.get("HOME") or pwd.getpwuid(os.getuid()).pw_dir)
+    path = values.get("TH_WATCH_DIR", str(home / ".team-harness/watch"))
+    if path == "~" or path.startswith("~/"):
+        path = str(home) + path[1:]
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        candidate = Path(cwd) / candidate
+    return candidate.resolve() == current
 
 
 def observe() -> list[dict[str, Any]]:
@@ -211,6 +225,15 @@ def observe() -> list[dict[str, Any]]:
             except OSError:
                 env_cache[pid] = None
         return env_cache[pid]
+
+    current_watch = watch_dir().expanduser().resolve()
+    for pid, info in list(proc.items()):
+        values = env(pid)
+        if values is None:
+            del proc[pid]
+            continue
+        if not matches_watch_dir(values, info["cwd"], current_watch):
+            del proc[pid]
 
     candidates: dict[int, dict[str, Any]] = {}
     uptime = float(Path("/proc/uptime").read_text().split()[0])

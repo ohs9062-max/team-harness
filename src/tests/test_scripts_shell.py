@@ -1145,7 +1145,7 @@ def test_th_watch_stall_retains_task_in_registry(test_env: dict):
     (task_dir / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
 
     # Start a live background sleep process
-    proc = subprocess.Popen(["sleep", "30"])
+    proc = subprocess.Popen(["sleep", "30"], env=test_env["env"])
     try:
         (task_dir / "worker.pid").write_text(f"{proc.pid}\n", encoding="utf-8")
 
@@ -1192,7 +1192,7 @@ def test_th_status_worker_pid_alive_shows_running(test_env: dict):
     task_dir = _create_task_dir(test_env["tmp_path"], "task_status_alive")
     (task_dir / ".th_owner").write_text(str(test_env["workspace"]), encoding="utf-8")
 
-    proc = subprocess.Popen(["sleep", "30"])
+    proc = subprocess.Popen(["sleep", "30"], env=test_env["env"])
     try:
         (task_dir / "job.pid").write_text("999999\n", encoding="utf-8")
         (task_dir / "worker.pid").write_text(f"{proc.pid}\n", encoding="utf-8")
@@ -2979,7 +2979,7 @@ def test_th_status_sectioned_table_and_formatting(test_env: dict):
         encoding="utf-8",
     )
 
-    proc = subprocess.Popen(["sleep", "30"])
+    proc = subprocess.Popen(["sleep", "30"], env=test_env["env"])
     try:
         (t_run / "worker.pid").write_text(f"{proc.pid}\n", encoding="utf-8")
         start_42m = now_ts - 42 * 60
@@ -3084,7 +3084,7 @@ def test_th_status_running_section_shows_eta_column(test_env: dict):
     (t_done / "STATUS").write_text(f"{stamps[1]} DONE\n", encoding="utf-8")
     (t_done / "DONE").write_text("done\n", encoding="utf-8")
 
-    proc = subprocess.Popen(["sleep", "30"])
+    proc = subprocess.Popen(["sleep", "30"], env=test_env["env"])
     try:
         for task_dir in (t_speed, t_epoch, t_none):
             (task_dir / "worker.pid").write_text(f"{proc.pid}\n", encoding="utf-8")
@@ -3129,7 +3129,7 @@ def test_th_status_ignores_future_status_timestamp_for_eta(test_env: dict):
     task = _create_task_dir(test_env["tmp_path"], "eta_future")
     future = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() + 3600))
     (task / "STATUS").write_text(f"{future} 처리 10/100장 2 s/장\n", encoding="utf-8")
-    proc = subprocess.Popen(["sleep", "30"])
+    proc = subprocess.Popen(["sleep", "30"], env=test_env["env"])
     try:
         (task / "worker.pid").write_text(f"{proc.pid}\n", encoding="utf-8")
         (test_env["watch_dir"] / "tasks.txt").write_text(f"{task}\n", encoding="utf-8")
