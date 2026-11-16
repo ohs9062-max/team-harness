@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Read-only process discovery shared by status and watch."""
 import os
+import pwd
 import re
 import sys
 import time
@@ -59,8 +60,21 @@ def live_processes(task):
                 continue
     tag = f"TH_JOB_TASK={task}".encode()
     excluded = ("th-status", "th-watch", "th-inbox-wait", "tail", "less", "grep", "vim", "nvim", "emacs", "nano", "code", "claude", "codex", "shell-snapshots")
+    watch = Path(os.environ.get("TH_WATCH_DIR", str(Path.home() / ".team-harness/watch"))).expanduser().resolve()
+    matched = set()
     for pid, environ, args in _process_snapshot():
         try:
+            values = dict(os.fsdecode(item).split("=", 1) for item in environ if b"=" in item)
+            home = Path(values.get("HOME") or pwd.getpwuid(os.getuid()).pw_dir)
+            path = values.get("TH_WATCH_DIR", str(home / ".team-harness/watch"))
+            if path == "~" or path.startswith("~/"):
+                path = str(home) + path[1:]
+            candidate = Path(path)
+            if not candidate.is_absolute():
+                candidate = Path(os.readlink(f"/proc/{pid}/cwd")) / candidate
+            if candidate.resolve() != watch:
+                continue
+            matched.add(pid)
             worker_dirs = [entry.split(b"=", 1)[1] for entry in environ if entry.startswith(b"TH_WORKER_OUTPUT_DIR=")]
             if tag in environ:
                 if worker_dirs and Path(os.fsdecode(worker_dirs[0])).resolve() != task:
@@ -78,6 +92,7 @@ def live_processes(task):
                 guessed.add(pid)
         except (OSError, ValueError, IndexError):
             continue
+    direct &= matched
     if direct or tagged:
         return sorted(direct | tagged), False
     return sorted(guessed), bool(guessed)

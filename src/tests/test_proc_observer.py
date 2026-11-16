@@ -90,6 +90,20 @@ def test_status_displays_observed_session(
         CLAUDE_PID=str(absent_pid),
         TH_WORKSPACE=str(tmp_path),
     )
+    other_task = tmp_path / "other_task"
+    other_task.mkdir()
+    (other_task / "task.md").write_text("# Foreign task\n")
+    other_env = dict(
+        env,
+        TH_WATCH_DIR=str(tmp_path / "other_watch"),
+        TH_WORKER_OUTPUT_DIR=str(other_task),
+    )
+    foreign = subprocess.Popen(
+        ["bash", "-c", "exec -a th-launch.sh sleep 60"],
+        cwd=other_task,
+        env=other_env,
+        start_new_session=True,
+    )
     child = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(60)"],
         cwd=task,
@@ -97,6 +111,8 @@ def test_status_displays_observed_session(
         start_new_session=True,
     )
     try:
+        monkeypatch.setenv("TH_WATCH_DIR", env["TH_WATCH_DIR"])
+        assert not any(row["pid"] == foreign.pid for row in proc_observer.observe())
         run = subprocess.run(
             ["bash", str(repo / "scripts/th-status.sh")],
             cwd=tmp_path,
@@ -107,6 +123,7 @@ def test_status_displays_observed_session(
             check=True,
         )
         assert "Observed title" in run.stdout
+        assert "Foreign task" not in run.stdout
         assert (
             "감시 데몬" if _watcher_ancestor() else "코디네이터 종료됨"
         ) in run.stdout
@@ -126,6 +143,8 @@ def test_status_displays_observed_session(
     finally:
         child.terminate()
         child.wait()
+        foreign.terminate()
+        foreign.wait()
 
 
 def test_sql_header(tmp_path: Path):
@@ -338,7 +357,7 @@ def test_parent_environment_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyP
     child_code = "import time; time.sleep(60)"
     parent_code = (
         "import os,subprocess,sys; "
-        'p=subprocess.Popen([sys.executable,"-c",sys.argv[1]],env={},cwd=os.environ["TASKPATH"]); '
+        'p=subprocess.Popen([sys.executable,"-c",sys.argv[1]],env={"TH_WATCH_DIR":os.environ["TH_WATCH_DIR"]},cwd=os.environ["TASKPATH"]); '
         "print(p.pid,flush=True); "
         "sys.stdin.read(); p.terminate(); p.wait()"
     )
@@ -550,6 +569,7 @@ def test_watchd_descendants_and_grouped_registered_processes(
     monkeypatch.setenv("TH_OBSERVE", "1")
     repo = Path(__file__).resolve().parents[2]
     watch = tmp_path / "watch"
+    monkeypatch.setenv("TH_WATCH_DIR", str(watch))
     watch.mkdir()
     registered = tmp_path / "registered"
     registered.mkdir()
@@ -918,4 +938,16 @@ def test_tool_shell_deduplicates_only_unique_matching_row():
     assert (
         len(proc_observer.display_records([shell, runner, duplicate], set(), set()))
         == 3
+    )
+
+
+def test_watch_dir_defaults_to_process_home(tmp_path: Path):
+    default_watch = (tmp_path / ".team-harness/watch").resolve()
+    assert proc_observer.matches_watch_dir(
+        {"HOME": str(tmp_path)}, str(tmp_path), default_watch
+    )
+    assert not proc_observer.matches_watch_dir(
+        {"HOME": str(tmp_path), "TH_WATCH_DIR": str(tmp_path / "other")},
+        str(tmp_path),
+        default_watch,
     )
