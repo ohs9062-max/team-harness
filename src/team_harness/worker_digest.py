@@ -721,7 +721,12 @@ def prepend_summary(path: Path, block: str) -> None:
         atomic_write(path, kept)
 
 
-def digest(task: Path, event: str = "", event_id: str = "") -> None:
+def digest(
+    task: Path,
+    event: str = "",
+    event_id: str = "",
+    verification_result: tuple[dict[str, Any], str] | None = None,
+) -> None:
     watch = Path(
         os.environ.get("TH_WATCH_DIR", str(Path.home() / ".team-harness/watch"))
     )
@@ -731,7 +736,7 @@ def digest(task: Path, event: str = "", event_id: str = "") -> None:
         event_id = event_id or event
         if event and read(marker).strip() == event_id:
             return
-        result, verification = verify(task, event)
+        result, verification = verification_result or verify(task, event)
         summary = summarize(task, verification)
         block = f"## {result['timestamp']} {task.name} [{result['overall']}]\n{verification}"
         if summary:

@@ -1,6 +1,6 @@
 # 상태 색인 DB
 
-`<watch_dir>/th.db`는 작업 상태를 SQL로 살펴보기 위한 지워도 되는 사본이다. 기존 장부와 작업 폴더가 정본이며 DB가 실행이나 판정을 바꾸지 않는다. `TH_WATCH_DIR`가 우선이고 기본 경로는 기존 감시 경로다. `th-db.sh update`로 즉시 갱신하고 `th-db.sh sql 'SELECT ...'`로 최대 200행을 읽는다. SQL은 읽기 전용 연결이며 SELECT와 WITH로 시작해야 한다. 유지보수는 30초 주기로 갱신하며 `TH_STATE_DB=0`으로 끌 수 있다.
+`<watch_dir>/th.db`는 작업 상태를 SQL로 살펴보기 위한 지워도 되는 사본이다. 기존 장부와 작업 폴더가 정본이다. 유지보수는 관찰된 직접 실행의 종료 뒤 검수를 시작할 수 있으나 작업 자체를 재실행하지 않는다. `TH_WATCH_DIR`가 우선이고 기본 경로는 기존 감시 경로다. `th-db.sh update`로 즉시 갱신하고 `th-db.sh sql 'SELECT ...'`로 최대 200행을 읽는다. SQL은 읽기 전용 연결이며 SELECT와 WITH로 시작해야 한다. 유지보수는 30초 주기로 갱신하며 `TH_STATE_DB=0`으로 끌 수 있다.
 
 ## 기록과 범위
 
@@ -26,7 +26,7 @@
 | th run/repl, SDK | 공유 admission 예약과 유지보수 시작; 작업 표식 | 등록부 또는 활성 admission에 작업 경로가 있을 때 수집. 예약 해제 후 등록부에 없는 작업은 누락 가능 |
 | protocol | 유지보수 시작과 공유 admission; 하위 실행 경로의 장부 | 등록되지 않고 예약이 해제된 작업은 누락 가능 |
 | watchd/watch/ths | watchd가 유지보수 시작, tasks 및 events | 사건 증분 테스트; watch/ths 자체는 DB를 직접 갱신하지 않음 |
-| th 밖(직접 실행) | `th-db.sh update` 수동 갱신과 `th-why` 조회, 기동된 maintenance의 주기 갱신 (`scripts/th-db.sh`, `scripts/th-why.sh`, `src/team_harness/maintenance.py`) | 직접 실행만으로 maintenance가 시작되거나 작업이 등록되지는 않음; 등록·관찰 가능한 흔적에 한정 |
+| th 밖(직접 실행) | `th-db.sh update` 수동 갱신과 `th-why` 조회, 기동된 maintenance의 주기 갱신 (`scripts/th-db.sh`, `scripts/th-why.sh`, `src/team_harness/maintenance.py`) | maintenance 기동 시 직접 실행 종료 검수와 REPORT digest·DB 수집; maintenance가 없으면 미적용 (shim 기동은 병행 작업), 등록·관찰 가능한 흔적에 한정 |
 
 채택 검증은 등록된 작업 경로가 검증 폴더 또는 그 직계 검증자 폴더일 때만 발견한다. 등록되지 않은 검증 폴더는 탐색하지 않는다. 유지보수 소유자 등록부는 inbox 출처 발견에 사용한다. 사용량 원본에 없는 모델·토큰·비용은 추정하지 않는다. 비용 열은 원본에 일관된 비용이 없어 이번 단계에서 제공하지 않는다.
 
@@ -39,3 +39,5 @@
 tasks의 owner·task_key, failures의 task·at, events의 task와 at, coord_log의 workspace·kind·at, processes의 workspace·session_id·ended_at, sessions의 workspace에 색인을 둔다. attempts의 task는 기본키 색인을 사용한다. 기존 DB에도 갱신 시 색인을 추가한다.
 
 유지보수 갱신은 meta의 마지막 정리 시각을 기준으로 하루에 한 번 이하 정리한다. 종료된 보조 프로세스는 7일, 하위 워커·job·작업은 90일 보존하며 각각 `TH_DB_KEEP_AUX_DAYS`, `TH_DB_KEEP_WORKER_DAYS`로 일수를 조정한다. 실행 중인 프로세스와 작업·시도·실패·채택·일지·사건 이력은 지우지 않는다. PID와 시작 시각으로 식별한 관찰 알림은 30일이 지나고 해당 프로세스도 삭제된 경우 정리한다. 작업 경로 신원은 재사용 가능하므로 재알림 방지를 위해 유지한다. 정리 후 WAL truncate 체크포인트를 시도하며 다른 연결이 방해하면 다음 기회에 맡긴다.
+
+등록되지 않은 user·coordinator 직접 실행은 같은 폴더에 실행 중인 프로세스가 없을 때 `task.md`의 검수 bash 블록을 별도 제한 시간 프로세스에서 한 번 실행한다. 기존 결과가 종료 관찰 이후면 재사용하고 REPORT가 있으면 digest와 DB를 수집한다. 종료 알림에는 검수 결과를 포함한다. `TH_OBSERVED_VERIFY=0`은 검수를 끈다. watchd·worker 자손 및 등록 작업은 제외하며 작업 자체는 재실행하지 않는다.
