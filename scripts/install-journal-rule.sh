@@ -9,7 +9,7 @@ rule_template="$repo_dir/templates/journal_rule_block.md"
 [[ -f $rule_template ]] || { echo "journal rule template missing: $rule_template" >&2; exit 1; }
 
 install_rule() {
-  local target=$1 dir tmp
+  local target=$1 rule_template=$2 begin=$3 end=$4 dir tmp
   dir=$(dirname "$target")
   mkdir -p "$dir"
   [[ -e $target ]] || : > "$target"
@@ -43,8 +43,22 @@ PY
   if cmp -s "$tmp" "$target"; then rm "$tmp"; else mv "$tmp" "$target"; fi
 }
 
-install_rule "$HOME/.claude/CLAUDE.md"
-install_rule "$HOME/.codex/AGENTS.md"
+install_all_rules() {
+  local target=$1
+  install_rule "$target" "$rule_template" "$begin" "$end"
+  install_cause_rule "$target"
+}
+install_cause_rule() {
+  install_rule "$1" "$repo_dir/templates/cause_check_rule_block.md" \
+    '<!-- TEAM-HARNESS-CAUSE-CHECK:BEGIN -->' '<!-- TEAM-HARNESS-CAUSE-CHECK:END -->'
+}
+[[ -f $repo_dir/templates/cause_check_rule_block.md ]] || { echo "cause check template missing" >&2; exit 1; }
+install_all_rules "$HOME/.claude/CLAUDE.md"
+install_all_rules "$HOME/.codex/AGENTS.md"
+# Follow the existing optional agy convention: do not create a missing file.
+if [[ -f $HOME/.gemini/GEMINI.md ]]; then
+  install_cause_rule "$HOME/.gemini/GEMINI.md"
+fi
 
 # agy has no documented universal instruction-file location.  Support known
 # local conventions without guessing a new one; report absence for the caller.
@@ -53,7 +67,7 @@ for candidate in "$HOME/.agy/AGENTS.md" "$HOME/.agy/INSTRUCTIONS.md" "$HOME/.con
   if [[ -f $candidate ]]; then agy_target=$candidate; break; fi
 done
 if [[ -n $agy_target ]]; then
-  install_rule "$agy_target"
+  install_rule "$agy_target" "$rule_template" "$begin" "$end"
   printf 'agy: installed %s\n' "$agy_target"
 else
   printf 'agy: global instruction file not found; not installed\n' >&2

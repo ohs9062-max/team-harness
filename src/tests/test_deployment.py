@@ -104,6 +104,7 @@ def deployable_repository(repository: Path) -> Path:
         "design/designs/operating_policy.md",
         "design/user_config/worker_suffix.md",
         "templates/journal_rule_block.md",
+        "templates/cause_check_rule_block.md",
         "skills/team-harness/SKILL.md",
         "skills/orca-harness-protocol/SKILL.md",
         "src/team_harness/hook_identity.py",
@@ -440,3 +441,39 @@ def test_shim_opt_in_lifecycle(
     assert "꺼짐" in dp.status(home)["shim"]
     for name in (".bashrc", ".profile"):
         assert "team-harness shim >>>" not in (home / name).read_text()
+
+
+def test_cause_check_deployment_preserves_user_text_and_detects_drift(
+    deployable_repository: Path, tmp_path: Path
+):
+    home = tmp_path / "home"
+    relatives = (".claude/CLAUDE.md", ".codex/AGENTS.md", ".gemini/GEMINI.md")
+    for relative in relatives:
+        path = home / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("user before\nuser after\n")
+    dp.apply(deployable_repository, home)
+    marker = "<!-- TEAM-HARNESS-CAUSE-CHECK:BEGIN -->"
+    for relative in relatives:
+        content = (home / relative).read_text()
+        assert content.count(marker) == 1
+        assert "user before\nuser after\n" in content
+        if "GEMINI" not in relative:
+            assert content.count("TEAM-HARNESS-COORDINATOR-JOURNAL:BEGIN") == 1
+    dp.apply(deployable_repository, home)
+    for relative in relatives:
+        assert (home / relative).read_text().count(marker) == 1
+    gemini = home / relatives[-1]
+    gemini.write_text(gemini.read_text().replace(marker, "deleted marker"))
+    assert str(gemini) in dp.status(home)["drift"]
+    gemini.write_text("user before\nuser after\n")
+    dp.apply(deployable_repository, home)
+    assert gemini.read_text().count(marker) == 1
+
+
+def test_cause_check_does_not_create_missing_gemini(
+    deployable_repository: Path, tmp_path: Path
+):
+    home = tmp_path / "home"
+    dp.apply(deployable_repository, home)
+    assert not (home / ".gemini/GEMINI.md").exists()
