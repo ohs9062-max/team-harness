@@ -188,7 +188,10 @@ def prune(db: sqlite3.Connection, now: datetime) -> bool:
 
 
 def update(
-    observations: list[dict] | None = None, *, maintenance: bool = False
+    observations: list[dict] | None = None,
+    *,
+    maintenance: bool = False,
+    extra_tasks: set[Path] | None = None,
 ) -> None:
     wd = watch_dir()
     wd.mkdir(parents=True, exist_ok=True)
@@ -222,6 +225,7 @@ def update(
         )
         tasks = _paths(wd)
         registered_tasks = set(tasks)
+        tasks.update(extra_tasks or ())
         observed = None
         try:
             observed = (

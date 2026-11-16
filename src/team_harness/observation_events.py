@@ -156,12 +156,30 @@ def process_events(db: sqlite3.Connection, registered: set[Path], now: str) -> N
     """Called only by maintenance, after processes and attempts have been indexed."""
     now_dt = datetime.fromisoformat(now)
     cutoff = (now_dt - timedelta(hours=1)).isoformat()
-    if os.environ.get("TH_OBSERVED_NOTIFY") != "0":
+    notify = os.environ.get("TH_OBSERVED_NOTIFY") != "0"
+    if notify or os.environ.get("TH_OBSERVED_VERIFY") != "0":
         rows = db.execute(
-            "SELECT pid,start,route_key,workspace,worker_task,task,cmd, (SELECT claude_pid FROM sessions WHERE sessions.session_id=processes.session_id) FROM processes WHERE ended_at IS NOT NULL AND COALESCE(kind, '') != '작업' AND origin IN ('worker','coordinator')"
+            "SELECT pid,start,route_key,workspace,worker_task,task,cmd, (SELECT claude_pid FROM sessions WHERE sessions.session_id=processes.session_id), origin, ended_at FROM processes WHERE ended_at IS NOT NULL AND COALESCE(kind, '') != '작업' AND origin IN ('worker','coordinator','user')"
         ).fetchall()
-        for pid, start, session, workspace, worker_task, task, cmd, claude_pid in rows:
+        for (
+            pid,
+            start,
+            session,
+            workspace,
+            worker_task,
+            task,
+            cmd,
+            claude_pid,
+            origin,
+            ended_at,
+        ) in rows:
             location = task or worker_task or ""
+            if not notify and (origin not in {"user", "coordinator"} or not task):
+                continue
+            if origin == "user" and not task:
+                continue
+            if origin == "user" and not workspace and task:
+                workspace = task
             if not workspace or (location and Path(location) in registered):
                 continue
             identity = "task:" + location if location else f"pid:{pid}:{start}"
@@ -183,11 +201,26 @@ def process_events(db: sqlite3.Connection, registered: set[Path], now: str) -> N
                 os.path.relpath(location, workspace) if location else "관찰 작업"
             )
             detail = f"{summary} — " if summary and summary != command else ""
-            _append(
-                coordinator_workspace(workspace, pid, claude_pid),
-                session or "",
-                f"{now_dt.astimezone().strftime('%Y-%m-%d %H:%M')} | 관찰:{label} | 관찰 종료 | {detail}{_result(location)} | -",
-            )
+            owner = coordinator_workspace(workspace, pid, claude_pid)
+            message = f"{now_dt.astimezone().strftime('%Y-%m-%d %H:%M')} | 관찰:{label} | 관찰 종료 | {detail}{_result(location)}"
+            if origin in {"user", "coordinator"} and task:
+                from team_harness.observed_verify import launch
+
+                if launch(
+                    Path(task),
+                    ended_at,
+                    owner,
+                    (session or "") if notify else "",
+                    message,
+                ):
+                    db.execute(
+                        "INSERT OR IGNORE INTO observed_notices VALUES (?,?)",
+                        (identity, now),
+                    )
+                    continue
+                message += " | 검수 없음"
+            if notify:
+                _append(owner, session or "", message + " | -")
             db.execute(
                 "INSERT OR IGNORE INTO observed_notices VALUES (?,?)", (identity, now)
             )
