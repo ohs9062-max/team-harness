@@ -35,6 +35,8 @@ if __package__ in (None, ""):
 
 from team_harness.cause_check import has_cause_hypothesis
 from team_harness.cause_check import has_symptom_section
+from team_harness.paths_check import has_paths_table
+from team_harness.paths_check import paths_reason
 
 FIXED_PROMPT = """verify 결과와 report·STATUS를 읽고 5줄 이내:
 1)결론 2)핵심 수치와 출처 파일 3)이상한 점 4)다음 할 일.
@@ -476,6 +478,9 @@ def verify(
             "verify": check_script(task, force=force),
         }
         brief = read(task / "task.md")
+        reason = paths_reason(brief)
+        if reason and not has_paths_table(brief):
+            checks["적용 경로"] = item("WARN", f"th 밖(직접 실행) 열 없음: {reason}")
         if has_cause_hypothesis(brief):
             reports = "\n".join(
                 read(task / name) for name in ("REPORT.md", "report.md", "WORKLOG.md")

@@ -223,7 +223,9 @@ def test_push_guard(tmp_path: Path) -> None:
     git("commit", "-qam", "edit")
     edited = git("rev-parse", "HEAD")
     assert push(base, edited).returncode == 0
-    decisions.write_text("## TH-D1. Existing\nEdited\n\n## TH-D2. New\nText\n")
+    decisions.write_text(
+        "## TH-D1. Existing\nEdited\n\n## TH-D2. New\n### 적용 경로\n| 경로 | 구현 |\n|---|---|\n| th 밖 | hook |\n"
+    )
     git("commit", "-qam", "new decision")
     new = git("rev-parse", "HEAD")
     assert push(edited, new).returncode != 0

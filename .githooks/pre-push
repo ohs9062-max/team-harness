@@ -4,6 +4,7 @@ root=$(git rev-parse --show-toplevel)
 hook_root=$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")/.." && pwd)
 needs_canary=0
 needs_crosscheck=0
+revisions_to_check=()
 while read -r local_ref local_sha remote_ref remote_sha; do
   [[ $local_sha =~ ^0+$ ]] && continue
   if [[ $remote_sha =~ ^0+$ ]]; then
@@ -13,6 +14,7 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   fi
   while read -r revision; do
     [[ -n $revision ]] || continue
+    revisions_to_check+=("$revision")
     if git diff-tree --root -m --no-commit-id --name-only -r "$revision" | grep -E '^(scripts/|src/team_harness/)' > /dev/null; then
       needs_canary=1
     fi
@@ -60,5 +62,20 @@ if (( needs_crosscheck )); then
   else
     echo '새 TH-D 결정에는 채택된 Crosscheck 트레일러 또는 TH_CROSSCHECK_SKIP 사유가 필요합니다' >&2
     exit 1
+  fi
+fi
+
+if (( ${#revisions_to_check[@]} )); then
+  if ! python3 "$hook_root/src/team_harness/paths_check.py" "${revisions_to_check[@]}"; then
+    skip=${TH_PATHS_SKIP:-}
+    if [[ -n ${skip//[[:space:]]/} ]]; then
+      watch_dir=${TH_WATCH_DIR:-"$HOME/.team-harness/watch"}
+      mkdir -p "$watch_dir"
+      reason=${TH_PATHS_SKIP//$'\n'/ }
+      printf '%s [paths skip] %s\n' "$(date '+%F %T')" "$reason" >> "$watch_dir/events.log"
+    else
+      echo '적용 경로 표에 th 밖(직접 실행)이 필요합니다 (TH_PATHS_SKIP 사유로 우회)' >&2
+      exit 1
+    fi
   fi
 fi
