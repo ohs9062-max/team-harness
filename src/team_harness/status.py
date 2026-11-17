@@ -246,36 +246,34 @@ def main(argv: list[str] | None = None) -> int:
             s = f"실행: {target}"
         return s if s else "-"
 
+    status_lines_cache = {}
+
+    def status_lines(task_dir):
+        if task_dir not in status_lines_cache:
+            try:
+                with open(
+                    os.path.join(task_dir, "STATUS"), encoding="utf-8", errors="replace"
+                ) as f:
+                    status_lines_cache[task_dir] = f.read().splitlines()
+            except OSError:
+                status_lines_cache[task_dir] = []
+        return status_lines_cache[task_dir]
+
     def get_progress(task_dir):
-        status_file = os.path.join(task_dir, "STATUS")
-        if not os.path.isfile(status_file):
-            return "-"
-        last_line = ""
-        try:
-            with open(status_file, "r", encoding="utf-8", errors="replace") as f:
-                for line in f:
-                    l = line.strip()
-                    if l:
-                        last_line = l
-        except Exception:
-            pass
+        last_line = next(
+            (line.strip() for line in reversed(status_lines(task_dir)) if line.strip()),
+            "",
+        )
         s = clean_status_line(last_line)
         if len(s) > 50:
             s = s[:50]
         return s if s else "-"
 
     def get_stage_summary(task_dir, state_label):
-        status_file = os.path.join(task_dir, "STATUS")
-        last_line = ""
-        if os.path.isfile(status_file):
-            try:
-                with open(status_file, "r", encoding="utf-8", errors="replace") as f:
-                    for line in f:
-                        l = line.strip()
-                        if l:
-                            last_line = l
-            except Exception:
-                pass
+        last_line = next(
+            (line.strip() for line in reversed(status_lines(task_dir)) if line.strip()),
+            "",
+        )
         s = clean_status_line(last_line)
         s = re.sub(r"^(?:상태|결과|status)[:\s|]*", "", s, flags=re.IGNORECASE).strip()
         s = re.sub(
@@ -355,15 +353,7 @@ def main(argv: list[str] | None = None) -> int:
         if state in ("완료", "실패"):
             return "-"
 
-        status_file = os.path.join(task_dir, "STATUS")
-        if not os.path.isfile(status_file):
-            return "-"
-
-        try:
-            with open(status_file, "r", encoding="utf-8", errors="replace") as f:
-                lines = [l.strip() for l in f if l.strip()]
-        except Exception:
-            return "-"
+        lines = [line.strip() for line in status_lines(task_dir) if line.strip()]
 
         if not lines:
             return "-"
@@ -737,21 +727,21 @@ def main(argv: list[str] | None = None) -> int:
         cur_wdir = os.path.abspath(w_dir)
         is_custom_wdir = cur_wdir != default_wdir
         expected_env = f"TH_WATCH_DIR={w_dir}".encode()
-        for entry in Path("/proc").glob("[0-9]*"):
+        for entry in proc_entries:
             if not entry.name.isdigit():
                 continue
             pid = int(entry.name)
             try:
-                cmdline_bytes = (entry / "cmdline").read_bytes()
+                cmdline_bytes = proc_snapshot.read(entry, "cmdline")
                 if b"th-watchd.sh" not in cmdline_bytes:
                     continue
                 if is_custom_wdir:
-                    env_bytes = (entry / "environ").read_bytes().split(b"\0")
+                    env_bytes = proc_snapshot.read(entry, "environ").split(b"\0")
                     if expected_env not in env_bytes:
                         continue
                 ppid = 0
-                stat_txt = (entry / "stat").read_text(
-                    encoding="utf-8", errors="replace"
+                stat_txt = proc_snapshot.read(entry, "stat").decode(
+                    "utf-8", errors="replace"
                 )
                 after_comm = stat_txt.rsplit(") ", 1)[-1].split()
                 if after_comm and after_comm[0] == "Z":
@@ -765,7 +755,7 @@ def main(argv: list[str] | None = None) -> int:
                         os.path.dirname(os.path.realpath(script_arg))
                     )
                 else:
-                    cwd = os.readlink(str(entry / "cwd"))
+                    cwd = proc_snapshot.cwd(entry)
                     if script_arg:
                         base_dir = os.path.dirname(
                             os.path.dirname(
@@ -976,13 +966,66 @@ def main(argv: list[str] | None = None) -> int:
                 pass
         return max(stamps) if stamps else None
 
+    class ProcSnapshot:
+        def __init__(self):
+            self.entries = list(Path("/proc").glob("[0-9]*"))
+            self.cache = {}
+            self.environ_cache = {}
+
+        def environ(self, entry):
+            if entry not in self.environ_cache:
+                raw = self.read(entry, "environ").split(b"\0")
+                fs_values = {}
+                text_values = {}
+                for item in raw:
+                    if b"=" in item:
+                        key, value = item.split(b"=", 1)
+                        fs_values[os.fsdecode(key)] = os.fsdecode(value)
+                        text_values[key.decode(errors="replace")] = value.decode(
+                            errors="replace"
+                        )
+                self.environ_cache[entry] = (raw, fs_values, text_values)
+            return self.environ_cache[entry]
+
+        def read(self, entry, name):
+            key = (entry, name)
+            if key not in self.cache:
+                try:
+                    self.cache[key] = (entry / name).read_bytes()
+                except OSError as exc:
+                    self.cache[key] = exc
+            result = self.cache[key]
+            if isinstance(result, OSError):
+                raise result
+            return result
+
+        def cwd(self, entry):
+            key = (entry, "cwd")
+            if key not in self.cache:
+                try:
+                    self.cache[key] = os.readlink(entry / "cwd")
+                except OSError as exc:
+                    self.cache[key] = exc
+            result = self.cache[key]
+            if isinstance(result, OSError):
+                raise result
+            return result
+
+    proc_snapshot = ProcSnapshot()
+    proc_entries = proc_snapshot.entries
+
     # Scan /proc once for live agy processes and worker command lines
     _PROC_BY_PID = {}
     _AGY_PIDS_BY_TASK = {}
-    for _entry in Path("/proc").glob("[0-9]*/cmdline"):
+    for _proc_entry in proc_entries:
+        _entry = _proc_entry / "cmdline"
         try:
             _pid = int(_entry.parent.name)
-            _args = _entry.read_bytes().decode("utf-8", errors="replace").split("\0")
+            _args = (
+                proc_snapshot.read(_proc_entry, "cmdline")
+                .decode("utf-8", errors="replace")
+                .split("\0")
+            )
             if not _args or not _args[0]:
                 continue
             _PROC_BY_PID[_pid] = _args
@@ -1006,8 +1049,10 @@ def main(argv: list[str] | None = None) -> int:
     liveness = importlib.util.module_from_spec(liveness_spec)
     liveness_spec.loader.exec_module(liveness)
 
+    process_snapshot = liveness._process_snapshot(proc_entries, proc_snapshot)
+
     def fast_live_pids(task_dir):
-        return liveness.live_processes(task_dir)
+        return liveness.live_processes(task_dir, process_snapshot)
 
     _REGISTRY_SESSIONS_CACHE = {}
     _SETTINGS_CACHE = {}
@@ -1470,10 +1515,8 @@ def main(argv: list[str] | None = None) -> int:
         ):
             v_status = "-"
         prog = (
-            (tpath / "STATUS").read_text(errors="replace").splitlines()[-1]
-            if inferred
-            and (tpath / "STATUS").is_file()
-            and (tpath / "STATUS").stat().st_size
+            status_lines(task)[-1]
+            if inferred and status_lines(task)
             else get_progress(task)
         )
         ctx_line, ctx_info = inspect_task_context(task, prog)
@@ -1520,9 +1563,15 @@ def main(argv: list[str] | None = None) -> int:
 
     observed = []
     try:
+        import inspect
+
         from team_harness import proc_observer
 
-        observed = proc_observer.observe()
+        observed = (
+            proc_observer.observe(proc_entries, proc_snapshot)
+            if "proc_entries" in inspect.signature(proc_observer.observe).parameters
+            else proc_observer.observe()
+        )
         import sqlite3
 
         from team_harness.workspace_archive import watch_dir as shim_watch_dir
