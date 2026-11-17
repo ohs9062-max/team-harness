@@ -86,10 +86,13 @@ def _append(workspace: str, session: str, message: str) -> None:
             unread = watch_dir() / "inbox_unread"
             unread.mkdir(parents=True, exist_ok=True)
             key = hashlib.sha256(workspace.encode()).hexdigest()
-            with (unread / f"{key}.tsv").open("a", encoding="utf-8") as state:
-                state.write(
-                    f"{int(datetime.now(UTC).timestamp())}\t{out.tell()}\t0\t{workspace}\t{route}\tunknown\n"
-                )
+            state_path = unread / f"{key}.tsv"
+            with state_path.with_suffix(".tsv.lock").open("a") as state_lock:
+                fcntl.flock(state_lock, fcntl.LOCK_EX)
+                with state_path.open("a", encoding="utf-8") as state:
+                    state.write(
+                        f"{int(datetime.now(UTC).timestamp())}\t{out.tell()}\t0\t{workspace}\t{route}\tunknown\n"
+                    )
 
 
 def _summary(task: str, command: str) -> str:

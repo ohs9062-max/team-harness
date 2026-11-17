@@ -590,9 +590,12 @@ def main(argv: list[str] | None = None) -> int:
     now_dt.strftime("%Y-%m-%d %H:%M:%S")
     now_hm = now_dt.strftime("%H:%M")
 
+    from team_harness.unread import owner_state
+
     def get_unread_inbox_alerts(w_dir):
         """Return unread inbox entries, using the event's target session cursor."""
         grouped = {}
+        orphan_count = 0
         for state_file in Path(w_dir, "inbox_unread").glob("*.tsv"):
             try:
                 lines = state_file.read_text(
@@ -610,6 +613,9 @@ def main(argv: list[str] | None = None) -> int:
                 try:
                     size, stamp_epoch = int(size_text), int(stamp)
                 except ValueError:
+                    continue
+                if owner_state(owner) == "orphan":
+                    orphan_count += 1
                     continue
                 root = Path(owner, ".claude")
                 active = []
@@ -644,18 +650,16 @@ def main(argv: list[str] | None = None) -> int:
                     group = (owner, route, route != "*" and route not in active, agent)
                     count, oldest = grouped.get(group, (0, stamp_epoch))
                     grouped[group] = (count + 1, min(oldest, stamp_epoch))
-        return [
+        return orphan_count, [
             (owner, route, missing, count, oldest, agent)
             for (owner, route, missing, agent), (count, oldest) in sorted(
                 grouped.items()
             )
         ]
 
-    unread_inbox_alerts = get_unread_inbox_alerts(watch_dir)
+    orphan_count, unread_inbox_alerts = get_unread_inbox_alerts(watch_dir)
 
     def unread_inbox_line():
-        if not unread_inbox_alerts:
-            return ""
         details = []
         codex = {}
         for owner, route, missing, count, oldest, agent in unread_inbox_alerts:
@@ -673,6 +677,8 @@ def main(argv: list[str] | None = None) -> int:
             f"ℹ Codex 창 확인 필요: {owner} {count}건 (가장 오래된 {datetime.fromtimestamp(oldest).strftime('%H:%M')})"
             for owner, (count, oldest) in codex.items()
         )
+        if orphan_count:
+            lines.append(f"ℹ 고아 알림 기록 {orphan_count}건(삭제된 경로)")
         return "\n".join(lines)
 
     def get_footer_line(w_dir):

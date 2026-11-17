@@ -41,3 +41,7 @@ tasks의 owner·task_key, failures의 task·at, events의 task와 at, coord_log�
 유지보수 갱신은 meta의 마지막 정리 시각을 기준으로 하루에 한 번 이하 정리한다. 종료된 보조 프로세스는 7일, 하위 워커·job·작업은 90일 보존하며 각각 `TH_DB_KEEP_AUX_DAYS`, `TH_DB_KEEP_WORKER_DAYS`로 일수를 조정한다. 실행 중인 프로세스와 작업·시도·실패·채택·일지·사건 이력은 지우지 않는다. PID와 시작 시각으로 식별한 관찰 알림은 30일이 지나고 해당 프로세스도 삭제된 경우 정리한다. 작업 경로 신원은 재사용 가능하므로 재알림 방지를 위해 유지한다. 정리 후 WAL truncate 체크포인트를 시도하며 다른 연결이 방해하면 다음 기회에 맡긴다.
 
 등록되지 않은 user·coordinator 직접 실행은 같은 폴더에 실행 중인 프로세스가 없을 때 `task.md`의 검수 bash 블록을 별도 제한 시간 프로세스에서 한 번 실행한다. 기존 결과가 종료 관찰 이후면 재사용하고 REPORT가 있으면 digest와 DB를 수집한다. 종료 알림에는 검수 결과를 포함한다. `TH_OBSERVED_VERIFY=0`은 검수를 끈다. watchd·worker 자손 및 등록 작업은 제외하며 작업 자체는 재실행하지 않는다.
+
+| 자료 | 보존·정리 정책 |
+|---|---|
+| watch/inbox_unread (th 외부 직접 실행 포함) | 확인된 읽음은 maintenance에서 제거한다. 삭제된 owner는 TH_UNREAD_ORPHAN_DAYS(기본 30일) 경과 후 watch/archive/unread_orphans_*.tsv로 이동한다. 유효 owner의 미읽음과 접근 오류는 보존한다. dry-run은 파일을 변경하지 않는다. |
