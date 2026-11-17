@@ -437,14 +437,9 @@ def apply(root: Path = ROOT, home: Path | None = None) -> dict:
         source = root / "scripts/th-status.sh"
         install_link(source, target, home)
         links[str(target)] = str(source.resolve())
-        python = root / ".venv/bin/python"
-        if not python.exists():
-            python = Path(sys.executable)
         wrapper = (
             "#!/usr/bin/env bash\nset -euo pipefail\n"
-            f"export PYTHONPATH={shlex.quote(str(root / 'src'))}"
-            "${PYTHONPATH:+:$PYTHONPATH}\n"
-            f'exec {shlex.quote(str(python))} -m team_harness "$@"\n'
+            f'exec {shlex.quote(str(root / "scripts/th-env.sh"))} -m team_harness "$@"\n'
         )
         if (
             (bin_dir / "th").is_symlink()

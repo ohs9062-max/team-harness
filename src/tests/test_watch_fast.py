@@ -14,7 +14,7 @@ def run_bash(code: str, *args: Path) -> subprocess.CompletedProcess[str]:
         [
             "bash",
             "-c",
-            f'source "$1"; shift; {code}',
+            f'source "$1"; TH_TEST_ENV="$(dirname "$1")/th-env.sh"; shift; {code}',
             "bash",
             str(LIB),
             *map(str, args),
@@ -127,7 +127,7 @@ def test_failed_pending_continue_reaches_policy_on_next_pass(tmp_path: Path) -> 
     script = r"""
 inspect_context_and_job() { printf 'none\t0\t\n'; }
 callback() { printf '%s\n' "$2"; }
-th_python() { if [[ $2 == team_harness.stop_policy ]]; then printf '자동 계속(1/2)'; fi; }
+th_python() { if [[ $2 == team_harness.stop_policy ]]; then printf '자동 계속(1/2)'; else "$TH_TEST_ENV" "$@"; fi; }
 if ! watch_task_settled "$1"; then
   inspect_task_event "$1" "$2" .th_daemon 600 '' callback
 fi
@@ -173,7 +173,7 @@ def test_successful_policy_settles_only_after_inspection(tmp_path: Path) -> None
     script = r"""
 inspect_context_and_job() { printf 'none\t0\t\n'; }
 callback() { :; }
-th_python() { touch "$3/.th_daemon.settled"; }
+th_python() { if [[ $2 == team_harness.stop_policy ]]; then touch "$3/.th_daemon.settled"; else "$TH_TEST_ENV" "$@"; fi; }
 watch_task_settled "$1" && exit 1
 inspect_task_event "$1" "$2" .th_daemon 600 '' callback
 watch_task_settled "$1"

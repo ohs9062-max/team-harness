@@ -135,6 +135,8 @@ class CheckRunner:
 
     def run_one(self, command: list[str]) -> CheckResult:
         """Run a single check command and return the result."""
+        from team_harness.internal_python import caller_environment
+
         started = time.monotonic()
         try:
             result = subprocess.run(
@@ -145,6 +147,7 @@ class CheckRunner:
                 timeout=self.timeout_sec,
                 check=False,
                 shell=False,
+                env=caller_environment(),
             )
             return CheckResult(
                 command=command,

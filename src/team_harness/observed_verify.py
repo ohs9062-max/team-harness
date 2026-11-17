@@ -10,6 +10,8 @@ import re
 import subprocess
 import sys
 
+from team_harness.internal_python import command
+
 
 def launch(task: Path, ended_at: str, owner: str, route: str, message: str) -> bool:
     if os.environ.get("TH_OBSERVED_VERIFY") == "0":
@@ -34,14 +36,15 @@ def launch(task: Path, ended_at: str, owner: str, route: str, message: str) -> b
             "timeout",
             "--kill-after=2",
             str(limit),
-            sys.executable,
-            "-m",
-            "team_harness.observed_verify",
-            str(task),
-            ended_at,
-            owner,
-            route,
-            message,
+            *command(
+                "-m",
+                "team_harness.observed_verify",
+                str(task),
+                ended_at,
+                owner,
+                route,
+                message,
+            ),
         ],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,

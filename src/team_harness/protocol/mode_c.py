@@ -16,7 +16,6 @@ from pathlib import Path
 import re
 import signal
 import subprocess
-import sys
 from threading import Lock
 import time
 from typing import Any
@@ -260,17 +259,15 @@ class TeamHarnessAgentRunner:
         **extra_kwargs: Any,
     ) -> AgentResult:
         from team_harness.brief_check import log_brief_warnings
+        from team_harness.internal_python import command
 
         # Isolate best-effort recall so a locked or damaged index cannot delay a worker.
         if os.environ.get("TH_AUTO_RECALL") != "0":
             try:
                 process = await asyncio.create_subprocess_exec(
-                    sys.executable,
-                    "-m",
-                    "team_harness.recall_hook",
-                    "launch",
-                    cwd,
-                    task_key or "",
+                    *command(
+                        "-m", "team_harness.recall_hook", "launch", cwd, task_key or ""
+                    ),
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.DEVNULL,
                 )

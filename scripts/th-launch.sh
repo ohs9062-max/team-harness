@@ -41,21 +41,21 @@ task_dir=$(realpath "$1"); shift
 py_src=$(cd "$script_dir/../src" && pwd)
 if [[ ${TH_PREFLIGHT_ONLY:-0} != 1 && ${TH_AUTO_RECALL:-1} != 0 ]]; then
   recall_key=$(sed -n 's/^task_key:[[:space:]]*//p' "$task_dir/task.md" 2>/dev/null | head -n 1 || true)
-  PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" timeout 2s python3 -m team_harness.recall_hook launch "$task_dir" "$recall_key" 2>/dev/null || true
+  timeout 2s "$script_dir/th-env.sh" -m team_harness.recall_hook launch "$task_dir" "$recall_key" 2>/dev/null || true
 fi
 # Preflight must remain usable while a worker is alive. Real launches serialize
 # all checks and mutations for the task until the new identity is registered.
 if [[ ${TH_PREFLIGHT_ONLY:-0} != 1 ]]; then
   exec {launch_lock_fd}>"$task_dir/.th_launch.lock"
   flock -x "$launch_lock_fd"
-  if python3 "$script_dir/th-launch-identity.py" check "$task_dir"; then
+  if th_python "$script_dir/th-launch-identity.py" check "$task_dir"; then
     echo '이미 실행 중'
     exit 75
   fi
 fi
 if [[ ${TH_ROLLOVER:-0} == 1 || ${TH_AUTO_CONTINUE:-0} == 1 || ${TH_RELAUNCH:-0} == 1 ]]; then
   unset TH_RETRY_REASON
-  eval "$(PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" th_python -m team_harness.launch_env load "$task_dir")"
+  eval "$(th_python -m team_harness.launch_env load "$task_dir")"
 fi
 
 worker_type="codex"
@@ -146,7 +146,7 @@ fi
 # activated development shell.
 context_python=(th_python)
 policy_rc=0
-policy_out=$(PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" "${context_python[@]}" -m team_harness.launch_policy check "$task_dir" "$worker_type" "$model" "$effort" "$watch_dir") || policy_rc=$?
+policy_out=$("${context_python[@]}" -m team_harness.launch_policy check "$task_dir" "$worker_type" "$model" "$effort" "$watch_dir") || policy_rc=$?
 if (( policy_rc != 0 )); then
   printf '%s\n' "$policy_out" >&2
   exit "$policy_rc"
@@ -155,7 +155,7 @@ if [[ $worker_type == codex && ${TEAM_HARNESS_JEV:-} != 0 && ${TH_PREFLIGHT_ONLY
   th_jev -m team_harness.decisions.advisor tier --task "$task_dir/task.md" --worker "$worker_type" --model "$model" --effort "$effort"
 fi
 brief_rc=0
-PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" "${context_python[@]}" -m team_harness.brief_check "$task_dir" || brief_rc=$?
+"${context_python[@]}" -m team_harness.brief_check "$task_dir" || brief_rc=$?
 if (( brief_rc != 0 )); then
   if (( brief_rc != 2 )) || [[ -z ${TH_BRIEF_OK:-} || -z ${TH_BRIEF_OK//[[:space:]]/} ]]; then
     echo '지시서 점검 실패: 수정하거나 TH_BRIEF_OK에 우회 사유를 지정하세요' >&2
@@ -187,7 +187,7 @@ cleanup_ctx_prep() {
   # Context registration is provisional until a process is started. Any
   # preparation failure must restore the former parked entry or remove it.
   if [[ $worker_spawned == 0 && -s $ctx_prep_file ]]; then
-    PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" th_python - "$ctx_prep_file" << 'PYEOF' || true
+    th_python - "$ctx_prep_file" << 'PYEOF' || true
 import json, sys
 from pathlib import Path
 from team_harness.worker_context import WorkerContextRegistry
@@ -201,19 +201,19 @@ PYEOF
   fi
   rm -f "$ctx_prep_file"
   if [[ -n $admission_slot ]]; then
-    PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" th_python -m team_harness.resource_slots release "$admission_slot" || true
+    th_python -m team_harness.resource_slots release "$admission_slot" || true
   fi
 }
 trap cleanup_ctx_prep EXIT
 
 # Reserve before registry preparation, durable attempt recording, or clearing
 # any previous result. A losing concurrent launcher leaves the task intact.
-admission_slot=$(PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" th_python -m team_harness.resource_slots reserve "$task_dir" "$worker_type" "$model" "$effort" "$$")
+admission_slot=$(th_python -m team_harness.resource_slots reserve "$task_dir" "$worker_type" "$model" "$effort" "$$")
 if [[ ${TH_ROLLOVER:-0} != 1 && ${TH_AUTO_CONTINUE:-0} != 1 && ${TH_RELAUNCH:-0} != 1 ]]; then
-  PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" th_python -m team_harness.launch_env save "$task_dir"
+  th_python -m team_harness.launch_env save "$task_dir"
 fi
 
-if ! PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" "${context_python[@]}" - "$journal_workspace" "$task_dir" "$worker_type" "$model" "$worktree" "$ctx_prep_file" << 'PYEOF'
+if ! "${context_python[@]}" - "$journal_workspace" "$task_dir" "$worker_type" "$model" "$worktree" "$ctx_prep_file" << 'PYEOF'
 import json, os, re, shutil, sys, uuid
 from pathlib import Path
 from team_harness.agents.process_identity import capture_starttime
@@ -548,7 +548,7 @@ then
   exit 1
 fi
 
-readarray -t ctx_meta < <(python3 - "$ctx_prep_file" << 'PYEOF'
+readarray -t ctx_meta < <(th_python - "$ctx_prep_file" << 'PYEOF'
 import json, sys
 data = json.loads(open(sys.argv[1], encoding="utf-8").read())
 print("1" if data.get("enabled") else "0")
@@ -561,13 +561,13 @@ ctx_enabled=${ctx_meta[0]:-0}
 spawn_mode=${ctx_meta[1]:-fresh}
 resume_session_id=${ctx_meta[2]:-}
 preserve_job_pid=${ctx_meta[3]:-0}
-handoff_prompt=$(python3 - "$ctx_prep_file" << 'PYEOF'
+handoff_prompt=$(th_python - "$ctx_prep_file" << 'PYEOF'
 import json, sys
 data = json.loads(open(sys.argv[1], encoding="utf-8").read())
 print(data.get("handoff_text", ""), end="")
 PYEOF
 )
-worker_allow_paths=$(python3 - "$ctx_prep_file" << 'PYEOF'
+worker_allow_paths=$(th_python - "$ctx_prep_file" << 'PYEOF'
 import json, sys
 data = json.loads(open(sys.argv[1], encoding="utf-8").read())
 print(json.dumps(data.get("allow_paths", [])))
@@ -598,14 +598,14 @@ usage_record() {
   local usage_file="$watch_dir/usage.jsonl" attempt at owner_json override_json
   at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
   attempt=$(awk -v task="$task_dir" 'BEGIN { n=0 } $0 ~ /"task"/ && index($0, "\"task\":\"" task "\"") { n++ } END { print n + 1 }' "$usage_file" 2>/dev/null || printf '1')
-  owner_json=$(printf '%s' "$journal_workspace" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')
-  override_json=$(printf '%s' "${policy_override:-}" | python3 -c 'import json,sys; x=sys.stdin.read(); print(json.dumps(x if x else None))')
+  owner_json=$(printf '%s' "$journal_workspace" | th_python -c 'import json,sys; print(json.dumps(sys.stdin.read()))')
+  override_json=$(printf '%s' "${policy_override:-}" | th_python -c 'import json,sys; x=sys.stdin.read(); print(json.dumps(x if x else None))')
   if ! (
     flock -x 200
     printf '{"v":1,"at":"%s","task":%s,"attempt":%s,"worker":%s,"model":%s,"effort":%s,"owner":%s,"override":%s,"rollover":%s}\n' \
-      "$at" "$(printf '%s' "$task_dir" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" "$attempt" \
-      "$(printf '%s' "$worker_type" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" "$(printf '%s' "$model" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" \
-      "$(printf '%s' "$effort" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" "$owner_json" "$override_json" "$( [[ ${TH_ROLLOVER:-0} == 1 ]] && printf true || printf false )" >> "$usage_file"
+      "$at" "$(printf '%s' "$task_dir" | th_python -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" "$attempt" \
+      "$(printf '%s' "$worker_type" | th_python -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" "$(printf '%s' "$model" | th_python -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" \
+      "$(printf '%s' "$effort" | th_python -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" "$owner_json" "$override_json" "$( [[ ${TH_ROLLOVER:-0} == 1 ]] && printf true || printf false )" >> "$usage_file"
   ) 200>>"$usage_file"; then
     printf 'warning: usage ledger append failed; launch continues\n' >&2
   fi
@@ -633,10 +633,10 @@ printf '%s LAUNCH worker=%s model=%s effort=%s\n' \
 printf '%s\n' "$session_agent" > "$task_dir/.th_session_agent"
 printf '%s\n' "$journal_workspace" > "$task_dir/.th_owner"
 session_key=$(th_session_key)
-python3 "$script_dir/th-coordinator.py" "$PPID" "$session_key" "$task_dir/.th_coordinator.json"
+th_python "$script_dir/th-coordinator.py" "$PPID" "$session_key" "$task_dir/.th_coordinator.json"
 mkdir -p "$journal_workspace/.claude"
 touch "$journal_workspace/.claude/inbox.md"
-python3 "$script_dir/th-inbox-read.py" "$journal_workspace" 1 init || exit 2
+th_python "$script_dir/th-inbox-read.py" "$journal_workspace" 1 init || exit 2
 if [[ -n $session_key ]]; then
   printf '%s\n' "$session_key" > "$task_dir/.th_session"
 else
@@ -675,7 +675,7 @@ fi
 # STATUS is the durable step record.  Preserve all earlier attempts (including
 # before the most recent LAUNCH) and give a fresh worker only its small,
 # deterministic recovery note.
-recovery_summary=$(PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" th_python -m team_harness.step_records summary "$task_dir")
+recovery_summary=$(th_python -m team_harness.step_records summary "$task_dir")
 if [[ -n $recovery_summary ]]; then
   printf '%s' "$recovery_summary" > "$task_dir/RECOVERY.md"
   task_body="$task_body
@@ -783,12 +783,12 @@ elif [[ "$worker_type" == "claude" ]]; then
 fi
 
 worker_spawned=1
-python3 "$script_dir/th-launch-identity.py" record "$task_dir"
-PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" th_python -m team_harness.resource_slots bind "$admission_slot" "$(<"$task_dir/worker.pid")"
+th_python "$script_dir/th-launch-identity.py" record "$task_dir"
+th_python -m team_harness.resource_slots bind "$admission_slot" "$(<"$task_dir/worker.pid")"
 admission_slot=""
 
 if [[ $ctx_enabled == 1 ]]; then
-  if ! PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" "${context_python[@]}" - "$ctx_prep_file" "$task_dir" << 'PYEOF'
+  if ! "${context_python[@]}" - "$ctx_prep_file" "$task_dir" << 'PYEOF'
 import json, os, sys
 from pathlib import Path
 from team_harness.agents.process_identity import capture_starttime
@@ -862,7 +862,7 @@ fi
 ) 200>"$watch_dir/tasks.lock"
 
 # Independent observational registry; watchd still consumes tasks.txt only.
-PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" th_python -m team_harness.status_registry \
+th_python -m team_harness.status_registry \
   "$task_dir" "$(<"$task_dir/worker.pid")" "$worker_type" "$model" \
   "$task_dir/$worker_type.log" "$journal_workspace" || true
 

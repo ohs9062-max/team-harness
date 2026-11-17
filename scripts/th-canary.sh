@@ -7,4 +7,4 @@ while IFS= read -r name; do
   esac
 done < <(compgen -e)
 script_dir=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
-exec python3 "$script_dir/th-canary.py" "$@"
+exec "$script_dir/th-env.sh" "$script_dir/th-canary.py" "$@"

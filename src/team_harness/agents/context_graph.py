@@ -21,7 +21,6 @@ import asyncio
 from dataclasses import dataclass
 import hashlib
 import logging
-import os
 from pathlib import Path
 import shlex
 import shutil
@@ -184,13 +183,15 @@ class ContextGraph:
             "--no-ignore",
             str(root),
         ]
+        from team_harness.internal_python import caller_environment
+
         proc = await asyncio.create_subprocess_exec(
             *argv,
             cwd=str(root),
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
-            env={**os.environ, **GRAFT_ENV},
+            env={**caller_environment(), **GRAFT_ENV},
             start_new_session=True,
         )
         try:

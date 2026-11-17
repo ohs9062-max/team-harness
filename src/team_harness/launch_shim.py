@@ -109,10 +109,6 @@ def _record(
         ),
         cwd,
     )
-    source = str(Path(__file__).resolve().parents[1])
-    os.environ["PYTHONPATH"] = os.pathsep.join(
-        filter(None, [source, os.environ.get("PYTHONPATH", "")])
-    )
     maintenance.start(owner=owner)
     with resource_slots.ledger(wd) as rows:
         for key in list(rows):

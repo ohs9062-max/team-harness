@@ -17,7 +17,7 @@ owner=$(project_owner "$workspace")
 inbox="$owner/.claude/inbox.md"
 
 if [[ ${1:-} == prompt ]]; then
-  python3 "$script_dir/../src/team_harness/policy_notice.py" "$workspace" || true
+  th_python "$script_dir/../src/team_harness/policy_notice.py" "$workspace" || true
   offset_file="$workspace/.claude/.inbox_offset"
   mkdir -p "$(dirname "$offset_file")"
   current_size=0
@@ -31,19 +31,19 @@ if [[ ${1:-} == prompt ]]; then
   if (( current_size > previous_size )); then
     printf '## 새 사건\n'
     if [[ ${TH_AUTO_RECALL:-1} != 0 ]]; then
-      tail -c "+$(( previous_size + 1 ))" "$inbox" | PYTHONPATH="$script_dir/../src${PYTHONPATH:+:$PYTHONPATH}" timeout 2s python3 -m team_harness.recall_hook events 2>/dev/null || tail -c "+$(( previous_size + 1 ))" "$inbox"
+      tail -c "+$(( previous_size + 1 ))" "$inbox" | timeout 2s "$script_dir/th-env.sh" -m team_harness.recall_hook events 2>/dev/null || tail -c "+$(( previous_size + 1 ))" "$inbox"
     else
       tail -c "+$(( previous_size + 1 ))" "$inbox"
     fi
   fi
   printf '%s\n' "$current_size" > "$offset_file"
 else
-  python3 "$script_dir/../src/team_harness/policy_notice.py" "$workspace" --session-start || true
+  th_python "$script_dir/../src/team_harness/policy_notice.py" "$workspace" --session-start || true
   if (( $# == 0 )) && [[ -f $inbox ]]; then
     printf '## inbox (최근)\n'
     tail -n 10 "$inbox"
     if [[ ${TH_AUTO_RECALL:-1} != 0 ]]; then
-      PYTHONPATH="$script_dir/../src${PYTHONPATH:+:$PYTHONPATH}" timeout 2s python3 -m team_harness.recall_hook recent "$workspace" 2>/dev/null || true
+      timeout 2s "$script_dir/th-env.sh" -m team_harness.recall_hook recent "$workspace" 2>/dev/null || true
     fi
   fi
 fi

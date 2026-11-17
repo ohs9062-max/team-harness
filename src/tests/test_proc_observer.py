@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -195,7 +196,7 @@ def test_status_index_failure_preserves_output(tmp_path: Path):
     assert "observation unavailable" in second.stderr
 
 
-def test_status_observer_failure_preserves_output(tmp_path: Path):
+def test_status_ignores_injected_sitecustomize(tmp_path: Path):
     repo = Path(__file__).resolve().parents[2]
     injection = tmp_path / "injection"
     injection.mkdir()
@@ -221,7 +222,7 @@ def test_status_observer_failure_preserves_output(tmp_path: Path):
         command, cwd=tmp_path, env=env, text=True, capture_output=True, check=True
     )
     assert first.stdout == second.stdout
-    assert "test observer failure" in second.stderr
+    assert "test observer failure" not in second.stderr
 
 
 @pytest.mark.parametrize("with_pid", [True, False])
@@ -785,10 +786,14 @@ def test_status_shows_ended_coordinator_for_job(tmp_path: Path, kind: str):
         parent=1,
         child_summary="child-command",
     )
-    (tmp_path / "sitecustomize.py").write_text(
-        "import team_harness.coordinator_identity as i\ni.live_coordinators = lambda: []\n"
-        f"import team_harness.proc_observer as p\np.observe = lambda: [{row!r}]\n"
-    )
+    isolated = tmp_path / "harness"
+    shutil.copytree(repo / "scripts", isolated / "scripts")
+    shutil.copytree(repo / "src/team_harness", isolated / "src/team_harness")
+    (isolated / ".venv").symlink_to(repo / ".venv", target_is_directory=True)
+    with (isolated / "src/team_harness/coordinator_identity.py").open("a") as out:
+        out.write("\nlive_coordinators = lambda: []\n")
+    with (isolated / "src/team_harness/proc_observer.py").open("a") as out:
+        out.write(f"\nobserve = lambda: [{row!r}]\n")
     env = dict(
         os.environ,
         PYTHONPATH=str(tmp_path),
@@ -798,7 +803,7 @@ def test_status_shows_ended_coordinator_for_job(tmp_path: Path, kind: str):
         TH_SKIP_COORD_LOG="1",
     )
     result = subprocess.run(
-        ["bash", str(repo / "scripts/th-status.sh")],
+        ["bash", str(isolated / "scripts/th-status.sh")],
         cwd=tmp_path,
         env=env,
         text=True,

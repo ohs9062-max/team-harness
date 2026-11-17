@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 
+from team_harness.internal_python import command
 from team_harness.workspace_archive import watch_dir
 
 
@@ -38,13 +39,9 @@ def start(owner: Path | None = None) -> None:
         # Hold the singleton lock across spawn by passing its descriptor.
         with (wd / "maintenance.log").open("ab") as log:
             subprocess.Popen(
-                [
-                    sys.executable,
-                    "-m",
-                    "team_harness.maintenance",
-                    "--lock-fd",
-                    str(lock.fileno()),
-                ],
+                command(
+                    "-m", "team_harness.maintenance", "--lock-fd", str(lock.fileno())
+                ),
                 stdin=subprocess.DEVNULL,
                 stdout=log,
                 stderr=log,
@@ -120,14 +117,8 @@ def main() -> None:
         time.sleep(30)
         if signature() != previous:
             os.execv(
-                sys.executable,
-                [
-                    sys.executable,
-                    "-m",
-                    "team_harness.maintenance",
-                    "--lock-fd",
-                    str(lock_fd),
-                ],
+                command()[0],
+                command("-m", "team_harness.maintenance", "--lock-fd", str(lock_fd)),
             )
 
 

@@ -48,12 +48,10 @@ if [ "${TH_SHIM-}" != 0 ] && [ -x /usr/bin/timeout ]; then
     valid_duration "$shim_timeout" || shim_timeout=0.3
     shim_kill_after=${TH_SHIM_KILL_AFTER-}
     valid_duration "$shim_kill_after" || shim_kill_after=0.2
-    python=$root/.venv/bin/python
-    [ -x "$python" ] || python=python3
     tty=0
     [ -t 0 ] && tty=1
     if result_file=$(/usr/bin/mktemp 2>/dev/null); then
-        if TH_SHIM_PARENT_PID=$$ /usr/bin/timeout -k "$shim_kill_after" "$shim_timeout" "$python" -c 'import sys; sys.path.insert(0, sys.argv.pop(1)); from team_harness.launch_shim import observe_child; observe_child()' "$root/src" "$tool" "$tty" "$@" </dev/null >"$result_file" 2>/dev/null; then
+        if TH_SHIM_PARENT_PID=$$ /usr/bin/timeout -k "$shim_kill_after" "$shim_timeout" "$root/scripts/th-env.sh" -c 'from team_harness.launch_shim import observe_child; observe_child()' "$tool" "$tty" "$@" </dev/null >"$result_file" 2>/dev/null; then
             result=$(/usr/bin/timeout -k 0.1 0.2 /bin/cat "$result_file" 2>/dev/null) || result=
             if [ -n "$result" ]; then
             { IFS= read -r depth || :; case $depth in ''|*[!0-9]*) ;; *) TH_SHIM_DEPTH=$depth; export TH_SHIM_DEPTH ;; esac

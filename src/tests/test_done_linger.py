@@ -15,17 +15,18 @@ def inspect(
 ) -> str:
     script = r"""
 source "$1"
-task=$2; distinct=$4
+lib=$1; task=$2; distinct=$4
 inspect_context_and_job() { printf '\t%s\t\n' "$distinct"; }
 task_live_pids() { cat "$task/worker.pid"; }
-th_python() { echo terminate >> "$task/terminated"; }
+th_python() { if [[ $1 == -c ]]; then echo terminate >> "$task/terminated"; else "$(dirname "$lib")/th-env.sh" "$@"; fi; }
 run_verification() { echo 없음; }
 callback() { printf '%s\n' "$2" >> "$task/events"; }
 inspect_task_event "$2" "$3" "$5" 0 '' callback
 """
     if real_python:
         script = script.replace(
-            'th_python() { echo terminate >> "$task/terminated"; }', ""
+            'th_python() { if [[ $1 == -c ]]; then echo terminate >> "$task/terminated"; else "$(dirname "$lib")/th-env.sh" "$@"; fi; }',
+            "",
         )
     result = subprocess.run(
         [
