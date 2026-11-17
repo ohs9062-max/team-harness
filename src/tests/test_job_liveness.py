@@ -279,3 +279,41 @@ def test_other_watch_process_is_not_live(tmp_path: Path) -> None:
     finally:
         child.terminate()
         child.wait()
+
+
+def test_index_priority_watch_and_process_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "indexed_liveness", SCRIPTS / "th-job-liveness.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    task = tmp_path / "indexed_target"
+    task.mkdir()
+    watch = tmp_path / "watch"
+    monkeypatch.setenv("TH_WATCH_DIR", str(watch))
+    env = {**os.environ, "TH_JOB_TASK": str(task), "TH_WORKER_OUTPUT_DIR": str(task)}
+    tagged = subprocess.Popen(["sleep", "30"], env=env)
+    foreign = subprocess.Popen(
+        ["sleep", "30"], env={**env, "TH_WATCH_DIR": str(tmp_path / "other")}
+    )
+    try:
+        snap = module._process_snapshot()
+        assert module.live_processes(task, snap) == ([tagged.pid], False)
+        (task / "job.pid").write_text(str(foreign.pid))
+        assert module.live_processes(task, snap) == ([tagged.pid], False)
+        snap[watch.resolve()]["starts"][tagged.pid] = "invalid-start"
+        assert tagged.pid not in module.live_processes(task, snap)[0]
+        tagged.terminate()
+        tagged.wait()
+        assert tagged.pid not in module.live_processes(task, snap)[0]
+    finally:
+        if tagged.poll() is None:
+            tagged.terminate()
+            tagged.wait()
+        foreign.terminate()
+        foreign.wait()

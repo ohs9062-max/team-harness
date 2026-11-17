@@ -124,26 +124,36 @@ def matches_watch_dir(values: dict[str, str], cwd: str, current: Path) -> bool:
     return candidate.resolve() == current
 
 
-def observe() -> list[dict[str, Any]]:
+def observe(
+    proc_entries: list[Path] | None = None, shared: Any = None
+) -> list[dict[str, Any]]:
     """Return a snapshot; individual processes can disappear while being read."""
     if os.environ.get("TH_OBSERVE") == "0":
         return []
+
+    def read(entry: Path, name: str) -> bytes:
+        return (
+            shared.read(entry, name)
+            if shared is not None
+            else (entry / name).read_bytes()
+        )
+
     proc: dict[int, dict[str, Any]] = {}
     uid = os.getuid()
-    for entry in Path("/proc").iterdir():
+    for entry in proc_entries if proc_entries is not None else Path("/proc").iterdir():
         if not entry.name.isdigit():
             continue
         try:
             if entry.stat().st_uid != uid:
                 continue
             pid = int(entry.name)
-            raw = (entry / "stat").read_text()
+            raw = read(entry, "stat").decode()
             fields = raw[raw.rfind(")") + 2 :].split()
             if fields[0] == "Z":
                 continue
             args = [
                 x.decode(errors="replace")
-                for x in (entry / "cmdline").read_bytes().split(b"\0")
+                for x in read(entry, "cmdline").split(b"\0")
                 if x
             ]
             if not args:
@@ -154,7 +164,9 @@ def observe() -> list[dict[str, Any]]:
                 "pgrp": int(fields[2]),
                 "ticks": int(fields[19]),
                 "args": args,
-                "cwd": os.readlink(entry / "cwd"),
+                "cwd": shared.cwd(entry)
+                if shared is not None
+                else os.readlink(entry / "cwd"),
             }
         except (OSError, ValueError, IndexError):
             continue
@@ -217,11 +229,14 @@ def observe() -> list[dict[str, Any]]:
     def env(pid: int) -> dict[str, str] | None:
         if pid not in env_cache:
             try:
-                env_cache[pid] = dict(
-                    item.decode(errors="replace").split("=", 1)
-                    for item in Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
-                    if b"=" in item
-                )
+                if shared is not None:
+                    env_cache[pid] = shared.environ(Path(f"/proc/{pid}"))[2]
+                else:
+                    env_cache[pid] = dict(
+                        item.decode(errors="replace").split("=", 1)
+                        for item in read(Path(f"/proc/{pid}"), "environ").split(b"\0")
+                        if b"=" in item
+                    )
             except OSError:
                 env_cache[pid] = None
         return env_cache[pid]

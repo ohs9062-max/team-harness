@@ -12,36 +12,67 @@ _snapshot = None
 _snapshot_at = 0.0
 
 
-def _process_snapshot():
-    """Collect the process fields used by all task checks, at most once a second."""
+def _process_snapshot(proc_entries=None, shared=None):
+    """Build watch and job indexes once for this snapshot."""
     global _snapshot, _snapshot_at
     now = time.monotonic()
     if _snapshot is not None and now - _snapshot_at < 1.0:
         return _snapshot
-    rows = []
-    for proc in Path("/proc").glob("[0-9]*"):
+    watches = {}
+    def read(proc, name):
+        return shared.read(proc, name) if shared is not None else (proc / name).read_bytes()
+    def cwd(proc):
+        return shared.cwd(proc) if shared is not None else os.readlink(proc / "cwd")
+    default_home = pwd.getpwuid(os.getuid()).pw_dir
+    for proc in proc_entries if proc_entries is not None else Path("/proc").glob("[0-9]*"):
         try:
             if proc.stat().st_uid != os.getuid():
                 continue
             pid = int(proc.name)
-            stat = (proc / "stat").read_text().rsplit(") ", 1)[1].split()
+            stat = read(proc, "stat").decode().rsplit(") ", 1)[1].split()
             if stat[0] == "Z":
                 continue
-            environ = (proc / "environ").read_bytes().split(b"\0")
-            args = None
+            if shared is None:
+                environ = read(proc, "environ").split(b"\0")
+                values = dict(os.fsdecode(item).split("=", 1) for item in environ if b"=" in item)
+            else:
+                environ, values, _ = shared.environ(proc)
+            home = Path(values.get("HOME") or default_home)
+            path = values.get("TH_WATCH_DIR", str(home / ".team-harness/watch"))
+            if path == "~" or path.startswith("~/"):
+                path = str(home) + path[1:]
+            candidate = Path(path)
+            if not candidate.is_absolute():
+                candidate = Path(cwd(proc)) / candidate
+            watch = candidate.resolve()
+            bucket = watches.setdefault(watch, {"matched": set(), "starts": {}, "tags": {}, "guesses": []})
+            bucket["matched"].add(pid)
+            bucket["starts"][pid] = stat[19]
+            worker_dirs = [item.split(b"=", 1)[1] for item in environ if item.startswith(b"TH_WORKER_OUTPUT_DIR=")]
+            try:
+                worker = Path(os.fsdecode(worker_dirs[0])).resolve() if worker_dirs else None
+            except (OSError, ValueError):
+                worker = False
+            for item in environ:
+                if item.startswith(b"TH_JOB_TASK="):
+                    bucket["tags"].setdefault(item[len(b"TH_JOB_TASK="):], []).append((pid, worker))
             if int(stat[3]) == pid:
                 try:
-                    args = (proc / "cmdline").read_bytes().split(b"\0")
-                except OSError:
+                    args = read(proc, "cmdline").split(b"\0")
+                    cmd = b" ".join(args).decode(errors="replace")
+                    excluded = ("th-status", "th-watch", "th-inbox-wait", "tail", "less", "grep", "vim", "nvim", "emacs", "nano", "code", "claude", "codex", "shell-snapshots")
+                    if not any(x in cmd.lower() for x in excluded):
+                        shell = os.path.basename(os.fsdecode(args[0])) in ("sh", "bash", "dash", "zsh")
+                        bucket["guesses"].append((pid, cmd, shell))
+                except (OSError, IndexError):
                     pass
-            rows.append((pid, environ, args))
         except (OSError, ValueError, IndexError):
             continue
-    _snapshot, _snapshot_at = rows, now
-    return rows
+    _snapshot, _snapshot_at = watches, now
+    return watches
 
 
-def live_processes(task):
+def live_processes(task, snapshot=None):
     task = Path(task).resolve()
     direct, tagged, guessed = set(), set(), set()
     for name in ("worker.pid", "job.pid"):
@@ -58,43 +89,36 @@ def live_processes(task):
                         direct.add(pid)
             except (OSError, ValueError, IndexError):
                 continue
-    tag = f"TH_JOB_TASK={task}".encode()
-    excluded = ("th-status", "th-watch", "th-inbox-wait", "tail", "less", "grep", "vim", "nvim", "emacs", "nano", "code", "claude", "codex", "shell-snapshots")
     watch = Path(os.environ.get("TH_WATCH_DIR", str(Path.home() / ".team-harness/watch"))).expanduser().resolve()
-    matched = set()
-    for pid, environ, args in _process_snapshot():
+    bucket = (snapshot if snapshot is not None else _process_snapshot()).get(watch, {})
+    direct &= bucket.get("matched", set())
+    rejected = set()
+    for pid, worker in bucket.get("tags", {}).get(os.fsencode(str(task)), []):
+        if worker is False:
+            rejected.add(pid)
+        elif worker is not None and worker != task:
+            direct.discard(pid)
+            rejected.add(pid)
+        else:
+            tagged.add(pid)
+    def still_same(pid):
         try:
-            values = dict(os.fsdecode(item).split("=", 1) for item in environ if b"=" in item)
-            home = Path(values.get("HOME") or pwd.getpwuid(os.getuid()).pw_dir)
-            path = values.get("TH_WATCH_DIR", str(home / ".team-harness/watch"))
-            if path == "~" or path.startswith("~/"):
-                path = str(home) + path[1:]
-            candidate = Path(path)
-            if not candidate.is_absolute():
-                candidate = Path(os.readlink(f"/proc/{pid}/cwd")) / candidate
-            if candidate.resolve() != watch:
-                continue
-            matched.add(pid)
-            worker_dirs = [entry.split(b"=", 1)[1] for entry in environ if entry.startswith(b"TH_WORKER_OUTPUT_DIR=")]
-            if tag in environ:
-                if worker_dirs and Path(os.fsdecode(worker_dirs[0])).resolve() != task:
-                    direct.discard(pid)
-                    continue
-                tagged.add(pid)
-            if args is None:
-                continue
-            cmd = b" ".join(args).decode(errors="replace")
-            is_shell = os.path.basename(os.fsdecode(args[0])) in ("sh", "bash", "dash", "zsh")
-            matches = task.name in cmd
-            if is_shell:
-                matches = bool(re.search(r"/" + re.escape(task.name) + r"(?:/|\b)", cmd))
-            if matches and not any(x in cmd.lower() for x in excluded):
-                guessed.add(pid)
-        except (OSError, ValueError, IndexError):
+            fields = Path(f"/proc/{pid}/stat").read_text().rsplit(") ", 1)[1].split()
+            return fields[0] != "Z" and fields[19] == bucket.get("starts", {}).get(pid)
+        except (OSError, IndexError):
+            return False
+
+    selected = {pid for pid in direct | tagged if still_same(pid)}
+    if selected:
+        return sorted(selected), False
+    for pid, cmd, shell in bucket.get("guesses", []):
+        if pid in rejected:
             continue
-    direct &= matched
-    if direct or tagged:
-        return sorted(direct | tagged), False
+        matches = task.name in cmd
+        if shell:
+            matches = bool(re.search(r"/" + re.escape(task.name) + r"(?:/|\b)", cmd))
+        if matches and still_same(pid):
+            guessed.add(pid)
     return sorted(guessed), bool(guessed)
 
 
