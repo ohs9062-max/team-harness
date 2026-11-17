@@ -142,6 +142,7 @@ def test_unread_session_labels(tmp_path: Path) -> None:
     state = watch / "inbox_unread" / "owner.tsv"
     state.parent.mkdir(parents=True)
     owner = tmp_path / "owner"
+    owner.mkdir()
     state.write_text(
         f"{int(time.time())}\t10\t0\t{owner}\tone\tcodex\n"
         f"{int(time.time())}\t20\t0\t{owner}\ttwo\tclaude\n"

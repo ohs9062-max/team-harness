@@ -70,7 +70,7 @@ record_inbox_append() {
   local owner=$1 inbox_size=$2 now_epoch=$3 route=$4 agent=$5 state
   state=$(inbox_unread_file "$owner")
   mkdir -p "$(dirname "$state")"
-  printf '%s\t%s\t0\t%s\t%s\t%s\n' "$now_epoch" "$inbox_size" "$owner" "$route" "$agent" >> "$state"
+  ( flock -x 9; printf '%s\t%s\t0\t%s\t%s\t%s\n' "$now_epoch" "$inbox_size" "$owner" "$route" "$agent" >> "$state" ) 9>"$state.lock"
 }
 
 realert_unread_inboxes() {
@@ -78,12 +78,18 @@ realert_unread_inboxes() {
   now_epoch=$(date +%s)
   for state in "$watch_dir"/inbox_unread/*.tsv; do
     [[ -f $state ]] || continue
+    exec 9>"$state.lock"
+    flock -x 9
     local tmp="$state.tmp.$$"
     : > "$tmp"
     while IFS=$'\t' read -r line_epoch line_size line_alerted owner route agent || [[ -n ${line_epoch:-} ]]; do
       [[ $line_epoch =~ ^[0-9]+$ && $line_size =~ ^[0-9]+$ && -n ${owner:-} ]] || continue
       route=${route:-*}
       agent=${agent:-unknown}
+      if [[ $(PYTHONPATH="$script_dir/../src${PYTHONPATH:+:$PYTHONPATH}" th_python -m team_harness.unread "$owner") == orphan ]]; then
+        printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$line_epoch" "$line_size" "$line_alerted" "$owner" "$route" "$agent" >> "$tmp"
+        continue
+      fi
       cursor=0
       active=0
       if [[ $route == '*' ]]; then
@@ -143,6 +149,8 @@ realert_unread_inboxes() {
       printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$line_epoch" "$line_size" "$line_alerted" "$owner" "$route" "$agent" >> "$tmp"
     done < "$state"
     mv "$tmp" "$state"
+    flock -u 9
+    exec 9>&-
   done
 }
 

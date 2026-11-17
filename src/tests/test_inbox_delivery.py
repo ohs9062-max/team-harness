@@ -241,3 +241,22 @@ def test_legacy_cursor_and_peek_ack(tmp_path: Path) -> None:
     waiter = _run("bash", str(SCRIPTS / "th-inbox-wait.sh"), "0", cwd=owner, env=env)
     assert "private event" not in waiter.stdout
     assert "public event" in waiter.stdout
+
+
+def test_watchd_does_not_realert_orphan(tmp_path: Path) -> None:
+    watch = tmp_path / "watch"
+    state = watch / "inbox_unread" / "owner.tsv"
+    state.parent.mkdir(parents=True)
+    line = f"{int(time.time())}\t4\t0\t{tmp_path / 'missing'}\ttest-session\tclaude\n"
+    state.write_text(line)
+    env = {
+        **os.environ,
+        "TH_WATCH_DIR": str(watch),
+        "TH_ONCE": "1",
+        "TH_JEV_WATCH": "off",
+        "TH_NO_MAINTENANCE": "1",
+    }
+    _run("bash", str(SCRIPTS / "th-watchd.sh"), env=env)
+    assert state.read_text() == line
+    log = watch / "events.log"
+    assert not log.exists() or "[inbox 미수신]" not in log.read_text()

@@ -87,7 +87,10 @@ def run_once() -> None:
             update(maintenance=True)
         except Exception as exc:
             print(f"maintenance state index failed: {exc}", file=sys.stderr)
+    from team_harness.unread import clean_unread
+
     for name, operation in (
+        ("unread", lambda: clean_unread(watch_dir())),
         ("deployment", auto_sync),
         ("report", lambda: daily(now)),
         ("archive", lambda: archive_daily(now)),
