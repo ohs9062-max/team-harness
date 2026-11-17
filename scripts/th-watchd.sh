@@ -86,7 +86,7 @@ realert_unread_inboxes() {
       [[ $line_epoch =~ ^[0-9]+$ && $line_size =~ ^[0-9]+$ && -n ${owner:-} ]] || continue
       route=${route:-*}
       agent=${agent:-unknown}
-      if [[ $(PYTHONPATH="$script_dir/../src${PYTHONPATH:+:$PYTHONPATH}" th_python -m team_harness.unread "$owner") == orphan ]]; then
+      if [[ $(th_python -m team_harness.unread "$owner") == orphan ]]; then
         printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$line_epoch" "$line_size" "$line_alerted" "$owner" "$route" "$agent" >> "$tmp"
         continue
       fi
