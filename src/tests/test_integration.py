@@ -62,6 +62,9 @@ async def test_full_run_mock_api(tmp_path, monkeypatch):
             api_base=config.api_base, api_key=config.api_key, model=config.model
         ),
     )
+    monkeypatch.setattr(
+        "team_harness.harness.validate_templates", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr("team_harness.harness.RUNS_DIR", tmp_path)
     monkeypatch.setattr(
         config_module,

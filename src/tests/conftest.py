@@ -3,16 +3,35 @@
 import asyncio
 import os
 from pathlib import Path
+import sys
 import tempfile
 
 # Establish HOME before application modules cache paths during test collection.
 os.environ["HOME"] = tempfile.mkdtemp(prefix="th-test-home-")
+os.environ["TH_WATCH_DIR"] = str(Path(os.environ["HOME"]) / "watch")
+os.environ["PATH"] = (
+    str(Path(sys.executable).parent) + os.pathsep + os.environ.get("PATH", "")
+)
+for _key in (
+    "TH_INBOX_OWNER",
+    "TH_WORKSPACE",
+    "CLAUDE_PROJECT_DIR",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_PID",
+    "TH_ROLE",
+    "TH_SESSION_KEY",
+    "TH_JOB_TASK",
+    "TH_WORKER_OUTPUT_DIR",
+    "TH_WORKER_ALLOW_PATHS",
+    "ORCA_PANE_KEY",
+):
+    os.environ.pop(_key, None)
 
-import pytest
+import pytest  # noqa: E402
 
-from team_harness.agents.manager import AgentManager
-from team_harness.config import Config
-from team_harness.tracking.context import ContextTracker
+from team_harness.agents.manager import AgentManager  # noqa: E402
+from team_harness.config import Config  # noqa: E402
+from team_harness.tracking.context import ContextTracker  # noqa: E402
 
 
 @pytest.fixture(autouse=True)

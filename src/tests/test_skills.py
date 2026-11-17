@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from team_harness.skills import loader
 from team_harness.skills.loader import load_skill_metadata
 
 
@@ -13,6 +14,12 @@ def _isolate_home(tmp_path, monkeypatch):
     fake_home = tmp_path / "fake-home"
     fake_home.mkdir()
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+    resolve = loader._resolve_skill_roots
+    monkeypatch.setattr(
+        loader,
+        "_resolve_skill_roots",
+        lambda cwd: [root for root in resolve(cwd) if root.is_relative_to(tmp_path)],
+    )
 
 
 def _make_skill(
@@ -214,8 +221,10 @@ def test_invalid_yaml_frontmatter_warns_and_skips(tmp_path):
         "---\n: invalid: yaml: [broken\n---\n\nBody.\n", encoding="utf-8"
     )
 
-    with pytest.warns(UserWarning, match="Invalid YAML frontmatter"):
+    with pytest.warns(UserWarning) as warnings:
         skills = load_skill_metadata(cwd=str(project))
+    assert any("Invalid YAML frontmatter" in str(w.message) for w in warnings)
+    assert any("No YAML frontmatter" in str(w.message) for w in warnings)
 
     assert len(skills) == 0
 
