@@ -765,7 +765,7 @@ uv sync --extra dev
 uv run ruff check src/        # 린트 검사
 uv run ruff format src/        # 포맷팅
 uv run pyright src/             # 타입 검사
-uv run pytest src/tests/ -v    # 테스트 실행
+scripts/th-test.sh src/tests/ -v    # 격리된 테스트 실행
 ```
 
 ## 라이선스 (License)

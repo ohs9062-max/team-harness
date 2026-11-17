@@ -241,7 +241,8 @@ def test_coordinator_prompt_file_supplies_coordinator_prompt(tmp_path, monkeypat
         "project base prompt", encoding="utf-8"
     )
 
-    config = load_config(cwd=str(tmp_path / "project"))
+    with pytest.warns(UserWarning, match="deprecated"):
+        config = load_config(cwd=str(tmp_path / "project"))
 
     assert config.coordinator_prompt == "project base prompt"
 
@@ -263,7 +264,8 @@ def test_local_coordinator_prompt_file_overrides_global(tmp_path, monkeypatch):
         "local base prompt", encoding="utf-8"
     )
 
-    config = load_config(cwd=str(tmp_path / "project"))
+    with pytest.warns(UserWarning, match="deprecated"):
+        config = load_config(cwd=str(tmp_path / "project"))
 
     assert config.coordinator_prompt == "local base prompt"
 
@@ -280,7 +282,8 @@ def test_global_base_prompt_paths_resolve_relative_to_global_config_dir(
     prompt_path.parent.mkdir()
     prompt_path.write_text("global relative prompt", encoding="utf-8")
 
-    config = load_config(cwd=str(tmp_path / "project"))
+    with pytest.warns(UserWarning, match="deprecated"):
+        config = load_config(cwd=str(tmp_path / "project"))
 
     assert config.coordinator_prompt == "global relative prompt"
 
@@ -292,7 +295,8 @@ def test_absolute_base_prompt_paths_work(tmp_path, monkeypatch):
         tmp_path, monkeypatch, [f'coordinator_prompt_file = "{prompt_path}"']
     )
 
-    config = load_config(cwd=str(tmp_path / "project"))
+    with pytest.warns(UserWarning, match="deprecated"):
+        config = load_config(cwd=str(tmp_path / "project"))
 
     assert config.coordinator_prompt == "absolute prompt"
 
@@ -343,7 +347,10 @@ def test_prompt_file_permission_errors_raise_system_exit(tmp_path, monkeypatch):
 
     monkeypatch.setattr(config_module.Path, "read_text", fake_read_text)
 
-    with pytest.raises(SystemExit, match="permission denied"):
+    with (
+        pytest.warns(UserWarning, match="deprecated"),
+        pytest.raises(SystemExit, match="permission denied"),
+    ):
         load_config(cwd=str(tmp_path / "project"))
 
 
@@ -353,7 +360,10 @@ def test_non_utf8_prompt_files_raise_system_exit(tmp_path, monkeypatch):
     )
     (global_path.parent / "coordinator_prompt.md").write_bytes(b"\xff\xfe\x00\x00")
 
-    with pytest.raises(SystemExit, match="UTF-8"):
+    with (
+        pytest.warns(UserWarning, match="deprecated"),
+        pytest.raises(SystemExit, match="UTF-8"),
+    ):
         load_config(cwd=str(tmp_path / "project"))
 
 
@@ -365,7 +375,10 @@ def test_oversized_prompt_files_raise_system_exit(tmp_path, monkeypatch):
         "a" * (PROMPT_FILE_MAX_BYTES + 1), encoding="utf-8"
     )
 
-    with pytest.raises(SystemExit, match="exceeds"):
+    with (
+        pytest.warns(UserWarning, match="deprecated"),
+        pytest.raises(SystemExit, match="exceeds"),
+    ):
         load_config(cwd=str(tmp_path / "project"))
 
 
@@ -681,6 +694,9 @@ def _write_sample_and_load(
         path = tmp_path / "project" / ".team-harness" / "config.toml"
     path.parent.mkdir(parents=True)
     path.write_text(sample_text, encoding="utf-8")
+    (path.parent / "coordinator_system_message.md").write_text(
+        "test prompt", encoding="utf-8"
+    )
     if as_global:
         monkeypatch.setattr(config_module, "CONFIG_PATH", path)
         return load_config(cwd=str(tmp_path))

@@ -37,12 +37,21 @@ def test_detached_process_origin_and_ended(
         TH_WORKSPACE=str(tmp_path),
     )
     child = subprocess.Popen(
-        [sys.executable, "-c", "import time; time.sleep(60)"],
+        [
+            sys.executable,
+            "-u",
+            "-c",
+            "import time; print('ready', flush=True); time.sleep(60)",
+        ],
+        stdout=subprocess.PIPE,
+        text=True,
         cwd=task,
         env=child_env,
         start_new_session=True,
     )
     try:
+        assert child.stdout is not None
+        assert child.stdout.readline().strip() == "ready"
         rows = proc_observer.observe()
         record = next(row for row in rows if row["pid"] == child.pid)
         assert record["task"] == str(task)
