@@ -607,9 +607,11 @@ def test_watch_scripts_import_team_harness_via_project_python() -> None:
     status = (SCRIPTS_DIR / "th-status.sh").read_text(encoding="utf-8")
     assert 'th_python -m team_harness.watch_inspect "$task"' in lib
     assert 'python3 - "$task"' not in lib
-    assert "th_python - " in status
+    assert "th_python -m team_harness.status " in status
     assert "python3 - " not in status
-    assert "team_harness import failed" in status
+    assert "team_harness import failed" in (
+        REPO_ROOT / "src/team_harness/status.py"
+    ).read_text(encoding="utf-8")
     assert "context inspection failed" in lib
 
 
