@@ -6,15 +6,7 @@
 th_python() {
   local repo
   repo=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)
-  if [[ -x $repo/.venv/bin/python ]]; then
-    "$repo/.venv/bin/python" "$@"
-  elif command -v uv >/dev/null 2>&1; then
-    uv run --project "$repo" python "$@"
-  else
-    mkdir -p "${TH_WATCH_DIR:-$HOME/.team-harness/watch}"
-    printf '%s jev 호출 실패: repository Python and uv unavailable; skipped\n' "$(date '+%F %T')" >> "${TH_WATCH_DIR:-$HOME/.team-harness/watch}/events.log"
-    return 127
-  fi
+  "$repo/scripts/th-env.sh" "$@"
 }
 
 th_jev() {
@@ -130,7 +122,7 @@ watch_retire_settled() {
 task_live_pids() {
   local lib_dir
   lib_dir=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
-  python3 "$lib_dir/th-job-liveness.py" "$1"
+  th_python "$lib_dir/th-job-liveness.py" "$1"
 }
 
 cpu_ticks() {
@@ -187,8 +179,7 @@ open_step_detail() {
   local task=$1 program step replay at out action
   program=$(worker_digest_program)
   IFS=$'\t' read -r step replay at out < <(
-    PYTHONPATH="$(dirname "$program")/..${PYTHONPATH:+:$PYTHONPATH}" \
-      th_python -m team_harness.step_records open-steps "$task" | tail -n 1
+    th_python -m team_harness.step_records open-steps "$task" | tail -n 1
   ) || true
   [[ -n ${step:-} ]] || return 0
   if [[ $replay == safe ]]; then
@@ -285,7 +276,7 @@ log_is_from_current_worker() {
 run_verification() {
   local task=$1 program
   program=$(worker_digest_program)
-  python3 "$program" verify "$task" >/dev/null 2>&1 || true
+  th_python "$program" verify "$task" >/dev/null 2>&1 || true
   if [[ -f $task/VERIFY_FAILED ]]; then
     echo "실패"
   elif [[ ! -f $task/verify.sh ]]; then
@@ -331,7 +322,7 @@ inspect_context_and_job() {
   lib_dir=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
   py_src=$(cd "$lib_dir/../src" && pwd)
   # team_harness needs the project dependency graph (httpx); not system python3.
-  PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" th_python -m team_harness.watch_inspect "$task"
+  th_python -m team_harness.watch_inspect "$task"
 }
 
 status_failure_reason() {
@@ -340,7 +331,7 @@ status_failure_reason() {
   line=$(tail -n 1 "$status_file" 2>/dev/null) || return 0
   # Keep the status content, not its timestamp, and cap by characters so UTF-8
   # notices remain readable.
-  python3 - "$line" <<'PY'
+  th_python - "$line" <<'PY'
 import re
 import sys
 
@@ -383,8 +374,7 @@ safe_step_auto_retry() {
   py_src=$(cd "$(dirname "$program")/.." && pwd)
   local -a open_steps=()
   mapfile -t open_steps < <(
-    PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" \
-      th_python -m team_harness.step_records open-steps "$task"
+    th_python -m team_harness.step_records open-steps "$task"
   )
   (( ${#open_steps[@]} > 0 )) || return 1
 
@@ -397,7 +387,7 @@ safe_step_auto_retry() {
 
   local usage="$watch_dir/usage.jsonl" launch_meta
   [[ -f $usage && -f $task/.th_worktree ]] || return 1
-  launch_meta=$(python3 - "$usage" "$task" <<'PY'
+  launch_meta=$(th_python - "$usage" "$task" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -434,7 +424,7 @@ PY
   local max_retries=${TH_MAX_RETRIES:-2}
   [[ $max_retries =~ ^[0-9]+$ ]] || max_retries=2
   local attempts
-  attempts=$(python3 - "$usage" "$task" <<'PY'
+  attempts=$(th_python - "$usage" "$task" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -568,8 +558,8 @@ inspect_task_event() {
 
   local terminal failed_file program
   program=$(worker_digest_program)
-  terminal=$(python3 "$program" terminal "$task")
-  terminal=$(python3 "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/th-job-liveness.py" terminal "$task" "$terminal")
+  terminal=$(th_python "$program" terminal "$task")
+  terminal=$(th_python "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/th-job-liveness.py" terminal "$task" "$terminal")
   failed_file="$task/FAILED"
   if [[ ! -f $failed_file ]]; then
     for cand in "$task"/FAILED.*; do
@@ -598,7 +588,7 @@ inspect_task_event() {
         if [[ ! -f $task/.th_done_terminated ]] && kill -0 "$current_worker_pid" 2>/dev/null; then
           local repo
           repo=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)
-          if PYTHONPATH="$repo/src${PYTHONPATH:+:$PYTHONPATH}" th_python -c \
+          if th_python -c \
             'import sys; from pathlib import Path; from team_harness.worker_relaunch import terminate_worker_group; terminate_worker_group(int(sys.argv[1]), task=Path(sys.argv[2]))' "$current_worker_pid" "$task"; then
             touch "$task/.th_done_terminated"
             printf '%s [DONE 후 잔류 프로세스 종료] %s pid=%s\n' "$(date '+%F %T')" "$task" "$current_worker_pid" >> "$watch_dir/events.log"

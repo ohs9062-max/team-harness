@@ -31,7 +31,7 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     done < <(git diff-tree --root -m -p --no-commit-id "$revision" -- design/decisions.md | sed -nE 's/^\+## TH-D([0-9]+)([.[:space:]]|$).*/\1/p')
     while IFS= read -r trailer; do
       folder=${trailer#Crosscheck: }
-      if python3 "$hook_root/src/team_harness/adoption_gate.py" "$folder" "$root" "$revision"; then
+      if "$hook_root/scripts/th-env.sh" "$hook_root/src/team_harness/adoption_gate.py" "$folder" "$root" "$revision"; then
         revision_crosscheck_ok=1
       fi
     done < <(git show -s --format=%B "$revision" | git interpret-trailers --parse | grep '^Crosscheck: ' || true)
@@ -66,7 +66,7 @@ if (( needs_crosscheck )); then
 fi
 
 if (( ${#revisions_to_check[@]} )); then
-  if ! python3 "$hook_root/src/team_harness/paths_check.py" "${revisions_to_check[@]}"; then
+  if ! "$hook_root/scripts/th-env.sh" "$hook_root/src/team_harness/paths_check.py" "${revisions_to_check[@]}"; then
     skip=${TH_PATHS_SKIP:-}
     if [[ -n ${skip//[[:space:]]/} ]]; then
       watch_dir=${TH_WATCH_DIR:-"$HOME/.team-harness/watch"}

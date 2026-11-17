@@ -122,8 +122,10 @@ async def spawn(
     # coordinator that received an explicit user request may pass the opt-in
     # through this per-spawn envelope; every other worker gets an explicit 0.
     image_permission = "1" if (extra_env or {}).get("TH_ALLOW_IMAGES") == "1" else "0"
+    from team_harness.internal_python import caller_environment
+
     merged_env = {
-        **os.environ,
+        **caller_environment(),
         **provider_env,
         **template_env,
         **(extra_env or {}),

@@ -3,10 +3,19 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import time
 from typing import Any
 from typing import cast
+
+
+def _isolated_harness(repo: Path, tmp_path: Path) -> Path:
+    isolated = tmp_path / "harness"
+    shutil.copytree(repo / "scripts", isolated / "scripts")
+    shutil.copytree(repo / "src/team_harness", isolated / "src/team_harness")
+    (isolated / ".venv").symlink_to(repo / ".venv", target_is_directory=True)
+    return isolated
 
 
 def test_bound_transcript_model_and_cache(tmp_path: Any, monkeypatch: Any):
@@ -143,7 +152,9 @@ def test_repository_adoption_display(tmp_path: Any, request: Any):
         json.dumps({"pid": 99999999, "start": "1", "boot": "boot"})
     )
     (watch / "tasks.txt").write_text(str(task))
-    shim = tmp_path / "sitecustomize.py"
+    isolated = _isolated_harness(repo, tmp_path)
+    shim = isolated / "src/team_harness/coordinator_identity.py"
+    original = shim.read_text()
     env = {
         **os.environ,
         "TH_WATCH_DIR": str(watch),
@@ -154,8 +165,8 @@ def test_repository_adoption_display(tmp_path: Any, request: Any):
 
     def output(paths: Any, models: Any = None):
         shim.write_text(
-            "import team_harness.coordinator_identity as i\n"
-            + "i.live_coordinators = lambda: "
+            original
+            + "\nlive_coordinators = lambda: "
             + repr(
                 [
                     dict(
@@ -172,7 +183,7 @@ def test_repository_adoption_display(tmp_path: Any, request: Any):
             + "\n"
         )
         return subprocess.run(
-            [str(repo / "scripts/th-status.sh")],
+            [str(isolated / "scripts/th-status.sh")],
             env=env,
             text=True,
             capture_output=True,
@@ -213,10 +224,10 @@ def test_empty_coordinator_groups(tmp_path: Any):
     repo = Path(__file__).resolve().parents[2]
     watch = tmp_path / "watch"
     watch.mkdir()
-    shim = tmp_path / "sitecustomize.py"
+    isolated = _isolated_harness(repo, tmp_path)
+    shim = isolated / "src/team_harness/coordinator_identity.py"
     shim.write_text(
-        "import team_harness.coordinator_identity as identity\n"
-        "identity.live_coordinators = lambda: [\n"
+        shim.read_text() + "\nlive_coordinators = lambda: [\n"
         "    dict(cwd='/fixture/' + name, session='secret-' + name, pid=pid, "
         "start='1', boot='boot', model='actual-model')\n"
         "    for name, pid in [('alpha', 101), ('beta', 202), ('gamma', 303)]\n"
@@ -231,7 +242,7 @@ def test_empty_coordinator_groups(tmp_path: Any):
             [str(tmp_path), str(repo / "src"), os.environ.get("PYTHONPATH", "")]
         ),
     }
-    command = [str(repo / "scripts/th-status.sh")]
+    command = [str(isolated / "scripts/th-status.sh")]
     expected = "\n\n".join(
         f"  {name} · actual-model (PID {pid})"
         for name, pid in [("alpha", 101), ("beta", 202), ("gamma", 303)]

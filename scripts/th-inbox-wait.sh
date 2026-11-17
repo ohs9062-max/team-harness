@@ -69,14 +69,14 @@ for entry in "$wait_registry"/*; do
   fi
 done
 # Initialize before publishing registration; a later append remains unread.
-python3 "$script_dir/th-inbox-read.py" "$owner" 1 init || exit 2
+th_python "$script_dir/th-inbox-read.py" "$owner" 1 init || exit 2
 trap 'rm -f "$wait_registration"' EXIT
 trap 'exit 0' TERM INT HUP
 printf '%s\n%s\n' "$$" "$session" > "$wait_registration"
 flock -u 9
 # Session cursors are .claude/.inbox_cursor.d/<session>; the reader manages them.
 check_inbox() {
-  python3 "$script_dir/th-inbox-read.py" "$owner" 1 wait
+  th_python "$script_dir/th-inbox-read.py" "$owner" 1 wait
 }
 deadline=$(( $(date +%s) + max_wait ))
 while (( $(date +%s) < deadline )); do

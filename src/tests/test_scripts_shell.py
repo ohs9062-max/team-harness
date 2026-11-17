@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import signal
 import stat
 import subprocess
@@ -594,12 +595,8 @@ def test_th_launch_uses_one_image_envelope_and_project_python_for_each_worker_ty
     assert source.count('"$@" -- "$prompt"') == 2
     assert '"$@" --print="$prompt"' in source
     assert "context_python=(th_python)" in source
-    assert (
-        source.count(
-            'PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}" "${context_python[@]}"'
-        )
-        == 4
-    )
+    assert source.count('"${context_python[@]}"') == 4
+    assert 'PYTHONPATH="$py_src${PYTHONPATH:+:$PYTHONPATH}"' not in source
 
 
 def test_watch_scripts_import_team_harness_via_project_python() -> None:
@@ -3621,13 +3618,19 @@ def test_registration_conflict_does_not_roll_back_another_pending_launch(
         "    return original(self, record)\n"
         "WorkerContextRegistry.register_active = conflict\n"
     )
+    isolated = test_env["tmp_path"] / "harness-copy"
+    shutil.copytree(REPO_ROOT / "scripts", isolated / "scripts")
+    shutil.copytree(REPO_ROOT / "src/team_harness", isolated / "src/team_harness")
+    (isolated / ".venv").symlink_to(REPO_ROOT / ".venv", target_is_directory=True)
+    with (isolated / "src/team_harness/worker_context.py").open("a") as out:
+        out.write("\n" + (hook / "sitecustomize.py").read_text())
     env = dict(
         test_env["env"],
         HOME=str(test_env["tmp_path"]),
         PYTHONPATH=str(hook) + os.pathsep + str(REPO_ROOT / "src"),
     )
     result = subprocess.run(
-        [str(SCRIPTS_DIR / "th-launch.sh"), str(task)],
+        [str(isolated / "scripts/th-launch.sh"), str(task)],
         env=env,
         capture_output=True,
         text=True,

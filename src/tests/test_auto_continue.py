@@ -225,7 +225,7 @@ inspect_context_and_job() { :; }
 task_live_pids() { :; }
 worker_digest_program() { echo dummy; }
 python3() { echo DONE; }
-th_python() { [[ $1 == -m && $2 == team_harness.stop_policy ]] || return 1; printf '자동 계속(1/2): test'; }
+th_python() { if [[ $1 == -m && $2 == team_harness.stop_policy ]]; then printf '자동 계속(1/2): test'; else echo DONE; fi; }
 callback() { printf '%s\n' "$3"; }
 inspect_task_event "$2" "$3" .th_daemon 1 '' callback
 """

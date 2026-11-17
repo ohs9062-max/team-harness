@@ -384,7 +384,9 @@ def check_script(task: Path, *, force: bool = False) -> dict[str, str]:
                 return saved["item"]
         except (ValueError, AttributeError):
             pass
-    verify_env = dict(os.environ)
+    from team_harness.internal_python import caller_environment
+
+    verify_env = caller_environment()
     verify_env.pop("PYTHONPATH", None)
     code, output = run_bounded(
         ["bash", str(script)],
