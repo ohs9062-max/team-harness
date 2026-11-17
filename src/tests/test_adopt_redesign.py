@@ -312,7 +312,7 @@ def test_daemon_started_without_holding_its_lock(
 
 
 def test_launch_watchd_and_status(tmp_path: Path) -> None:
-    workspace = tmp_path / "robot3"
+    workspace = tmp_path / "robot_vision3_autolabel"
     workspace.mkdir()
     task = workspace / "_outputs/task"
     task.mkdir(parents=True)
