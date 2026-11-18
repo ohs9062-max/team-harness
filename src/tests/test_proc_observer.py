@@ -11,12 +11,25 @@ import pytest
 
 from team_harness import proc_observer
 from team_harness import state_index
+from tests.observer_test_support import bounded_observer
+from tests.observer_test_support import external_ancestors
 
 
-def _watcher_ancestor() -> bool:
-    return proc_observer.has_ancestor_command(
-        "th-watchd.sh"
-    ) or proc_observer.has_ancestor_command("team_harness.maintenance")
+@pytest.fixture(autouse=True)
+def isolate_observer_ancestry(monkeypatch: pytest.MonkeyPatch) -> set[int]:
+    excluded = external_ancestors()
+    monkeypatch.setattr(proc_observer, "observe", bounded_observer(excluded))
+    return excluded
+
+
+def _status_command(excluded: set[int], all_mode: bool = False) -> list[str]:
+    helper = Path(__file__).with_name("observer_test_support.py")
+    return [
+        sys.executable,
+        str(helper),
+        ",".join(map(str, excluded)),
+        str(int(all_mode)),
+    ]
 
 
 def test_detached_process_origin_and_ended(
@@ -56,9 +69,7 @@ def test_detached_process_origin_and_ended(
         rows = proc_observer.observe()
         record = next(row for row in rows if row["pid"] == child.pid)
         assert record["task"] == str(task)
-        # Verification may itself run under the watcher. Its descendants must
-        # retain that origin even when their environment identifies a worker.
-        assert record["origin"] == ("watchd" if _watcher_ancestor() else "worker")
+        assert record["origin"] == "worker"
         assert record["session_id"] == "test-session"
         state_index.update()
         with sqlite3.connect(watch / "th.db") as db:
@@ -79,10 +90,9 @@ def test_detached_process_origin_and_ended(
 
 
 def test_status_displays_observed_session(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolate_observer_ancestry: set[int]
 ):
     monkeypatch.setenv("TH_OBSERVE", "1")
-    repo = Path(__file__).resolve().parents[2]
     task = tmp_path / "detached"
     task.mkdir()
     (task / "task.md").write_text("# Observed title\n")
@@ -124,7 +134,7 @@ def test_status_displays_observed_session(
         monkeypatch.setenv("TH_WATCH_DIR", env["TH_WATCH_DIR"])
         assert not any(row["pid"] == foreign.pid for row in proc_observer.observe())
         run = subprocess.run(
-            ["bash", str(repo / "scripts/th-status.sh")],
+            _status_command(isolate_observer_ancestry),
             cwd=tmp_path,
             env=env,
             text=True,
@@ -134,11 +144,9 @@ def test_status_displays_observed_session(
         )
         assert "Observed title" in run.stdout
         assert "Foreign task" not in run.stdout
-        assert (
-            "감시 데몬" if _watcher_ancestor() else "코디네이터 종료됨"
-        ) in run.stdout
+        assert "코디네이터 종료됨" in run.stdout
         run_all = subprocess.run(
-            ["bash", str(repo / "scripts/th-status.sh"), "--all"],
+            _status_command(isolate_observer_ancestry, all_mode=True),
             cwd=tmp_path,
             env=env,
             text=True,
@@ -147,9 +155,7 @@ def test_status_displays_observed_session(
             check=True,
         )
         assert "Observed title" in run_all.stdout
-        assert (
-            "감시 데몬" if _watcher_ancestor() else "코디네이터 종료됨"
-        ) in run_all.stdout
+        assert "코디네이터 종료됨" in run_all.stdout
     finally:
         child.terminate()
         child.wait()
@@ -266,10 +272,9 @@ def test_session_file_workspace_fallback(
 
 
 def test_all_places_child_below_registered_worker(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolate_observer_ancestry: set[int]
 ):
     monkeypatch.setenv("TH_OBSERVE", "1")
-    repo = Path(__file__).resolve().parents[2]
     watch = tmp_path / "watch"
     watch.mkdir()
     worker = tmp_path / "registered-worker"
@@ -295,7 +300,7 @@ def test_all_places_child_below_registered_worker(
     )
     try:
         run = subprocess.run(
-            ["bash", str(repo / "scripts/th-status.sh"), "--all"],
+            _status_command(isolate_observer_ancestry, all_mode=True),
             cwd=tmp_path,
             env=env,
             text=True,
@@ -309,15 +314,8 @@ def test_all_places_child_below_registered_worker(
             for i, line in enumerate(lines)
             if "registered-worker" in line and line.startswith("|")
         )
-        if _watcher_ancestor():
-            assert any(
-                "Child process title" in line and str(child.pid) in line
-                for line in lines
-            )
-            assert "감시 데몬" in run.stdout
-        else:
-            assert "Child process title" in lines[parent_line + 1]
-            assert str(child.pid) in lines[parent_line + 1]
+        assert "Child process title" in lines[parent_line + 1]
+        assert str(child.pid) in lines[parent_line + 1]
     finally:
         child.terminate()
         child.wait()
