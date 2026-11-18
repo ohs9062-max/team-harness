@@ -19,6 +19,56 @@ UNRESOLVED = """t.state IN ('failed','verify_failed') AND NOT EXISTS (
  AND lower(a.result) IN ('done','verified'))"""
 
 
+def _git(*args: str) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", *args], capture_output=True, text=True, timeout=0.1, check=True
+        )
+        return result.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def unresolved_failure(db: sqlite3.Connection, task: str, owner: str, key: str) -> bool:
+    """Check the indexed failure and bounded, read-only resolution evidence."""
+    row = db.execute(
+        f"SELECT f.at FROM failures f JOIN tasks t ON t.task=f.task WHERE f.task=? AND {UNRESOLVED} ORDER BY f.at DESC LIMIT 1",
+        (task,),
+    ).fetchone()
+    if not row:
+        return False
+    if db.execute(
+        "SELECT 1 FROM coord_log WHERE task=? AND kind IN ('완료','결정') AND julianday(at)>julianday(?) LIMIT 1",
+        (task, row[0]),
+    ).fetchone():
+        return False
+    if not owner or not key:
+        return True
+    base = _git("-C", owner, "symbolic-ref", "-q", "refs/remotes/origin/HEAD")
+    if base:
+        base = "refs/heads/" + base.removeprefix("refs/remotes/origin/")
+    else:
+        for candidate in ("refs/heads/main", "refs/heads/master"):
+            if _git("-C", owner, "rev-parse", "--verify", "-q", candidate) is not None:
+                base = candidate
+                break
+    if not base:
+        return True
+    commit = _git(
+        "-C", owner, "rev-parse", "--verify", "-q", f"refs/heads/task/{key}^{{commit}}"
+    )
+    if not commit:
+        try:
+            worktree = (Path(task) / ".th_worktree").read_text().strip()
+        except OSError:
+            worktree = ""
+        if worktree:
+            commit = _git("-C", worktree, "rev-parse", "--verify", "HEAD^{commit}")
+    if not commit:
+        return True
+    return _git("-C", owner, "merge-base", "--is-ancestor", commit, base) is None
+
+
 def failure_signature(detail: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Return normalized failing checks and causes, excluding diagnostic noise."""
     checks = tuple(
@@ -190,22 +240,19 @@ def why(target: str, limit: int = 30, *, readonly: bool = False) -> str:
             (task,),
         ).fetchone()
         if failure:
-            unresolved = db.execute(
-                f"SELECT 1 FROM failures f JOIN tasks t ON t.task=f.task WHERE f.task=? AND {UNRESOLVED} LIMIT 1",
-                (task,),
+            owner, key = db.execute(
+                "SELECT owner,task_key FROM tasks WHERE task=?", (task,)
             ).fetchone()
+            unresolved = unresolved_failure(db, task, owner, key)
             summary = _failure_summary(failure[0], failure[1])
             if not unresolved:
                 lines.append(f"지난 실패(해결됨): {summary}")
             else:
                 lines.append(f"실패: {summary}")
                 signature = failure_signature(failure[1] or "")
-                owner, key = db.execute(
-                    "SELECT owner,task_key FROM tasks WHERE task=?", (task,)
-                ).fetchone()
                 prefix = (key or "").split("_")[0]
                 candidates = db.execute(
-                    f"SELECT f.task,f.detail,t.owner,t.task_key FROM failures f JOIN tasks t ON t.task=f.task WHERE f.category=? AND f.task!=? AND datetime(f.at)>=datetime('now','-7 days') AND {UNRESOLVED} ORDER BY f.at DESC",
+                    f"SELECT f.task,f.detail,t.owner,t.task_key FROM failures f JOIN tasks t ON t.task=f.task WHERE f.category=? AND f.task!=? AND datetime(f.at)>=datetime('now','-7 days') AND {UNRESOLVED} ORDER BY f.at DESC LIMIT 12",
                     (failure[0], task),
                 ).fetchall()
                 matches = []
@@ -221,11 +268,18 @@ def why(target: str, limit: int = 30, *, readonly: bool = False) -> str:
                         priority = bool(owner and owner == other_owner) or bool(
                             prefix and (other_key or "").split("_")[0] == prefix
                         )
-                        matches.append((not priority, other, detail))
+                        matches.append(
+                            (not priority, other, detail, other_owner, other_key)
+                        )
                 matches.sort(key=lambda item: item[0])
+                matches = [
+                    match
+                    for match in matches[:4]
+                    if unresolved_failure(db, match[1], match[3], match[4])
+                ]
                 if not matches:
                     lines.append("유사 실패 없음")
-                for _, other, detail in matches[:3]:
+                for _, other, detail, _, _ in matches[:3]:
                     lines.append(
                         f"유사 실패: {other} · {_failure_summary(failure[0], detail)}"
                     )
@@ -274,9 +328,14 @@ def main() -> None:
                 (workspace,),
             ).fetchall()
             failures = db.execute(
-                f"SELECT t.task,f.category FROM failures f JOIN tasks t ON t.task=f.task WHERE t.owner=? AND datetime(f.at)>=datetime('now','-1 day') AND {UNRESOLVED} GROUP BY t.task ORDER BY f.at DESC LIMIT 4",
+                f"SELECT t.task,f.category,t.owner,t.task_key FROM failures f JOIN tasks t ON t.task=f.task WHERE t.owner=? AND datetime(f.at)>=datetime('now','-1 day') AND {UNRESOLVED} GROUP BY t.task ORDER BY f.at DESC LIMIT 4",
                 (workspace,),
             ).fetchall()
+            failures = [
+                (task, category)
+                for task, category, owner, key in failures
+                if unresolved_failure(db, task, owner, key)
+            ]
         if rows or failures:
             print("## 미해결 실패·최근 결정")
             for task, category in failures:
