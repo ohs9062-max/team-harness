@@ -1479,7 +1479,7 @@ def _install_continuation(
             agent_type=current.agent_type,
             prompt=monitor.prompt(full_prompt)
             if forced
-            else continuation_prompt(full_prompt, reason, count),
+            else continuation_prompt(full_prompt, reason, count, worker_output_dir),
             cwd=Path(current.cwd),
             config=config,
             log_dir=run_dir,

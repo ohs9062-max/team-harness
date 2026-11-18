@@ -743,7 +743,7 @@ class TeamHarnessAgentRunner:
                     auto_continues += 1
                     remember_done(Path(cwd))
                     current_prompt = continuation_prompt(
-                        prompt, final_text, auto_continues
+                        prompt, final_text, auto_continues, Path(cwd)
                     )
                     sid = extract_session_id(
                         spawn_result.template,

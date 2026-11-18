@@ -61,6 +61,7 @@ def run(task: Path, ended_at: str, owner: str, route: str, message: str) -> None
     from team_harness.worker_digest import verify
 
     verdict = "FAIL"
+    detail = ""
     try:
         brief = (task / "task.md").read_text(encoding="utf-8")
         match = re.search(
@@ -106,6 +107,10 @@ def run(task: Path, ended_at: str, owner: str, route: str, message: str) -> None
                 (task / "verify.sh").write_text(match.group(1), encoding="utf-8")
                 verification = verify(task, force=True)
             verdict = "FAIL" if verification[0]["overall"] == "FAIL" else "PASS"
+            if verdict == "FAIL":
+                detail = (
+                    verification[0].get("items", {}).get("verify", {}).get("reason", "")
+                )
             if (task / "REPORT.md").is_file():
                 try:
                     digest(task, "observed", ended_at, verification_result=verification)
@@ -113,7 +118,7 @@ def run(task: Path, ended_at: str, owner: str, route: str, message: str) -> None
                     pass
     except Exception:
         verdict = "FAIL"
-    _append(owner, route, f"{message} | 검수 {verdict} | -")
+    _append(owner, route, f"{message} | 검수 {verdict} {detail} | -")
     try:
         from team_harness.state_index import update
 

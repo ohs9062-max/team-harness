@@ -1,5 +1,6 @@
 """Isolated integration checks: no real registry, provider or lasting daemon."""
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -489,6 +490,40 @@ def test_reclassify_dry_run_and_apply(tmp_path: Path, sandbox: tuple[Path, Path,
     assert (tasks[1] / "VERIFIED").exists()
 
 
+def test_failed_check_reports_raw_tail_and_log(tmp_path: Path):
+    (tmp_path / "verify.sh").write_text(
+        "printf 'one\\ntwo\\nthree\\nfour\\nfive\\n'\n"
+        "printf 'FAILED t.py::test_x'\n"
+        "printf '[a b] - error\\n' >&2\nexit 1\n"
+    )
+    result = wd.check_script(tmp_path)
+    assert result["verdict"] == "FAIL"
+    assert result["script_exit_code"] == "1"
+    assert f"출력: {tmp_path / 'verify_output.log'}" in result["reason"]
+    assert result["reason"].endswith(
+        "two ⏎ three ⏎ four ⏎ five ⏎ FAILED t.py::test_x[a b] - error"
+    )
+    assert len(result["reason"].splitlines()) == 1
+    assert (tmp_path / "verify_output.log").read_text().startswith("one\n")
+
+
+def test_failed_check_reason_is_one_line_with_newline_in_task_path(tmp_path: Path):
+    task = tmp_path / "task\nname"
+    task.mkdir()
+    (task / "verify.sh").write_text("printf 'failure\\n'\nexit 1\n")
+    result = wd.check_script(task)
+    assert result["verdict"] == "FAIL"
+    assert len(result["reason"].splitlines()) == 1
+    assert "task ⏎ name/verify_output.log" in result["reason"]
+
+
+def test_failed_check_tail_limits_line_length(tmp_path: Path):
+    (tmp_path / "verify.sh").write_text("printf '%0205d\\n' 0\nexit 1\n")
+    result = wd.check_script(tmp_path)
+    assert result["reason"].endswith("0" * 205)
+    assert (tmp_path / "verify_output.log").read_text() == "0" * 205 + "\n"
+
+
 @pytest.mark.parametrize("declared", [False, True])
 def test_changed_verification_input_invalidates_pass(tmp_path: Path, declared: bool):
     (tmp_path / "DONE").touch()
@@ -499,6 +534,38 @@ def test_changed_verification_input_invalidates_pass(tmp_path: Path, declared: b
     assert wd.check_script(tmp_path)["verdict"] == "PASS"
     (tmp_path / "value.txt").write_text("bad")
     assert wd.check_script(tmp_path)["verdict"] == "FAIL"
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        b"verification-evidence-v5\0",
+        b"verification-evidence-v4\0",
+        b"verification-evidence-v3\0",
+        b"verification-evidence-v2\0",
+        b"",
+    ],
+)
+def test_old_verification_cache_is_not_reused(tmp_path: Path, prefix: bytes):
+    script = tmp_path / "verify.sh"
+    script.write_text("echo run >> attempts\n")
+    manifest = tmp_path / "verify_inputs.json"
+    manifest.write_text('["input"]')
+    input_path = tmp_path / "input"
+    input_path.write_text("stable")
+    digest = hashlib.sha256(prefix + script.read_bytes())
+    digest.update(str(tmp_path).encode())
+    digest.update(manifest.read_bytes())
+    digest.update(b"0")
+    digest.update(str(input_path).encode())
+    digest.update(input_path.read_bytes())
+    (tmp_path / ".th_verify_script.json").write_text(
+        json.dumps({"key": digest.hexdigest(), "item": {"verdict": "FAIL"}})
+    )
+    assert wd.check_script(tmp_path)["verdict"] == "PASS"
+    assert (tmp_path / "attempts").read_text().splitlines() == ["run"]
+    assert wd.check_script(tmp_path)["verdict"] == "PASS"
+    assert (tmp_path / "attempts").read_text().splitlines() == ["run"]
 
 
 def test_force_verification_bypasses_declared_cache(tmp_path: Path):
@@ -526,3 +593,53 @@ def test_cause_warnings_th_verify(tmp_path: Path, sandbox: tuple[Path, Path, Pat
     text = (task / "verify_result.txt").read_text()
     assert "- 지시 원인: [WARN]" not in text
     assert "- 증상 재현: [WARN]" not in text
+
+
+def test_failure_reason_routes_only_to_target_session(tmp_path: Path):
+    task = tmp_path / "task"
+    task.mkdir()
+    (task / "verify.sh").write_text("printf 'secret-one\\nsecret-two\\n'\nexit 1\n")
+    reason = wd.check_script(task)["reason"]
+    owner = tmp_path / "owner"
+    journal = owner / ".claude"
+    journal.mkdir(parents=True)
+    (journal / "inbox.md").write_text(f"event: {reason}\n")
+    (journal / "inbox.routes").write_text("0\tsession-a\n")
+    reader = SCRIPTS / "th-inbox-read.py"
+
+    def read_session(key: str) -> subprocess.CompletedProcess[str]:
+        env = {**os.environ, "TH_SESSION_KEY": key}
+        return subprocess.run(
+            [sys.executable, str(reader), str(owner), "0", "peek"],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    a, b = read_session("session-a"), read_session("session-b")
+    assert b.stdout == "" and b.returncode == 1
+    assert len((journal / "inbox.md").read_text().splitlines()) == 1
+    assert "secret-one ⏎ secret-two" in a.stdout
+
+
+def test_reason_control_characters_and_tail_limit(tmp_path: Path):
+    (tmp_path / "verify.sh").write_text(
+        "printf 'first\\tvalue\\rtext\\n'; printf '%0700d\\n' 0; exit 1\n"
+    )
+    result = wd.check_script(tmp_path)
+    tail = result["reason"].split("; ")[-1]
+    assert len(tail) == 600
+    assert tail.startswith("first value ⏎ text ⏎ ")
+    assert "\t" not in result["reason"] and "\r" not in result["reason"]
+    assert (
+        (tmp_path / "verify_output.log")
+        .read_bytes()
+        .startswith(b"first\tvalue\ntext\n")
+    )
+
+
+def test_verify_capture_normalizes_crlf_and_replaces_invalid_bytes(tmp_path: Path):
+    (tmp_path / "verify.sh").write_text("printf 'a\\r\\nb\\n\\377\\n'\n")
+    assert wd.check_script(tmp_path)["verdict"] == "PASS"
+    assert (tmp_path / "verify_output.log").read_bytes() == "a\nb\n�\n".encode()

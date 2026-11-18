@@ -204,7 +204,7 @@ handle_daemon_event() {
       flock -x 202
       inbox_offset=$(wc -c < "$inbox_file")
       printf '%s\t%s\n' "$inbox_offset" "$route" >> "$owner/.claude/inbox.routes"
-      printf '%s | %s | %s | %s | %s%s\n' "$now_time" "$name" "$event_type" "$summary" "$v_res" "$jev_suffix" >> "$inbox_file"
+      th_python "$script_dir/../src/team_harness/one_line.py" "$now_time | $name | $event_type | $summary | $v_res$jev_suffix" >> "$inbox_file"
       inbox_size=$(wc -c < "$inbox_file")
       now_epoch=$(date +%s)
       record_inbox_append "$owner" "$inbox_size" "$now_epoch" "$route" "$(cat "$task/.th_session_agent" 2>/dev/null || printf unknown)"
@@ -219,7 +219,7 @@ handle_daemon_event() {
   fi
 
   # 3. events.log 기록
-  printf '%s [%s] %s: %s (검수: %s)\n' "$now_sec" "$event_type" "$name" "$summary" "$v_res" >> "$watch_dir/events.log"
+  th_python "$script_dir/../src/team_harness/one_line.py" "$now_sec [$event_type] $name: $summary (검수: $v_res)" >> "$watch_dir/events.log"
 
   # C. Jev 관찰 (watch_cli.py 호출)
   if [[ ${TH_JEV_WATCH:-on} != "off" && ${TEAM_HARNESS_JEV:-} != 0 ]]; then
@@ -233,7 +233,9 @@ deliver_verification() {
   [[ -f $task/.th_daemon.done && -f $task/.th_digest.done && -f $task/verify_result.json && ! -f $task/.th_daemon.verify_notice ]] || return 0
   verify_title=$(th_python -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["overall"])' "$task/verify_result.json" 2>/dev/null || true)
   [[ -n $verify_title ]] || return 0
-  if [[ $verify_title != 'WARN 검증 없음' ]]; then
+  if [[ $verify_title == FAIL ]]; then
+    verify_title=$(th_python -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); print("FAIL: " + d.get("items", {}).get("verify", {}).get("reason", ""))' "$task/verify_result.json" 2>/dev/null || printf FAIL)
+  elif [[ $verify_title != 'WARN 검증 없음' ]]; then
     touch "$task/.th_daemon.verify_notice"
     return 0
   fi

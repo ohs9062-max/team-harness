@@ -35,6 +35,7 @@ if __package__ in (None, ""):
 
 from team_harness.cause_check import has_cause_hypothesis
 from team_harness.cause_check import has_symptom_section
+from team_harness.one_line import one_line
 from team_harness.paths_check import has_paths_table
 from team_harness.paths_check import paths_reason
 
@@ -158,7 +159,7 @@ def live_pids(task: Path) -> list[int]:
 
 
 def item(verdict: str, reason: str) -> dict[str, str]:
-    return {"verdict": verdict, "reason": " ".join(reason.splitlines())}
+    return {"verdict": verdict, "reason": one_line(reason)}
 
 
 def check_state(task: Path) -> dict[str, str]:
@@ -301,6 +302,7 @@ def run_bounded(
         cwd=cwd,
         stdin=subprocess.PIPE,
         text=True,
+        errors="replace",
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         start_new_session=True,
@@ -348,7 +350,7 @@ def verification_key(task: Path, worktree: Path, script: Path) -> str | None:
             or not all(isinstance(path, str) and path for path in paths)
         ):
             return None
-        digest = hashlib.sha256(script.read_bytes())
+        digest = hashlib.sha256(b"verification-evidence-v6\0" + script.read_bytes())
         digest.update(str(worktree).encode())
         digest.update(manifest.read_bytes())
         done = task / "DONE"
@@ -398,6 +400,7 @@ def check_script(task: Path, *, force: bool = False) -> dict[str, str]:
     atomic_write(
         task / ".th_verify_output.txt", "\n".join(output.splitlines()[-40:]) + "\n"
     )
+    atomic_write(task / "verify_output.log", output)
     failures = [f"verify.sh 실패 (종료 코드 {code})"] if code else []
     warnings = []
     git = subprocess.run(
@@ -416,6 +419,15 @@ def check_script(task: Path, *, force: bool = False) -> dict[str, str]:
         "FAIL" if failures else "WARN" if warnings else "PASS",
         "; ".join(failures + warnings) or "verify.sh 통과",
     )
+    if failures:
+        lines = output.split("\n")
+        if lines[-1] == "":
+            lines.pop()
+        prefix = one_line(result["reason"] + f"; 출력: {task / 'verify_output.log'}")
+        tail = "\n".join(lines[-5:])
+        result["reason"] = one_line(prefix + ("; " + tail if tail else ""))
+        if tail:
+            result["reason"] = result["reason"][: len(prefix) + 2 + 600]
     result["script_exit_code"] = str(code)
     # Checks may themselves change an input. Such results cannot be reused.
     if key is not None and verification_key(task, worktree, script) == key:

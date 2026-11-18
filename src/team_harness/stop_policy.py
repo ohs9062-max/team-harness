@@ -14,6 +14,7 @@ import subprocess
 import time
 from typing import Literal
 
+from team_harness.one_line import one_line
 from team_harness.worker_digest import live_pids
 from team_harness.worker_digest import quota_lock_active
 from team_harness.worker_digest import verify
@@ -79,8 +80,14 @@ def classify_stop_text(text: str, task_dir: Path | None = None) -> StopClassific
     return "self_stop" if _REMAINING.search(reason) else "ok"
 
 
-def continuation_prompt(prompt: str, reason: str, count: int) -> str:
+def continuation_prompt(
+    prompt: str, reason: str, count: int, task_dir: Path | None = None
+) -> str:
     """Append the previous result without discarding the original assignment."""
+    if task_dir is not None and (task_dir / "verify_result.txt").is_file():
+        reason += "\n" + (task_dir / "verify_result.txt").read_text(
+            encoding="utf-8", errors="replace"
+        )
     return (
         f"{prompt}\n\n## 자동 계속 ({count}차)\n\n직전 사유:\n{reason}\n\n"
         "남은 항목을 이어서 끝까지 하라, 이미 된 것은 다시 하지 마라."
@@ -294,6 +301,7 @@ def continue_stopped_task(task: Path, watch_dir: Path, owner: Path) -> str:
                 encoding="utf-8", errors="replace"
             )
         section = f"\n\n## 자동 계속 ({count + 1}차)\n\n직전 사유:\n{reason}\n"
+        section += "\n" + evidence
         section += "\n남은 항목을 이어서 끝까지 하라, 이미 된 것은 다시 하지 마라.\n"
         if (task / "VERIFY_FAILED").exists():
             result = task / ".th_verify_output.txt"
@@ -353,8 +361,8 @@ def continue_stopped_task(task: Path, watch_dir: Path, owner: Path) -> str:
                     .strip()
                     or detail
                 )
-            return f"자동 계속 실패: {detail}"
-        event_reason = " ".join(reason.splitlines()).strip()
+            return one_line(f"자동 계속 실패: {detail}")
+        event_reason = one_line(reason).strip()
         if evidence:
             event_reason += " | 검수 근거: " + (
                 " ".join(
@@ -362,7 +370,7 @@ def continue_stopped_task(task: Path, watch_dir: Path, owner: Path) -> str:
                 )
                 or " ".join(evidence.splitlines())[:500]
             )
-        return f"자동 계속({count + 1}/2): {event_reason}"
+        return one_line(f"자동 계속({count + 1}/2): {event_reason}")
 
 
 def main() -> None:
