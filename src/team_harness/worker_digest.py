@@ -667,10 +667,12 @@ def summarize(task: Path, verification: str) -> str:
                     )
                     for line in error_lines
                 ):
-                    atomic_write(
-                        watch / f"quota_lock.{worker}",
-                        f"{datetime.now():%F %T} | digest {task} | quota/capacity error\n",
-                    )
+                    with (watch / "quota_locks.lock").open("a") as lock:
+                        fcntl.flock(lock, fcntl.LOCK_EX)
+                        atomic_write(
+                            watch / f"quota_lock.{worker}",
+                            f"{datetime.now():%F %T} | digest {task} | quota/capacity error\n",
+                        )
                 return ""
             if worker == "codex" and output.is_file():
                 summary = read(output)

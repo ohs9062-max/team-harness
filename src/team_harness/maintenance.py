@@ -87,9 +87,11 @@ def run_once() -> None:
             update(maintenance=True)
         except Exception as exc:
             print(f"maintenance state index failed: {exc}", file=sys.stderr)
+    from team_harness.registry_hygiene import clean as clean_registry
     from team_harness.unread import clean_unread
 
     for name, operation in (
+        ("registry", lambda: clean_registry(watch_dir(), now)),
         ("unread", lambda: clean_unread(watch_dir())),
         ("deployment", auto_sync),
         ("report", lambda: daily(now)),

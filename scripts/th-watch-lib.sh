@@ -101,7 +101,7 @@ watch_retire_settled() {
     flock -x 200 || exit 1
     tmp=$(mktemp "$watch_dir/.tasks.XXXXXX") || exit 1
     while IFS= read -r task || [[ -n $task ]]; do
-      if [[ -n $task && -d $task ]] && watch_task_settled "$task" "$cutoff"; then
+      if [[ -n $task && -d $task && -f $task/DONE && ! -e $task/FAILED && ! -e $task/VERIFY_FAILED ]] && ! compgen -G "$task/FAILED.*" >/dev/null && watch_task_settled "$task" "$cutoff"; then
         printf '%s\n' "$task" >> "$watch_dir/tasks_done.txt" || { rm -f "$tmp"; exit 1; }
         changed=1
       else
@@ -788,11 +788,14 @@ inspect_task_event() {
     local lock_type
     lock_type=$(basename "$log_file" .log)
     [[ $lock_type == worker ]] && lock_type=unknown
+    (
+    flock -x 201 || exit 1
     if [[ ${line,,} == *"at capacity"* || ${line,,} == *"capacity exceeded"* ]]; then
       printf '%s | %s | %s | expires=%s\n' "$(date '+%F %R')" "$task" "$line" "$(( $(date +%s) + 900 ))" > "$watch_dir/quota_lock.$lock_type"
     else
       printf '%s | %s | %s\n' "$(date '+%F %R')" "$task" "$line" > "$watch_dir/quota_lock.$lock_type"
     fi
+    ) 201>"$watch_dir/quota_locks.lock"
     "$callback_fn" "$task" "워커 오류(쿼터·용량)" "워커 오류(쿼터·용량) — $line (새 $lock_type 실행 잠금: $watch_dir/quota_lock.$lock_type)" "-" "$owner"
     # A quota event is non-terminal.  Continue so a later DONE/FAILED marker is
     # still observed on the next pass (and dead-process handling remains intact).
