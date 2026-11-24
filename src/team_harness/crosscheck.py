@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from datetime import timezone
@@ -267,7 +268,7 @@ allow_paths:
 결론을 반증할 가능성을 조사한다. 원문과 원본을 보고 판정 기준을 스스로 세워 VERDICT.md 앞부분에 적는다. 필요한 파일과 구간만 읽고 15분 안에 마친다. 코드를 수정하지 않는다.
 
 ## 작업 요청 원문
-{data["task_text"]}
+원문 사본을 읽는다: {own / "source" / "original-task.md"}
 
 ## 결론
 {data["claim"]}
@@ -288,6 +289,35 @@ VERDICT: PASS|FAIL|INSUFFICIENT_EVIDENCE
 test -s VERDICT.md
 ```
 """
+
+
+def launch_failure_reason(path: Path) -> str:
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    return next(
+        (line.strip() for line in lines if "error:" in line.lower()),
+        next(
+            (
+                line.strip()
+                for line in lines
+                if line.strip() and not line.startswith("rc=")
+            ),
+            "시작 실패",
+        ),
+    )
+
+
+def report_launch_failures(folder: Path, names: Sequence[str]) -> int:
+    failures = [
+        folder / name / "LAUNCH_FAILED"
+        for name in names
+        if (folder / name / "LAUNCH_FAILED").is_file()
+    ]
+    for path in failures:
+        print(
+            f"검증 워커 시작 실패: {launch_failure_reason(path)} — {path}",
+            file=sys.stderr,
+        )
+    return 1 if len(failures) == len(names) else 0
 
 
 def adopt(args: argparse.Namespace) -> int:
@@ -379,6 +409,9 @@ def adopt(args: argparse.Namespace) -> int:
                     source if rel == "." else source / rel,
                     target if rel == "." else target / rel,
                 )
+        original = own / "source" / "original-task.md"
+        original.parent.mkdir(parents=True, exist_ok=True)
+        original.write_text(task_text, encoding="utf-8")
         (own / "task.md").write_text(adopt_brief(folder, data, name), encoding="utf-8")
     (folder / "evidence.sha256").write_text(
         json.dumps(evidence, ensure_ascii=False, sort_keys=True) + "\n",
@@ -450,7 +483,7 @@ def adopt(args: argparse.Namespace) -> int:
                     workspace = (
                         parent_owner.read_text(encoding="utf-8").strip()
                         if parent_owner.exists()
-                        else os.environ.get("TH_WORKSPACE", str(sources[0]))
+                        else os.environ.get("TH_WORKSPACE", str(ROOT))
                     )
                     owner.write_text(workspace + "\n", encoding="utf-8")
                 if str(own) not in registered:
@@ -473,7 +506,7 @@ def adopt(args: argparse.Namespace) -> int:
                 start_new_session=True,
             )
     print(folder)
-    return 0
+    return report_launch_failures(folder, names)
 
 
 def start(args: argparse.Namespace) -> int:
@@ -598,7 +631,7 @@ def start(args: argparse.Namespace) -> int:
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         list(pool.map(launch, NAMES))
-    return 0
+    return report_launch_failures(folder, NAMES)
 
 
 def changed(path: Path, expected: dict[str, str]) -> bool:
@@ -794,6 +827,16 @@ def notification(folder: Path) -> int:
         if any(v[0] == "FAIL" for v in results.values())
         else "보류"
     )
+    failures = [
+        folder / name / "LAUNCH_FAILED"
+        for name in data["names"]
+        if (folder / name / "LAUNCH_FAILED").is_file()
+    ]
+    if failures:
+        print(
+            f"채택 검증 보류 — 검증 워커 시작 실패: {launch_failure_reason(failures[0])}"
+        )
+        return 0
     counterexamples = []
     for name, (result, _) in results.items():
         if result == "UNAVAILABLE":

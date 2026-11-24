@@ -446,3 +446,84 @@ def test_push_guard_existing_heading_in_large_document(tmp_path: Path):
         capture_output=True,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_adopt_launch_failure_reaches_watch_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    task = tmp_path / "task"
+    task.mkdir()
+    (task / "task.md").write_text("original")
+    owner = tmp_path / "owner"
+    owner.mkdir()
+    source = tmp_path / "source"
+    source.write_text("source")
+    watch = tmp_path / "watch"
+    monkeypatch.setenv("TH_WORKSPACE", str(owner))
+    monkeypatch.setenv("TH_WATCH_DIR", str(watch))
+    monkeypatch.setenv("TH_NO_DAEMON", "1")
+    original_run = subprocess.run
+    monkeypatch.setattr(
+        cc.subprocess,
+        "run",
+        lambda cmd, **kw: subprocess.CompletedProcess(
+            cmd, 2, "", "error: foreign_path:40: rejected\n"
+        ),
+    )
+    args = argparse.Namespace(
+        folder=str(task), claim="claim", source=[str(source)], two=False, worker="codex"
+    )
+    assert cc.adopt(args) != 0
+    marker = task / ".th_adopt/terra/LAUNCH_FAILED"
+    assert str(marker) in capsys.readouterr().err
+    env = dict(os.environ, TH_ONCE="1", HOME=str(tmp_path))
+    for _ in range(2):
+        original_run(
+            [str(cc.ROOT / "scripts/th-watchd.sh")],
+            env=env,
+            check=True,
+            capture_output=True,
+        )
+    inbox = (owner / ".claude/inbox.md").read_text()
+    assert inbox.count("검증 워커 시작 실패: error: foreign_path:40: rejected") == 1
+
+
+def test_adopt_original_task_is_readable_and_launches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    task = tmp_path / "task"
+    task.mkdir()
+    original = (
+        "## 할 일\n- cat /home/hs/rang/team-harness/_outputs/other_20261124/wt/file\n"
+    )
+    (task / "task.md").write_text(original)
+    source = tmp_path / "source"
+    source.write_text("source")
+    owner = tmp_path / "owner"
+    owner.mkdir()
+    suffix = tmp_path / "suffix"
+    suffix.write_text("Complete the assigned work.\n")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    codex = bin_dir / "codex"
+    codex.write_text('#!/bin/sh\nprintf done > "$TH_WORKER_OUTPUT_DIR/DONE"\n')
+    codex.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + os.environ["PATH"])
+    for key, value in {
+        "HOME": str(tmp_path),
+        "TH_NO_DAEMON": "1",
+        "TEAM_HARNESS_JEV": "0",
+        "TH_WORKSPACE": str(owner),
+        "TH_WATCH_DIR": str(tmp_path / "watch"),
+        "TH_WORKER_SUFFIX": str(suffix),
+        "TH_WORKERS_FILE": str(tmp_path / "workers"),
+    }.items():
+        monkeypatch.setenv(key, value)
+    args = argparse.Namespace(
+        folder=str(task), claim="claim", source=[str(source)], two=False, worker="codex"
+    )
+    assert cc.adopt(args) == 0
+    worker = task / ".th_adopt/terra"
+    assert not (worker / "LAUNCH_FAILED").exists()
+    assert (worker / "source/original-task.md").read_text() == original
+    assert (worker / "worker.pid").exists()

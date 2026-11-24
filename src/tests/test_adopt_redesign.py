@@ -159,7 +159,7 @@ def test_adopt_brief_two_and_changed_evidence(
     assert all(
         s in brief
         for s in (
-            "원문 보존",
+            str(folder / "terra/source/original-task.md"),
             "60000",
             "15분",
             "40줄",
@@ -168,6 +168,9 @@ def test_adopt_brief_two_and_changed_evidence(
             str(source),
         )
     )
+    assert (
+        folder / "terra/source/original-task.md"
+    ).read_text() == "# 사용자 목적\n원문 보존"
     assert "## 성공 기준" not in brief
     assert len(launches) == 1 and launches[0][2:5] == [
         "codex",
