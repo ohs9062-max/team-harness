@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import signal
 import sqlite3
 import subprocess
 import time
@@ -260,7 +261,31 @@ def test_fifo_result_does_not_block(tmp_path: Path, name: str) -> None:
     assert result.returncode == 37
 
 
-def test_active_direct_execution(tmp_path: Path) -> None:
+@pytest.fixture
+def clean_test_maintenance(tmp_path: Path):
+    yield
+    # The direct-execution test exercises real owner registration and therefore
+    # starts maintenance. Only stop the process with this test's private HOME.
+    for proc in Path("/proc").iterdir():
+        if not proc.name.isdigit():
+            continue
+        try:
+            pidfd = os.pidfd_open(int(proc.name))
+            try:
+                args = (proc / "cmdline").read_bytes().split(b"\0")
+                env = (proc / "environ").read_bytes().split(b"\0")
+                if (
+                    b"team_harness.maintenance" in args
+                    and os.fsencode(f"HOME={tmp_path}") in env
+                ):
+                    signal.pidfd_send_signal(pidfd, signal.SIGTERM)
+            finally:
+                os.close(pidfd)
+        except (FileNotFoundError, ProcessLookupError, PermissionError):
+            pass
+
+
+def test_active_direct_execution(tmp_path: Path, clean_test_maintenance: None) -> None:
     import json
 
     from team_harness import docs_migrate
