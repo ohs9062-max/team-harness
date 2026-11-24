@@ -19,6 +19,8 @@ import stat
 import subprocess
 import sys
 
+from team_harness.observation_events import coordinator_workspace
+
 if __package__:
     from .adoption_gate import record_receipt
     from .coordinator_zone import is_coordinator_zone
@@ -320,6 +322,13 @@ def report_launch_failures(folder: Path, names: Sequence[str]) -> int:
     return 1 if len(failures) == len(names) else 0
 
 
+def crosscheck_owner(task: Path) -> str:
+    owner_file = task / ".th_owner"
+    if owner_file.exists():
+        return owner_file.read_text(encoding="utf-8").strip()
+    return os.environ.get("TH_WORKSPACE") or coordinator_workspace(str(task))
+
+
 def adopt(args: argparse.Namespace) -> int:
     task = Path(args.folder).expanduser().resolve()
     task_text = (task / "task.md").read_text(encoding="utf-8")
@@ -424,8 +433,11 @@ def adopt(args: argparse.Namespace) -> int:
         json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
 
+    workspace = crosscheck_owner(task)
+
     def launch(name: str) -> None:
         env = os.environ.copy()
+        env["TH_WORKSPACE"] = workspace
         env.pop("TH_BRIEF_OK", None)
         env.pop("TH_IGNORE_BUDGET", None)
         env["TH_CODEX_REASON"] = env["TH_HIGH_REASON"] = "independent claim crosscheck"
@@ -479,12 +491,6 @@ def adopt(args: argparse.Namespace) -> int:
                 own = folder / name
                 owner = own / ".th_owner"
                 if not owner.exists():
-                    parent_owner = task / ".th_owner"
-                    workspace = (
-                        parent_owner.read_text(encoding="utf-8").strip()
-                        if parent_owner.exists()
-                        else os.environ.get("TH_WORKSPACE", str(ROOT))
-                    )
                     owner.write_text(workspace + "\n", encoding="utf-8")
                 if str(own) not in registered:
                     out.write(str(own) + "\n")
@@ -597,8 +603,11 @@ def start(args: argparse.Namespace) -> int:
         json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
 
+    workspace = crosscheck_owner(folder)
+
     def launch(name: str) -> None:
         env = os.environ.copy()
+        env["TH_WORKSPACE"] = workspace
         env.pop("TH_BRIEF_OK", None)
         env.pop("TH_IGNORE_BUDGET", None)
         env["TH_CODEX_REASON"] = "independent claim crosscheck"

@@ -287,10 +287,11 @@ def test_launch_failure_does_not_prevent_other(
     args.folder = str(folder.parent / "other")
     args.force = True
     workers: list[str] = []
+    real_run = subprocess.run
 
-    def fake_launch(
-        cmd: list[str], **kwargs: object
-    ) -> subprocess.CompletedProcess[str]:
+    def fake_launch(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if not str(cmd[0]).endswith("th-launch.sh"):
+            return real_run(cmd, **kwargs)
         workers.append(cmd[2])
         return subprocess.CompletedProcess(
             cmd, 1 if cmd[2] == "codex" else 0, "", "error"

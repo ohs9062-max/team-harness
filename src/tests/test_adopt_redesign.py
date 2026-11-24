@@ -144,8 +144,11 @@ def test_adopt_brief_two_and_changed_evidence(
     monkeypatch.setenv("TH_WATCH_DIR", str(tmp_path / "watch"))
     monkeypatch.setenv("TH_NO_DAEMON", "1")
     launches = []
+    real_run = subprocess.run
 
     def launch(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if not str(cmd[0]).endswith("th-launch.sh"):
+            return real_run(cmd, **kwargs)
         launches.append(cmd)
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
@@ -454,3 +457,44 @@ def test_launch_watchd_and_status(tmp_path: Path) -> None:
         timeout=30,
     )
     assert "ℹ 검증 없음: robot3 1건" in status.stdout
+
+
+@pytest.mark.parametrize("case", ["repo", "outside", "env", "parent"])
+def test_adopt_owner_resolution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    if case != "outside":
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    task = repo / "task"
+    task.mkdir()
+    (task / "task.md").write_text("task")
+    expected = task if case == "outside" else repo
+    monkeypatch.delenv("TH_WORKSPACE", raising=False)
+    if case in {"env", "parent"}:
+        expected = tmp_path / "environment-owner"
+        expected.mkdir()
+        monkeypatch.setenv("TH_WORKSPACE", str(expected))
+    if case == "parent":
+        expected = tmp_path / "parent-owner"
+        expected.mkdir()
+        (task / ".th_owner").write_text(str(expected))
+    monkeypatch.setenv("TH_NO_DAEMON", "1")
+    monkeypatch.setenv("TH_WATCH_DIR", str(tmp_path / "watch"))
+    real_run = subprocess.run
+    launches = []
+
+    def fake_launch(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[Any]:
+        if str(cmd[0]).endswith("th-launch.sh"):
+            launches.append(kwargs["env"]["TH_WORKSPACE"])
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        return real_run(cmd, **kwargs)
+
+    monkeypatch.setattr(cc.subprocess, "run", fake_launch)
+    args = argparse.Namespace(
+        folder=str(task), claim="claim", source=[str(task / "task.md")], two=False
+    )
+    assert cc.adopt(args) == 0
+    assert (task / ".th_adopt/terra/.th_owner").read_text().strip() == str(expected)
+    assert launches == [str(expected)]
