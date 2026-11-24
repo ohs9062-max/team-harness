@@ -1820,11 +1820,14 @@ def test_th_inbox_wait_reads_only_new_complete_lines_and_handles_rotation(
     cursor = inbox_dir / ".inbox_cursor"
     assert cursor.read_text(encoding="utf-8").strip() == str(len(inbox.read_bytes()))
 
-    inbox.write_text("old event\nnew one\nnew two\n", encoding="utf-8")
+    breaker = (
+        "2026-11-20 15:52 | workspace | 차단기(관찰) | 최근 10회 중 재실행·실패 8회 | -"
+    )
+    inbox.write_text(f"old event\nnew one\n{breaker}\n", encoding="utf-8")
     woke = subprocess.run([str(script), "0"], env=env, capture_output=True, text=True)
     assert woke.returncode == 0
     assert "[th-inbox-wait] 새 사건 2건" in woke.stdout
-    assert woke.stdout.splitlines()[-2:] == ["new one", "new two"]
+    assert woke.stdout.splitlines()[-2:] == ["new one", breaker]
     assert cursor.read_text(encoding="utf-8").strip() == str(len(inbox.read_bytes()))
 
     repeated = subprocess.run(

@@ -158,7 +158,6 @@ def _stamp(value: str | None) -> datetime | None:
 def process_events(db: sqlite3.Connection, registered: set[Path], now: str) -> None:
     """Called only by maintenance, after processes and attempts have been indexed."""
     now_dt = datetime.fromisoformat(now)
-    cutoff = (now_dt - timedelta(hours=1)).isoformat()
     notify = os.environ.get("TH_OBSERVED_NOTIFY") != "0"
     if notify or os.environ.get("TH_OBSERVED_VERIFY") != "0":
         rows = db.execute(
@@ -296,12 +295,32 @@ def process_events(db: sqlite3.Connection, registered: set[Path], now: str) -> N
                         f"같은 원인 반복 실패 {len(failures)}회 ({category}, {location})",
                     )
                 )
+        evidence_times = [_stamp(row[2]) for row in attempts]
+        failure_tasks = tasks | {
+            row[0]
+            for row in db.execute(
+                "SELECT worker_task FROM shim_decisions WHERE session_id=? AND worker_task IS NOT NULL",
+                (session,),
+            )
+        }
+        for task in failure_tasks:
+            evidence_times.extend(
+                _stamp(row[0])
+                for row in db.execute("SELECT at FROM failures WHERE task=?", (task,))
+            )
         for reason, value in triggers:
-            if db.execute(
-                "SELECT 1 FROM breaker_events WHERE session_id=? AND reason=? AND at>=?",
-                (session, reason, cutoff),
-            ).fetchone():
-                continue
+            previous = db.execute(
+                "SELECT at,value FROM breaker_events WHERE session_id=? AND reason=? ORDER BY at DESC LIMIT 1",
+                (session, reason),
+            ).fetchone()
+            if previous:
+                last_at = _stamp(previous[0])
+                if (
+                    previous[1] == value
+                    or not last_at
+                    or not any(stamp and stamp > last_at for stamp in evidence_times)
+                ):
+                    continue
             db.execute(
                 "INSERT INTO breaker_events VALUES (?,?,?,?,?)",
                 (now, session, workspace, reason, value),
@@ -319,5 +338,5 @@ def process_events(db: sqlite3.Connection, registered: set[Path], now: str) -> N
                     _append(
                         coordinator_workspace(workspace),
                         route,
-                        f"차단기(관찰): {value}",
+                        f"{now_dt.astimezone().strftime('%Y-%m-%d %H:%M')} | {workspace} | 차단기(관찰) | {value} | -",
                     )

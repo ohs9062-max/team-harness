@@ -69,7 +69,7 @@ def test_notices_and_breaker_are_deduplicated(
     observation_events.process_events(db, set(), now)
     assert len([x for x in notices if " | 관찰 종료 | " in x[2]]) == 1
     assert "failed result" in notices[0][2]
-    assert len([x for x in notices if x[2].startswith("차단기(관찰)")]) == 2
+    assert len([x for x in notices if " | 차단기(관찰) | " in x[2]]) == 2
     assert db.execute("SELECT count(*) FROM breaker_events").fetchone()[0] == 2
 
 
@@ -253,3 +253,78 @@ def test_missing_journal_and_explicit_owner(
     finally:
         child.terminate()
         child.wait()
+
+
+def test_breaker_new_failure_and_format(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import timedelta
+
+    db = sqlite3.connect(":memory:")
+    db.executescript(state_index.SCHEMA)
+    now = datetime.now(UTC)
+    task = str(tmp_path / "task")
+    db.execute(
+        "INSERT INTO processes VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            1,
+            "start",
+            now.isoformat(),
+            now.isoformat(),
+            None,
+            "job",
+            "worker",
+            "s",
+            str(tmp_path),
+            task,
+            None,
+            "job",
+            "s",
+        ),
+    )
+    db.execute(
+        "INSERT INTO shim_decisions VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            now.isoformat(),
+            1,
+            "s",
+            str(tmp_path),
+            task,
+            "codex",
+            None,
+            None,
+            1,
+            json.dumps({"work_location": "/work", "prompt_hash": "hash"}),
+            0,
+            "observe",
+        ),
+    )
+    for i in (1, 2):
+        db.execute(
+            "INSERT INTO failures VALUES (?,?,?,?,?,?)",
+            (task, i, now.isoformat(), "cause", "detail", str(i)),
+        )
+    notices = []
+    monkeypatch.setattr(
+        observation_events, "_append", lambda *args: notices.append(args)
+    )
+    observation_events.process_events(db, set(), now.isoformat())
+    later = now + timedelta(hours=2)
+    observation_events.process_events(db, set(), later.isoformat())
+    assert len(notices) == 1
+    assert notices[0][2] == (
+        f"{now.astimezone().strftime('%Y-%m-%d %H:%M')} | {tmp_path} | "
+        "차단기(관찰) | 같은 원인 반복 실패 2회 (cause, /work) | -"
+    )
+    db.execute(
+        "INSERT INTO failures VALUES (?,?,?,?,?,?)",
+        (task, 3, later.isoformat(), "cause", "detail", "3"),
+    )
+    observation_events.process_events(
+        db, set(), (later + timedelta(seconds=1)).isoformat()
+    )
+    observation_events.process_events(
+        db, set(), (later + timedelta(hours=2)).isoformat()
+    )
+    assert len(notices) == 2
+    assert "반복 실패 3회" in notices[1][2]
