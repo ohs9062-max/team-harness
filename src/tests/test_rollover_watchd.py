@@ -257,3 +257,18 @@ def test_rollover_failure_deduplication_and_recovery(
     failure[0] = ("policy:budget", "91/100")
     watch_inspect.main(task)
     assert "rollover_failed" in output.readouterr().out
+
+
+def test_recently_progressing_worker_suppresses_rejected_rollover(
+    scenario: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    task, calls, output = scenario
+    (task / "STATUS").write_text("progress\n")
+
+    def deny(*args: Any) -> None:
+        raise ValueError("[th-launch] 재시도 상한 도달(시도 3/3)")
+
+    monkeypatch.setattr(watch_inspect, "preflight_relaunch", deny)
+    watch_inspect.main(task)
+    assert not calls
+    assert "rollover_failed" not in output.readouterr().out

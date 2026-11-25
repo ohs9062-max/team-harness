@@ -296,6 +296,18 @@ def main(task: Path) -> None:
                                 and exc.returncode == 75
                             ):
                                 return
+                            try:
+                                status_age = (
+                                    time.time() - (task / "STATUS").stat().st_mtime
+                                )
+                            except OSError:
+                                status_age = float("inf")
+                            if (
+                                stage == "preflight"
+                                and pid_alive(worker_pid)
+                                and 0 <= status_age < 120
+                            ):
+                                return
                             kind = (
                                 f"{stage}:{exc.kind}"
                                 if isinstance(exc, RelaunchPreflightError)
