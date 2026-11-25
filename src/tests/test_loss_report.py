@@ -509,3 +509,16 @@ def test_th_owner_writers_reject_or_normalize_file_paths(
     )
     clean(watch2, datetime.now().astimezone())
     assert maintenance.registered_owners(watch2) == {main_repo.resolve()}
+
+
+def test_daily_deduplicates_same_content_across_watch_dirs(tmp_path: Path) -> None:
+    owner = tmp_path / "owner"
+    (owner / ".claude").mkdir(parents=True)
+    now = datetime.now().astimezone().replace(second=0, microsecond=0)
+    for name in ("watch1", "watch2"):
+        watch = tmp_path / name
+        watch.mkdir()
+        (watch / "maintenance_owners.jsonl").write_text(json.dumps(str(owner)) + "\n")
+        daily(now, watch)
+    lines = (owner / ".claude" / "inbox.md").read_text().splitlines()
+    assert len(lines) == 1

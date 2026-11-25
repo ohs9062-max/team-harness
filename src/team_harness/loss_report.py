@@ -353,19 +353,33 @@ def daily(now: datetime, wd: Path | None = None) -> None:
                         or "없음"
                     )
                     inbox = root / ".claude" / "inbox.md"
+                    message = f"손실 리포트: launch {sum(r['launch'] for r in rows)}, 재실행 {sum(r['retry'] for r in rows)}({top}), 토큰 {sum(r['tokens'] for r in rows)}"
                     with (root / ".claude" / ".inbox_cursor.lock").open(
                         "a"
                     ) as inbox_lock:
                         fcntl.flock(inbox_lock, fcntl.LOCK_EX)
-                        offset = inbox.stat().st_size if inbox.exists() else 0
-                        with (root / ".claude" / "inbox.routes").open(
-                            "a", encoding="utf-8"
-                        ) as routes:
-                            routes.write(f"{offset}\t*\n")
-                        with inbox.open("a", encoding="utf-8") as out:
-                            out.write(
-                                f"{now:%Y-%m-%d %H:%M} | {root} | 손실 리포트 | 손실 리포트: launch {sum(r['launch'] for r in rows)}, 재실행 {sum(r['retry'] for r in rows)}({top}), 토큰 {sum(r['tokens'] for r in rows)} | -\n"
-                            )
+                        existing = (
+                            inbox.read_text(
+                                encoding="utf-8", errors="replace"
+                            ).splitlines()
+                            if inbox.exists()
+                            else []
+                        )
+                        duplicate = any(
+                            line.startswith(f"{now:%Y-%m-%d} ")
+                            and line.endswith(f" | 손실 리포트 | {message} | -")
+                            for line in existing
+                        )
+                        if not duplicate:
+                            offset = inbox.stat().st_size if inbox.exists() else 0
+                            with (root / ".claude" / "inbox.routes").open(
+                                "a", encoding="utf-8"
+                            ) as routes:
+                                routes.write(f"{offset}\t*\n")
+                            with inbox.open("a", encoding="utf-8") as out:
+                                out.write(
+                                    f"{now:%Y-%m-%d %H:%M} | {root} | 손실 리포트 | {message} | -\n"
+                                )
                     sent.add(key)
                     sent_file.write_text(
                         json.dumps(
