@@ -22,15 +22,24 @@ def start(owner: Path | None = None) -> None:
     wd = watch_dir()
     wd.mkdir(parents=True, exist_ok=True)
     if owner is not None:
-        with (wd / "maintenance_owners.jsonl").open("a+", encoding="utf-8") as out:
-            fcntl.flock(out, fcntl.LOCK_EX)
-            out.seek(0)
-            previous = out.read()
-            resolved = owner.resolve()
-            if resolved not in _parse_owners(previous):
-                if previous and not previous.endswith("\n"):
-                    out.write("\n")
-                out.write(json.dumps(str(resolved)) + "\n")
+        resolved = owner.resolve()
+        if resolved.exists() and not resolved.is_dir():
+            from team_harness.observation_events import coordinator_workspace
+
+            candidate = Path(coordinator_workspace(str(resolved))).resolve()
+            if not candidate.is_dir():
+                resolved = None
+            else:
+                resolved = candidate
+        if resolved is not None:
+            with (wd / "maintenance_owners.jsonl").open("a+", encoding="utf-8") as out:
+                fcntl.flock(out, fcntl.LOCK_EX)
+                out.seek(0)
+                previous = out.read()
+                if resolved not in _parse_owners(previous):
+                    if previous and not previous.endswith("\n"):
+                        out.write("\n")
+                    out.write(json.dumps(str(resolved)) + "\n")
     with (wd / "maintenance.lock").open("a") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)

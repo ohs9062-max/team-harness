@@ -120,6 +120,13 @@ if [[ -z $journal_workspace ]]; then
   journal_workspace=$(resolve_launch_owner "$task_dir" "$worktree" "$PWD")
 fi
 journal_workspace=$(realpath "$journal_workspace")
+if [[ -e $journal_workspace && ! -d $journal_workspace ]]; then
+  journal_workspace=$(th_python -c 'import sys; from team_harness.observation_events import coordinator_workspace; print(coordinator_workspace(sys.argv[1]))' "$journal_workspace")
+fi
+if [[ -e $journal_workspace && ! -d $journal_workspace ]]; then
+  printf 'error: workspace is not a directory: %s\n' "$journal_workspace" >&2
+  exit 1
+fi
 journal_log="$journal_workspace/.claude/work_log.md"
 if [[ -n $pwd_workspace ]] && pwd_workspace=$(realpath "$pwd_workspace"); then
   warn_launch_owner_mismatch "$journal_workspace" "$pwd_workspace"

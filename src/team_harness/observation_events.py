@@ -35,15 +35,24 @@ def coordinator_workspace(
                 if entry.startswith(b"TH_WORKSPACE="):
                     value = os.fsdecode(entry.partition(b"=")[2])
                     if value and Path(value).is_absolute():
-                        return value
+                        env_path = Path(value)
+                        if not (env_path.exists() and not env_path.is_dir()):
+                            return value
         except (OSError, ValueError):
             pass
+    git_cwd = workspace
+    target = Path(workspace)
+    if target.is_absolute() and not target.is_dir():
+        for parent in target.parents:
+            if parent.is_dir():
+                git_cwd = str(parent)
+                break
     try:
         result = subprocess.run(
             [
                 "git",
                 "-C",
-                workspace,
+                git_cwd,
                 "rev-parse",
                 "--is-inside-work-tree",
                 "--path-format=absolute",
@@ -57,7 +66,7 @@ def coordinator_workspace(
         lines = result.stdout.splitlines()
         if len(lines) == 2 and lines[0] == "true":
             common = Path(lines[1])
-            if common.is_absolute():
+            if common.is_absolute() and common.parent.is_dir():
                 return str(common.parent)
     except (OSError, subprocess.SubprocessError):
         pass

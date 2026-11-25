@@ -35,12 +35,34 @@ def classify(text: str) -> str:
     return "기타"
 
 
+def _log_event(wd: Path, message: str) -> None:
+    wd.mkdir(parents=True, exist_ok=True)
+    with (wd / "events.log").open("a", encoding="utf-8") as out:
+        out.write(f"{datetime.now().astimezone().isoformat()} {message}\n")
+
+
+def normalize_owner(
+    raw: str | Path, wd: Path | None = None, *, log_failure: bool = True
+) -> Path | None:
+    from team_harness.observation_events import coordinator_workspace
+
+    candidate = Path(raw).expanduser().resolve()
+    if candidate.is_dir():
+        return candidate
+    normalized = Path(coordinator_workspace(str(candidate))).resolve()
+    if normalized != candidate and normalized.is_dir():
+        return normalized
+    if log_failure and wd is not None:
+        _log_event(wd, f"invalid owner skipped: {candidate}")
+    return None
+
+
 def owners(wd: Path, owner: Path | None = None) -> set[Path]:
     from team_harness.maintenance import registered_owners
 
-    result = registered_owners(wd)
+    candidates: set[Path] = set(registered_owners(wd))
     if owner:
-        result.add(owner.resolve())
+        candidates.add(owner.resolve())
     for name in ("tasks.txt", "tasks_done.txt"):
         for line in _lines(wd / name):
             if not line.strip():
@@ -52,9 +74,14 @@ def owners(wd: Path, owner: Path | None = None) -> set[Path]:
                     .strip()
                 )
                 if value:
-                    result.add(Path(value).resolve())
+                    candidates.add(Path(value).expanduser().resolve())
             except OSError:
                 continue
+    result: set[Path] = set()
+    for candidate in sorted(candidates):
+        resolved = normalize_owner(candidate, wd)
+        if resolved is not None:
+            result.add(resolved)
     return result
 
 
@@ -109,9 +136,13 @@ def collect(
             invalid_json += 1
             continue
         try:
-            root = Path(entry["owner"]).resolve()
+            raw_owner = entry["owner"]
+            root = Path(raw_owner).resolve()
             if root not in roots:
-                continue
+                normalized = normalize_owner(raw_owner, log_failure=False)
+                if normalized is None or normalized not in roots:
+                    continue
+                root = normalized
             stamp = datetime.fromisoformat(
                 entry["at"].replace("Z", "+00:00")
             ).astimezone()
@@ -290,30 +321,64 @@ def daily(now: datetime, wd: Path | None = None) -> None:
         except (OSError, ValueError):
             pass
         day = now.date() - timedelta(days=1)
-        for root in sorted(owners(wd)):
-            rows = collect(wd, {root}, day, day, details=True)
-            report = root / ".claude" / "reports" / f"loss_{day:%Y%m%d}.md"
-            report.parent.mkdir(parents=True, exist_ok=True)
-            report.write_text(
-                f"# 손실 리포트 {day}\n\n{render(rows)}\n", encoding="utf-8"
-            )
-            causes: Counter[str] = Counter()
-            for r in rows:
-                causes.update(r["causes"])
-            top = (
-                ", ".join(f"{name} {n}" for name, n in causes.most_common(2)) or "없음"
-            )
-            inbox = root / ".claude" / "inbox.md"
-            with (root / ".claude" / ".inbox_cursor.lock").open("a") as inbox_lock:
-                fcntl.flock(inbox_lock, fcntl.LOCK_EX)
-                offset = inbox.stat().st_size if inbox.exists() else 0
-                with (root / ".claude" / "inbox.routes").open("a") as routes:
-                    routes.write(f"{offset}\t*\n")
-                with inbox.open("a", encoding="utf-8") as out:
-                    out.write(
-                        f"{now:%Y-%m-%d %H:%M} | {root} | 손실 리포트 | 손실 리포트: launch {sum(r['launch'] for r in rows)}, 재실행 {sum(r['retry'] for r in rows)}({top}), 토큰 {sum(r['tokens'] for r in rows)} | -\n"
+        sent_file = wd / "report.sent.json"
+        sent: set[str] = set()
+        try:
+            state = json.loads(sent_file.read_text(encoding="utf-8", errors="replace"))
+            if (
+                isinstance(state, dict)
+                and state.get("date") == now.date().isoformat()
+                and isinstance(state.get("roots"), list)
+            ):
+                sent = {str(item) for item in state["roots"]}
+        except (OSError, ValueError, TypeError):
+            pass
+        try:
+            for root in sorted(owners(wd)):
+                key = str(root)
+                if key in sent:
+                    continue
+                try:
+                    rows = collect(wd, {root}, day, day, details=True)
+                    report = root / ".claude" / "reports" / f"loss_{day:%Y%m%d}.md"
+                    report.parent.mkdir(parents=True, exist_ok=True)
+                    report.write_text(
+                        f"# 손실 리포트 {day}\n\n{render(rows)}\n", encoding="utf-8"
                     )
-        last.write_text(str(now.timestamp()))
+                    causes: Counter[str] = Counter()
+                    for r in rows:
+                        causes.update(r["causes"])
+                    top = (
+                        ", ".join(f"{name} {n}" for name, n in causes.most_common(2))
+                        or "없음"
+                    )
+                    inbox = root / ".claude" / "inbox.md"
+                    with (root / ".claude" / ".inbox_cursor.lock").open(
+                        "a"
+                    ) as inbox_lock:
+                        fcntl.flock(inbox_lock, fcntl.LOCK_EX)
+                        offset = inbox.stat().st_size if inbox.exists() else 0
+                        with (root / ".claude" / "inbox.routes").open(
+                            "a", encoding="utf-8"
+                        ) as routes:
+                            routes.write(f"{offset}\t*\n")
+                        with inbox.open("a", encoding="utf-8") as out:
+                            out.write(
+                                f"{now:%Y-%m-%d %H:%M} | {root} | 손실 리포트 | 손실 리포트: launch {sum(r['launch'] for r in rows)}, 재실행 {sum(r['retry'] for r in rows)}({top}), 토큰 {sum(r['tokens'] for r in rows)} | -\n"
+                            )
+                    sent.add(key)
+                    sent_file.write_text(
+                        json.dumps(
+                            {"date": now.date().isoformat(), "roots": sorted(sent)},
+                            ensure_ascii=False,
+                        )
+                        + "\n",
+                        encoding="utf-8",
+                    )
+                except Exception as exc:
+                    _log_event(wd, f"report failed ({root}): {exc}")
+        finally:
+            last.write_text(str(now.timestamp()), encoding="utf-8")
 
 
 if __name__ == "__main__":

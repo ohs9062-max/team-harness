@@ -1,13 +1,18 @@
 from datetime import datetime
 from datetime import timedelta
+import fcntl
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
 from team_harness.loss_report import classify
 from team_harness.loss_report import collect
 from team_harness.loss_report import daily
+from team_harness.loss_report import owners
 from team_harness.loss_report import render
 
 
@@ -228,3 +233,279 @@ def test_render_combines_guarded_self_stops() -> None:
         task_tokens={},
     )
     assert "스스로 멈춤 7 (가드 거부 후 3)" in render([row])
+
+
+def _init_git_repo_with_worktree(base: Path) -> tuple[Path, Path]:
+    main_repo = base / "a_main_repo"
+    main_repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(main_repo)], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(main_repo),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "--allow-empty",
+            "-q",
+            "-m",
+            "init",
+        ],
+        check=True,
+    )
+    wt = base / "z_worktree"
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(main_repo),
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "wt-branch",
+            str(wt),
+        ],
+        check=True,
+    )
+    return main_repo, wt
+
+
+def test_owners_normalizes_worktree_file_and_skips_non_repo_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from team_harness import docs_migrate
+
+    main_repo, wt = _init_git_repo_with_worktree(tmp_path)
+    (main_repo / ".claude").mkdir()
+    wt_file = wt / "design" / "decisions.md"
+    wt_file.parent.mkdir(parents=True)
+    wt_file.write_text("# Decisions\n", encoding="utf-8")
+    orphan_file = tmp_path / "z_orphan.md"
+    orphan_file.write_text("orphan\n", encoding="utf-8")
+
+    watch = tmp_path / "watch"
+    watch.mkdir()
+    monkeypatch.setenv("TH_WATCH_DIR", str(watch))
+
+    task_wt_file = tmp_path / "task_wt_file"
+    task_orphan = tmp_path / "task_orphan"
+    task_wt_file.mkdir()
+    task_orphan.mkdir()
+    (task_wt_file / ".th_owner").write_text(str(wt_file) + "\n", encoding="utf-8")
+    (task_orphan / ".th_owner").write_text(str(orphan_file) + "\n", encoding="utf-8")
+    (watch / "tasks.txt").write_text(
+        f"{task_wt_file}\n{task_orphan}\n", encoding="utf-8"
+    )
+
+    now = datetime.now().astimezone().replace(second=0, microsecond=0)
+    yesterday = now - timedelta(days=1)
+    (watch / "usage.jsonl").write_text(
+        json.dumps(
+            {
+                "at": yesterday.isoformat(),
+                "owner": str(wt_file),
+                "task": str(task_wt_file),
+                "attempt": 1,
+                "rollover": False,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    daily(now, watch)
+    daily(now, watch)
+
+    inbox_lines = [
+        line
+        for line in (main_repo / ".claude" / "inbox.md")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if "손실 리포트" in line
+    ]
+    assert len(inbox_lines) == 1
+    assert "launch 1" in inbox_lines[0]
+    assert (watch / "report.last").is_file()
+    events = (watch / "events.log").read_text(encoding="utf-8").splitlines()
+    assert len(events) == 1
+    assert str(orphan_file) in events[0]
+    assert owners(watch) == {main_repo.resolve()}
+    assert docs_migrate.owners() == {main_repo.resolve()}
+
+
+def test_daily_isolates_failing_root_and_prevents_same_day_duplicate(
+    tmp_path: Path,
+) -> None:
+    watch = tmp_path / "watch"
+    watch.mkdir()
+    root_a = tmp_path / "a_owner"
+    root_b = tmp_path / "b_broken"
+    root_c = tmp_path / "c_owner"
+    for root in (root_a, root_b, root_c):
+        root.mkdir()
+    (root_a / ".claude").mkdir()
+    # Make .claude a regular file in root_b so report directory creation fails.
+    (root_b / ".claude").write_text("not a directory\n", encoding="utf-8")
+    (root_c / ".claude").mkdir()
+
+    (watch / "maintenance_owners.jsonl").write_text(
+        "\n".join(json.dumps(str(r)) for r in (root_a, root_b, root_c)) + "\n",
+        encoding="utf-8",
+    )
+
+    now = datetime.now().astimezone().replace(second=0, microsecond=0)
+    daily(now, watch)
+
+    assert (watch / "report.last").is_file()
+    assert (
+        len((root_a / ".claude" / "inbox.md").read_text(encoding="utf-8").splitlines())
+        == 1
+    )
+    assert (
+        len((root_c / ".claude" / "inbox.md").read_text(encoding="utf-8").splitlines())
+        == 1
+    )
+    events = (watch / "events.log").read_text(encoding="utf-8")
+    assert f"report failed ({root_b.resolve()})" in events
+
+    # Even if report.last is removed on the same day and root_b is repaired,
+    # root_a and root_c must not receive duplicate daily lines on the same day.
+    (watch / "report.last").unlink()
+    (root_b / ".claude").unlink()
+    (root_b / ".claude").mkdir()
+    daily(now + timedelta(minutes=5), watch)
+
+    assert (
+        len((root_a / ".claude" / "inbox.md").read_text(encoding="utf-8").splitlines())
+        == 1
+    )
+    assert (
+        len((root_b / ".claude" / "inbox.md").read_text(encoding="utf-8").splitlines())
+        == 1
+    )
+    assert (
+        len((root_c / ".claude" / "inbox.md").read_text(encoding="utf-8").splitlines())
+        == 1
+    )
+
+
+def test_direct_module_execution_with_file_owner(tmp_path: Path) -> None:
+    main_repo, wt = _init_git_repo_with_worktree(tmp_path)
+    (main_repo / ".claude").mkdir()
+    wt_file = wt / "README.md"
+    wt_file.write_text("hi\n", encoding="utf-8")
+
+    watch = tmp_path / "watch"
+    watch.mkdir()
+    task = tmp_path / "task"
+    task.mkdir()
+    (task / ".th_owner").write_text(str(wt_file) + "\n", encoding="utf-8")
+    (watch / "tasks.txt").write_text(str(task) + "\n", encoding="utf-8")
+
+    env = {
+        **os.environ,
+        "HOME": str(tmp_path),
+        "TH_WATCH_DIR": str(watch),
+        "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
+    }
+    for _ in range(2):
+        proc = subprocess.run(
+            [sys.executable, "-m", "team_harness.loss_report"],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert proc.returncode == 0, proc.stderr
+
+    inbox = (
+        (main_repo / ".claude" / "inbox.md").read_text(encoding="utf-8").splitlines()
+    )
+    assert len([line for line in inbox if "손실 리포트" in line]) == 1
+    assert (watch / "report.last").is_file()
+
+
+def test_th_owner_writers_reject_or_normalize_file_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from team_harness import crosscheck
+    from team_harness import maintenance
+    from team_harness.registry_hygiene import clean
+
+    main_repo, wt = _init_git_repo_with_worktree(tmp_path)
+    wt_file = wt / "src.py"
+    wt_file.write_text("x = 1\n", encoding="utf-8")
+    orphan_file = tmp_path / "orphan.txt"
+    orphan_file.write_text("orphan\n", encoding="utf-8")
+
+    task = main_repo / "task"
+    task.mkdir()
+    (task / "task.md").write_text("---\nkind: code\n---\n# Title\n", encoding="utf-8")
+
+    # 1. crosscheck_owner normalizes a file path in .th_owner or TH_WORKSPACE to main repo,
+    #    and ignores an orphan non-git file path in favor of the task's repo workspace.
+    (task / ".th_owner").write_text(str(wt_file) + "\n", encoding="utf-8")
+    assert crosscheck.crosscheck_owner(task) == str(main_repo.resolve())
+
+    (task / ".th_owner").write_text(str(orphan_file) + "\n", encoding="utf-8")
+    monkeypatch.setenv("TH_WORKSPACE", str(orphan_file))
+    assert crosscheck.crosscheck_owner(task) == str(main_repo.resolve())
+
+    monkeypatch.setenv("TH_WORKSPACE", str(wt_file))
+    (task / ".th_owner").unlink()
+    assert crosscheck.crosscheck_owner(task) == str(main_repo.resolve())
+
+    # 2. th-launch.sh rejects a non-git file TH_WORKSPACE before writing .th_owner.
+    launch_script = Path(__file__).resolve().parents[2] / "scripts" / "th-launch.sh"
+    watch = tmp_path / "watch"
+    watch.mkdir()
+    launch_env = {
+        **os.environ,
+        "HOME": str(tmp_path),
+        "TH_WATCH_DIR": str(watch),
+        "TH_WORKSPACE": str(orphan_file),
+        "TH_PREFLIGHT_ONLY": "1",
+    }
+    proc = subprocess.run(
+        ["bash", str(launch_script), str(task), "codex", str(main_repo)],
+        env=launch_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode != 0
+    assert "not a directory" in proc.stderr
+    assert not (task / ".th_owner").exists()
+
+    # 3. maintenance.start and registry_hygiene.clean normalize worktree files and skip orphan files.
+    monkeypatch.setenv("TH_WATCH_DIR", str(watch))
+    monkeypatch.delenv("TH_NO_MAINTENANCE", raising=False)
+    monkeypatch.delenv("TH_ONCE", raising=False)
+    with (watch / "maintenance.lock").open("a") as held_lock:
+        fcntl.flock(held_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        maintenance.start(orphan_file)
+        assert maintenance.registered_owners(watch) == set()
+        maintenance.start(wt_file)
+        assert maintenance.registered_owners(watch) == {main_repo.resolve()}
+
+    watch2 = tmp_path / "watch2"
+    watch2.mkdir()
+    old_wt_task = tmp_path / "old_wt"
+    old_orphan_task = tmp_path / "old_orphan"
+    then = (datetime.now() - timedelta(days=40)).timestamp()
+    for t, val in ((old_wt_task, wt_file), (old_orphan_task, orphan_file)):
+        t.mkdir()
+        (t / "DONE").touch()
+        (t / "VERIFIED").touch()
+        (t / ".th_owner").write_text(str(val) + "\n", encoding="utf-8")
+        os.utime(t / "DONE", (then, then))
+        os.utime(t / "VERIFIED", (then, then))
+    (watch2 / "tasks.txt").write_text(
+        f"{old_wt_task}\n{old_orphan_task}\n", encoding="utf-8"
+    )
+    clean(watch2, datetime.now().astimezone())
+    assert maintenance.registered_owners(watch2) == {main_repo.resolve()}

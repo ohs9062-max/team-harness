@@ -322,11 +322,42 @@ def report_launch_failures(folder: Path, names: Sequence[str]) -> int:
     return 1 if len(failures) == len(names) else 0
 
 
+def _valid_workspace_candidate(raw: str) -> str | None:
+    value = raw.strip()
+    if not value:
+        return None
+    path = Path(value).expanduser()
+    if path.is_dir():
+        return str(path.resolve())
+    if not path.exists():
+        normalized = coordinator_workspace(str(path))
+        if Path(normalized).is_dir():
+            return str(Path(normalized).resolve())
+        return str(path.resolve())
+    normalized = coordinator_workspace(str(path.resolve()))
+    if Path(normalized).is_dir():
+        return str(Path(normalized).resolve())
+    return None
+
+
 def crosscheck_owner(task: Path) -> str:
     owner_file = task / ".th_owner"
-    if owner_file.exists():
-        return owner_file.read_text(encoding="utf-8").strip()
-    return os.environ.get("TH_WORKSPACE") or coordinator_workspace(str(task))
+    if owner_file.is_file():
+        candidate = _valid_workspace_candidate(
+            owner_file.read_text(encoding="utf-8", errors="replace")
+        )
+        if candidate:
+            return candidate
+    env_workspace = os.environ.get("TH_WORKSPACE", "")
+    if env_workspace:
+        candidate = _valid_workspace_candidate(env_workspace)
+        if candidate:
+            return candidate
+    resolved = coordinator_workspace(str(task))
+    path = Path(resolved)
+    if path.exists() and not path.is_dir():
+        return str(path.resolve().parent)
+    return resolved
 
 
 def adopt(args: argparse.Namespace) -> int:

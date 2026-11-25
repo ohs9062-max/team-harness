@@ -82,12 +82,17 @@ def report_cli(days: int, owner: Path | None, as_json: bool) -> None:
     from datetime import timedelta
 
     from team_harness.loss_report import collect
+    from team_harness.loss_report import normalize_owner
     from team_harness.loss_report import owners
     from team_harness.loss_report import render
 
     wd = watch_dir()
     end = datetime.now().astimezone().date()
-    roots = {owner.resolve()} if owner else owners(wd)
+    if owner:
+        normalized = normalize_owner(owner, wd, log_failure=False)
+        roots = {normalized or owner.resolve()}
+    else:
+        roots = owners(wd)
     rows = collect(wd, roots, end - timedelta(days=days - 1), end, details=not as_json)
     click.echo(
         json.dumps(rows, ensure_ascii=False, indent=2) if as_json else render(rows)

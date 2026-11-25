@@ -296,27 +296,9 @@ def archive_daily(
                 return []
         except (OSError, ValueError):
             pass
-        from team_harness.maintenance import registered_owners
+        from team_harness.loss_report import owners as loss_owners
 
-        owners = registered_owners()
-        if owner is not None:
-            owners.add(owner.resolve())
-        for registry in (wd / "tasks.txt", wd / "tasks_done.txt"):
-            if not registry.exists():
-                continue
-            for line in registry.read_text(
-                encoding="utf-8", errors="replace"
-            ).splitlines():
-                try:
-                    value = (
-                        (Path(line) / ".th_owner")
-                        .read_text(encoding="utf-8", errors="replace")
-                        .strip()
-                    )
-                    if value:
-                        owners.add(Path(value).resolve())
-                except OSError:
-                    continue
+        owners = loss_owners(wd, owner)
         moves = []
         for root in sorted(owners):
             moves.extend(archive_workspace(root, now, dry_run))

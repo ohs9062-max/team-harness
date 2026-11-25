@@ -451,7 +451,8 @@ def update(
                 process_events(db, registered_tasks, now)
             except Exception as exc:
                 _warn(wd / "th.db", exc)
-        workspaces = set(loss_report.owners(wd))
+        owner_roots = loss_report.owners(wd)
+        workspaces = set(owner_roots)
         from team_harness.observation_events import coordinator_workspace
 
         workspaces.update(
@@ -488,9 +489,7 @@ def update(
                 )
         sources = [wd / "events.log"]
         if os.environ.get("TH_ROLE") != "worker":
-            sources += [
-                root / ".claude" / "inbox.md" for root in loss_report.owners(wd)
-            ]
+            sources += [root / ".claude" / "inbox.md" for root in owner_roots]
         for path in sources:
             for line, stamp in _lines(db, path, start):
                 digest = hashlib.sha256((str(path) + "\0" + line).encode()).hexdigest()

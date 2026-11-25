@@ -23,22 +23,9 @@ def git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 
 def owners() -> set[Path]:
-    from team_harness.maintenance import registered_owners
+    from team_harness.loss_report import owners as loss_owners
 
-    found = registered_owners()
-    for name in ("tasks.txt", "tasks_done.txt"):
-        try:
-            lines = (watch_dir() / name).read_text().splitlines()
-        except OSError:
-            continue
-        for line in lines:
-            try:
-                value = (Path(line) / ".th_owner").read_text().strip()
-                if value:
-                    found.add(Path(value).resolve())
-            except OSError:
-                pass
-    return found
+    return loss_owners(watch_dir())
 
 
 def main_checkout(root: Path) -> tuple[Path | None, str]:

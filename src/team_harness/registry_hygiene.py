@@ -104,6 +104,8 @@ def clean(wd: Path, now: datetime) -> dict[str, list[str]]:
                 target = archive / f"tasks_done_{now:%Y%m%d}.tsv"
                 _write(target, _lines(target) + result["archived"])
                 # Preserve owner discovery after pruning the active registries.
+                from team_harness.loss_report import normalize_owner
+
                 with (wd / "maintenance_owners.jsonl").open(
                     "a+", encoding="utf-8"
                 ) as owners:
@@ -116,8 +118,10 @@ def clean(wd: Path, now: datetime) -> dict[str, list[str]]:
                             value = (Path(line) / ".th_owner").read_text().strip()
                             if not value:
                                 continue
-                            value = str(Path(value).resolve())
-                            entry = json.dumps(value)
+                            normalized = normalize_owner(value, wd, log_failure=False)
+                            if normalized is None:
+                                continue
+                            entry = json.dumps(str(normalized))
                             if entry not in known:
                                 if previous and not previous.endswith("\n"):
                                     owners.write("\n")
