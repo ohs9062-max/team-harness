@@ -249,6 +249,12 @@ def adopt_snapshot(path: Path, task: Path) -> dict[str, str]:
     return result
 
 
+def adopt_worker_key(target: Path, name: str) -> str:
+    """Identify a verifier by its role and canonical target folder."""
+    path_hash = hashlib.sha256(os.fsencode(target.resolve())).hexdigest()[:8]
+    return f"adopt_{name}_{path_hash}"
+
+
 def adopt_brief(folder: Path, data: dict, name: str) -> str:
     own = folder / name
     sources = "\n".join(
@@ -257,7 +263,7 @@ def adopt_brief(folder: Path, data: dict, name: str) -> str:
     )
     return f"""---
 kind: research
-task_key: adopt_{name}
+task_key: {adopt_worker_key(Path(data["task"]), name)}
 follow_up: short
 context_budget: 60000
 allow_paths:

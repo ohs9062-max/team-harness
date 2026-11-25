@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 import fcntl
 import json
@@ -15,8 +16,48 @@ import pytest
 from team_harness import crosscheck as cc
 from team_harness import worker_digest as wd
 from team_harness.adoption_gate import receipt_valid
+from team_harness.worker_context import RegistryConflictError
+from team_harness.worker_context import WorkerContextRegistry
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_adopt_worker_keys_isolate_targets_and_preserve_conflicts(
+    tmp_path: Path,
+) -> None:
+    def key(target: Path) -> str:
+        brief = cc.adopt_brief(
+            target / ".th_adopt",
+            {"task": str(target), "source": [], "claim": "test"},
+            "terra",
+        )
+        return next(
+            line.split(": ", 1)[1]
+            for line in brief.splitlines()
+            if line.startswith("task_key: ")
+        )
+
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    registry = WorkerContextRegistry(tmp_path / "registry.json")
+
+    def register(item: tuple[Path, str]) -> str:
+        target, session = item
+        try:
+            registry.register_active(
+                {"task_key": key(target), "session_id": session, "agent_type": "codex"}
+            )
+        except RegistryConflictError:
+            return "conflict"
+        return "started"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        assert list(executor.map(register, [(first, "one"), (second, "two")])) == [
+            "started",
+            "started",
+        ]
+    assert register((first, "three")) == "conflict"
+    assert key(first / ".." / "first") == key(first)
 
 
 @pytest.mark.parametrize("failure_stage", ["write", "replace"])
