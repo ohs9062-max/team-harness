@@ -25,7 +25,7 @@ def _option(args: list[str], *names: str) -> str:
 
 
 def _prompt(tool: str, args: list[str]) -> str | None:
-    if tool == "agy":
+    if tool in {"agy", "claude"}:
         return _option(args, "-p", "--prompt") or None
     # Only inspect an unambiguous final positional prompt. Option values and
     # stdin are never read or mistaken for a brief.

@@ -14,17 +14,23 @@ from team_harness.internal_python import command
 
 
 def launch(task: Path, ended_at: str, owner: str, route: str, message: str) -> bool:
+    from team_harness.observation_events import _append
+
     if os.environ.get("TH_OBSERVED_VERIFY") == "0":
-        return False
+        _append(owner, route, f"{message} | 검수 판정 보류 (결과 1): 검수 없음 | -")
+        return True
+
     try:
         brief = (task / "task.md").read_text(encoding="utf-8")
-    except OSError:
-        return False
+    except (OSError, UnicodeError):
+        _append(owner, route, f"{message} | 검수 판정 보류 (결과 1): 판독 불가 | -")
+        return True
     match = re.search(
         r"(?ms)^##\s+검수[^\n]*\n(?:(?!^##\s).)*?^```bash[^\n]*\n(.*?)^```", brief
     )
     if not match or not match.group(1).strip():
-        return False
+        _append(owner, route, f"{message} | 검수 판정 보류 (결과 1): 검수 없음 | -")
+        return True
     # The child owns all potentially slow work, including lock waits and digest.
     from team_harness.worker_digest import timeout_setting
 
@@ -60,15 +66,15 @@ def run(task: Path, ended_at: str, owner: str, route: str, message: str) -> None
     from team_harness.worker_digest import digest
     from team_harness.worker_digest import verify
 
-    verdict = "FAIL"
+    verdict = "판정 보류 (결과 1)"
     detail = ""
     try:
         brief = (task / "task.md").read_text(encoding="utf-8")
         match = re.search(
             r"(?ms)^##\s+검수[^\n]*\n(?:(?!^##\s).)*?^```bash[^\n]*\n(.*?)^```", brief
         )
-        if not match:
-            verdict = "검수 없음"
+        if not match or not match.group(1).strip():
+            verdict = "판정 보류 (결과 1): 검수 없음"
         else:
             result_path = task / "verify_result.json"
             fresh = (
@@ -106,8 +112,14 @@ def run(task: Path, ended_at: str, owner: str, route: str, message: str) -> None
             else:
                 (task / "verify.sh").write_text(match.group(1), encoding="utf-8")
                 verification = verify(task, force=True)
-            verdict = "FAIL" if verification[0]["overall"] == "FAIL" else "PASS"
-            if verdict == "FAIL":
+            overall = verification[0].get("overall")
+            if overall == "PASS":
+                verdict = "PASS (결과 2)"
+            elif overall == "FAIL":
+                verdict = "FAIL (결과 0)"
+            else:
+                verdict = "판정 보류 (결과 1)"
+            if overall == "FAIL":
                 detail = (
                     verification[0].get("items", {}).get("verify", {}).get("reason", "")
                 )
@@ -117,7 +129,7 @@ def run(task: Path, ended_at: str, owner: str, route: str, message: str) -> None
                 except Exception:
                     pass
     except Exception:
-        verdict = "FAIL"
+        verdict = "판정 보류 (결과 1): 판독 불가"
     _append(owner, route, f"{message} | 검수 {verdict} {detail} | -")
     try:
         from team_harness.state_index import update

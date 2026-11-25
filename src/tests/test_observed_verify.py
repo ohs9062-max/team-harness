@@ -109,7 +109,7 @@ def test_exclusions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str) 
     state_index.update(live, maintenance=True)
     assert not jobs
     if case in {"no_block", "disabled"}:
-        assert "검수 없음" in notices[0]
+        assert "검수 판정 보류 (결과 1): 검수 없음" in notices[0]
     if case == "running":
         assert not notices
         state_index.update([], maintenance=True)
@@ -150,3 +150,49 @@ def test_fresh_verification_reused_for_report(
     observed_verify.run(task, ended, str(tmp_path), "s", "finished")
     assert collected[0][0]["overall"] == "PASS"
     assert "검수 PASS" in notices[0]
+
+
+@pytest.mark.parametrize(
+    ("overall", "expected"),
+    [
+        ("PASS", "PASS (결과 2)"),
+        ("FAIL", "FAIL (결과 0)"),
+        ("WARN", "판정 보류 (결과 1)"),
+        ("SKIP", "판정 보류 (결과 1)"),
+        (None, "판정 보류 (결과 1)"),
+    ],
+)
+def test_observed_verdicts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, overall: str | None, expected: str
+) -> None:
+    from datetime import datetime
+    from datetime import timedelta
+    from datetime import UTC
+
+    (tmp_path / "task.md").write_text("## 검수\n```bash\ntrue\n```\n")
+    (tmp_path / "verify_result.json").write_text(json.dumps({"overall": overall}))
+    notices = []
+    monkeypatch.setattr(
+        observation_events, "_append", lambda *args: notices.append(args[2])
+    )
+    monkeypatch.setattr(state_index, "update", lambda **kwargs: None)
+    observed_verify.run(
+        tmp_path,
+        (datetime.now(UTC) - timedelta(seconds=10)).isoformat(),
+        "owner",
+        "route",
+        "finished",
+    )
+    assert expected in notices[0]
+
+
+def test_unreadable_brief_is_deferred(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    notices = []
+    monkeypatch.delenv("TH_OBSERVED_VERIFY", raising=False)
+    monkeypatch.setattr(
+        observation_events, "_append", lambda *args: notices.append(args[2])
+    )
+    assert observed_verify.launch(tmp_path, "ended", "owner", "route", "finished")
+    assert "검수 판정 보류 (결과 1): 판독 불가" in notices[0]

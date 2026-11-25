@@ -1,0 +1,67 @@
+#!/bin/sh
+# Resolve the installed symlink and find the real executable before observation.
+self=$(/usr/bin/readlink -f "$0" 2>/dev/null) || self=$0
+shim_dir=${self%/*}
+root=${shim_dir%/*}
+tool=${0##*/}
+remaining=${PATH-}
+while :; do
+    case $remaining in *:*) dir=${remaining%%:*}; remaining=${remaining#*:}; more=1 ;; *) dir=$remaining; more=0 ;; esac
+    [ -n "$dir" ] || dir=.
+    candidate=$dir/$tool
+    if [ -f "$candidate" ] && [ -x "$candidate" ]; then
+        resolved=$(/usr/bin/readlink -f "$candidate" 2>/dev/null) || resolved=$candidate
+        if [ "$resolved" != "$self" ]; then
+            real=$candidate
+            break
+        fi
+    fi
+    [ "$more" = 1 ] || break
+done
+if [ -z "${real-}" ]; then
+    printf '%s: command not found\n' "$tool" >&2
+    exit 127
+fi
+# Accept decimal seconds from 0.05 through 2 without external commands.
+valid_duration() {
+    [ ${#1} -le 8 ] || return 1
+    case $1 in ''|*[!0-9.]*|*.*.*|.) return 1 ;; esac
+    case $1 in
+        *.*) whole=${1%%.*}; fraction=${1#*.} ;;
+        *) whole=$1; fraction= ;;
+    esac
+    while [ "${whole#0}" != "$whole" ]; do whole=${whole#0}; done
+    case $whole in
+        '')
+            fraction=${fraction}00
+            case $fraction in
+                [1-9]*|0[5-9]*) return 0 ;;
+                *) return 1 ;;
+            esac ;;
+        1) return 0 ;;
+        2) case $fraction in *[!0]*) return 1 ;; *) return 0 ;; esac ;;
+        *) return 1 ;;
+    esac
+}
+if [ "${TH_SHIM-}" != 0 ] && [ -x /usr/bin/timeout ]; then
+    shim_timeout=${TH_SHIM_TIMEOUT-}
+    valid_duration "$shim_timeout" || shim_timeout=0.3
+    shim_kill_after=${TH_SHIM_KILL_AFTER-}
+    valid_duration "$shim_kill_after" || shim_kill_after=0.2
+    tty=0
+    [ -t 0 ] && tty=1
+    if result_file=$(/usr/bin/mktemp 2>/dev/null); then
+        if TH_SHIM_PARENT_PID=$$ /usr/bin/timeout -k "$shim_kill_after" "$shim_timeout" "$root/scripts/th-env.sh" -c 'from team_harness.launch_shim import observe_child; observe_child()' "$tool" "$tty" "$@" </dev/null >"$result_file" 2>/dev/null; then
+            result=$(/usr/bin/timeout -k 0.1 0.2 /bin/cat "$result_file" 2>/dev/null) || result=
+            if [ -n "$result" ]; then
+            { IFS= read -r depth || :; case $depth in ''|*[!0-9]*) ;; *) TH_SHIM_DEPTH=$depth; export TH_SHIM_DEPTH ;; esac
+              if [ "${TH_SHIM_QUIET-}" != 1 ]; then while IFS= read -r warning; do printf '%s\n' "$warning" >&2; done; fi
+            } <<EOF
+$result
+EOF
+            fi
+        fi
+        /bin/rm -f "$result_file"
+    fi
+fi
+exec "$real" "$@"

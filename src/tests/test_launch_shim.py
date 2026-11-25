@@ -86,9 +86,14 @@ def test_install_remove(tmp_path: Path) -> None:
     install_shim(ROOT, tmp_path)
     install_shim(ROOT, tmp_path)
     assert shim_status(ROOT, tmp_path) == "installed"
+    for tool in ("agy", "claude", "codex"):
+        assert (
+            tmp_path / ".team-harness/shim/bin" / tool
+        ).resolve() == ROOT / "shim" / tool
     for name in (".bashrc", ".profile"):
         assert (tmp_path / name).read_text().count("team-harness shim >>>") == 1
     remove_shim(ROOT, tmp_path)
+    assert not any((tmp_path / ".team-harness/shim/bin").iterdir())
     for name in (".bashrc", ".profile"):
         assert (tmp_path / name).read_text() == "export EXISTING=1\n"
 

@@ -126,7 +126,7 @@ def _without_shim_block(text: str) -> str:
 def install_shim(root: Path, home: Path) -> None:
     directory = home / ".team-harness/shim/bin"
     directory.mkdir(parents=True, exist_ok=True)
-    for tool in ("codex", "agy"):
+    for tool in ("codex", "agy", "claude"):
         install_link(root / "shim" / tool, directory / tool, home)
     for name in (".bashrc", ".profile"):
         target = home / name
@@ -161,7 +161,7 @@ def remove_shim(root: Path, home: Path) -> None:
             if old != new:
                 backup(target, home)
                 atomic_write(target, new.encode(), target.stat().st_mode & 0o777)
-    for tool in ("codex", "agy"):
+    for tool in ("codex", "agy", "claude"):
         target = home / ".team-harness/shim/bin" / tool
         if target.is_symlink() and target.resolve() == (root / "shim" / tool).resolve():
             target.unlink()
@@ -172,7 +172,7 @@ def shim_status(root: Path, home: Path) -> str:
         (home / ".team-harness/shim/bin" / tool).is_symlink()
         and (home / ".team-harness/shim/bin" / tool).resolve()
         == (root / "shim" / tool).resolve()
-        for tool in ("codex", "agy")
+        for tool in ("codex", "agy", "claude")
     )
     blocks = all(
         (home / name).is_file() and (home / name).read_text().count(_shim_block()) == 1
