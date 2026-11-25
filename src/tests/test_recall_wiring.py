@@ -20,6 +20,7 @@ def test_recall_and_registry(
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("TH_WATCH_DIR", str(tmp_path))
+    (tmp_path / "bad").mkdir()
     db_path = tmp_path / "th.db"
     with sqlite3.connect(db_path) as db:
         db.executescript(state_index.SCHEMA)
@@ -142,3 +143,21 @@ def test_events_recall_uses_specific_task(
     output = capsys.readouterr().out
     assert output.count("작업: /x/repo/_outputs/t1") == 2
     assert "작업: /x/repo\n" not in output
+
+
+def test_launch_recall_omits_missing_pytest_tasks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TH_WATCH_DIR", str(tmp_path))
+    missing = tmp_path / "pytest-of-test" / "pytest-15" / "robot3" / "task"
+    with sqlite3.connect(tmp_path / "th.db") as db:
+        db.executescript(state_index.SCHEMA)
+        db.execute(
+            "INSERT INTO tasks(task,task_key) VALUES(?,?)",
+            (str(missing), "adopt_terra"),
+        )
+        db.execute(
+            "INSERT INTO attempts(task,attempt,result) VALUES(?,1,'done')",
+            (str(missing),),
+        )
+    assert state_recall.launch_recall(str(tmp_path / "actual"), "adopt_terra") == ""

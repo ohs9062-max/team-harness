@@ -157,6 +157,12 @@ def launch_recall(target: str, task_key: str = "") -> str:
         ).fetchall()
         lines = []
         for (task,) in tasks:
+            task_path = Path(task)
+            if (
+                any(part.startswith("pytest-of-") for part in task_path.parts)
+                and not task_path.exists()
+            ):
+                continue
             (count,) = db.execute(
                 "SELECT count(*) FROM attempts WHERE task=?", (task,)
             ).fetchone()
