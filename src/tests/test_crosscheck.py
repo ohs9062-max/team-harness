@@ -13,6 +13,42 @@ from team_harness import crosscheck as cc
 from team_harness import worker_digest as wd
 
 
+@pytest.fixture
+def git_repo(tmp_path: Path) -> Path:
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / "tracked").write_text("original")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "tracked"], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(tmp_path),
+            "-c",
+            "user.name=test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-qm",
+            "initial",
+        ],
+        check=True,
+    )
+    return tmp_path
+
+
+def test_git_state_ignores_untracked_changes(git_repo: Path) -> None:
+    (git_repo / "operation").write_text("before")
+    before = cc.git_state(str(git_repo))
+    (git_repo / "operation").write_text("after")
+    assert cc.git_state(str(git_repo)) == before
+
+
+def test_git_state_detects_tracked_changes(git_repo: Path) -> None:
+    before = cc.git_state(str(git_repo))
+    (git_repo / "tracked").write_text("changed")
+    assert cc.git_state(str(git_repo)) != before
+
+
 def test_adopt_snapshot_records_fifo(tmp_path: Path) -> None:
     os.mkfifo(tmp_path / "verify_retry.fifo")
     assert cc.adopt_snapshot(tmp_path, tmp_path) == {

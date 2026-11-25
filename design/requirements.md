@@ -68,7 +68,7 @@
 | K8 | 테스트 리퍼가 다른 실행의 테스트 watchd까지 TERM | `_outputs/ship_core_20261125/REPORT.md` | 범위 축소 지시만, **미구현** |
 | K9 | 2회 상한은 같은 decision ID만 공유(자동·수동·저널 키가 다르면 각각) | `_outputs/final_review_codex_20261125/findings.md` #5 | 문서화만 |
 | K10 | run/repl 내장 코디네이터는 실험 절 누락을 경고만, 자동 crosscheck 없음 | agy findings F10 | 문서화만 |
-| K11 | 검증 집계가 자주 "원본 증거 변경 UNAVAILABLE" — 워커가 검증 중 자기 폴더(STATUS 등)를 씀; main 구버전 crosscheck는 운영 파일 포함 | CROSSCHECK.md 다수 | 통합본에서 운영 파일 제외(#7), 반영 전엔 계속 발생 |
+| K11 | 검증 중 추적되지 않은 운영 파일 변화로 저장소 상태 변경 UNAVAILABLE | CROSSCHECK.md 다수 | 저장소 상태 비교에서 추적되지 않은 파일 제외; HEAD와 추적 파일 변경은 감지 |
 | K12 | 전체 테스트 중 `test_th_launch_rejects_claude_without_user_request`는 워커 환경의 `TH_USER_REQUESTED_CLAUDE=1` 상속 시 실패 | test_hygiene2 REPORT | 관문은 `env -u TH_USER_REQUESTED_CLAUDE`로 실행 |
 | K13 | 실제 inbox(`/home/hs/rang/team-harness/.claude/inbox.md`) 884~894줄 가짜 사건 남음(저장소 안 fixture 원인) | 코디네이터 확인 | 삭제는 승인 필요, 재발 방지: fixture는 저장소 밖 `mktemp -d` |
 | K14 | `/tmp/th-test-home-*` 약 60개 잔존 | test_hygiene3 REPORT | 이번 실행 증가분만 관리 |

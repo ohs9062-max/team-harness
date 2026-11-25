@@ -115,7 +115,9 @@ def git_state(repo: str) -> dict[str, str]:
 
     return {
         "head": run("rev-parse", "HEAD").decode().strip(),
-        "status_sha256": hashlib.sha256(run("status", "--porcelain")).hexdigest(),
+        "status_sha256": hashlib.sha256(
+            run("status", "--porcelain", "--untracked-files=no")
+        ).hexdigest(),
     }
 
 
