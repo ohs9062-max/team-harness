@@ -30,7 +30,9 @@ rule = template.read_text(encoding="utf-8").rstrip()
 first = current.find(begin)
 if first < 0:
     journal_end = "<!-- TEAM-HARNESS-COORDINATOR-JOURNAL:END -->"
-    anchor = current.find(journal_end) if "CAUSE-CHECK" in begin else -1
+    if "PRINCIPLES" in begin and "<!-- TEAM-HARNESS-CAUSE-CHECK:END -->" in current:
+        journal_end = "<!-- TEAM-HARNESS-CAUSE-CHECK:END -->"
+    anchor = current.find(journal_end) if ("CAUSE-CHECK" in begin or "PRINCIPLES" in begin) else -1
     if anchor >= 0:
         anchor += len(journal_end)
         rewritten = current[:anchor] + "\n\n" + rule + current[anchor:]
@@ -57,8 +59,11 @@ install_all_rules() {
 install_cause_rule() {
   install_rule "$1" "$repo_dir/templates/cause_check_rule_block.md" \
     '<!-- TEAM-HARNESS-CAUSE-CHECK:BEGIN -->' '<!-- TEAM-HARNESS-CAUSE-CHECK:END -->'
+  install_rule "$1" "$repo_dir/templates/global_principles_block.md" \
+    '<!-- TEAM-HARNESS-PRINCIPLES:BEGIN -->' '<!-- TEAM-HARNESS-PRINCIPLES:END -->'
 }
 [[ -f $repo_dir/templates/cause_check_rule_block.md ]] || { echo "cause check template missing" >&2; exit 1; }
+[[ -f $repo_dir/templates/global_principles_block.md ]] || { echo "principles template missing" >&2; exit 1; }
 install_all_rules "$HOME/.claude/CLAUDE.md"
 install_all_rules "$HOME/.codex/AGENTS.md"
 # Follow the existing optional agy convention: do not create a missing file.

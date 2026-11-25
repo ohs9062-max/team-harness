@@ -105,6 +105,7 @@ def deployable_repository(repository: Path) -> Path:
         "design/user_config/worker_suffix.md",
         "templates/journal_rule_block.md",
         "templates/cause_check_rule_block.md",
+        "templates/global_principles_block.md",
         "skills/team-harness/SKILL.md",
         "skills/orca-harness-protocol/SKILL.md",
         "src/team_harness/hook_identity.py",
