@@ -2,16 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-from datetime import UTC
-import hashlib
-import json
 import os
 from pathlib import Path
 import shutil
-import sqlite3
 import sys
-import uuid
 
 
 def _option(args: list[str], *names: str) -> str:
@@ -76,173 +70,29 @@ def _effort(args: list[str]) -> str:
     return ""
 
 
-def _record(
+def _run_pipeline(
     tool: str, args: list[str], depth: int, pid: int | None = None
 ) -> list[str]:
-    from team_harness import launch_policy
-    from team_harness import resource_slots
-    from team_harness.brief_check import check_brief_text
-    from team_harness.worker_digest import quota_lock_active
-    from team_harness.workspace_archive import watch_dir
-
-    wd = watch_dir()
-    task = Path(
-        os.environ.get("TH_WORKER_OUTPUT_DIR")
-        or os.environ.get("TH_JOB_TASK")
-        or os.getcwd()
-    )
-    model = _option(args, "-m", "--model")
-    effort = _effort(args)
-    from team_harness import maintenance
     from team_harness.agents.process_identity import capture_starttime
+    from team_harness.exec_pipeline import ExecEvent
+    from team_harness.exec_pipeline import run_pre
 
-    task = task.resolve()
-    cwd = Path.cwd().resolve()
-    if (cwd / "task.md").is_file():
-        task = cwd
-    owner = next(
-        (
-            p
-            for base in (task, cwd)
-            for p in (base, *base.parents)
-            if (p / ".git").exists()
-        ),
-        cwd,
+    event = ExecEvent(
+        tool=tool,
+        role=os.environ.get("TH_ROLE", ""),
+        session=os.environ.get("CLAUDE_CODE_SESSION_ID", ""),
+        cwd=os.getcwd(),
+        task=os.environ.get("TH_WORKER_OUTPUT_DIR")
+        or os.environ.get("TH_JOB_TASK")
+        or os.getcwd(),
+        owner=os.environ.get("TH_WORKSPACE", ""),
+        argv=args,
+        depth=depth,
+        pid=pid if pid is not None else os.getpid(),
+        process_start=capture_starttime(pid if pid is not None else os.getpid()) or "",
     )
-    maintenance.start(owner=owner)
-    with resource_slots.ledger(wd) as rows:
-        for key in list(rows):
-            if not resource_slots.active(rows[key]):
-                del rows[key]
-        workers = resource_slots._workers(
-            rows, task, resource_slots.worker_family(tool), wd
-        )
-        violations = launch_policy.check(
-            task, tool, model, effort, wd, active_workers=workers
-        )
-        owner_pid = pid if pid is not None else os.getpid()
-        rows[uuid.uuid4().hex] = {
-            "pid": owner_pid,
-            "start": capture_starttime(owner_pid),
-            "worker": resource_slots.worker_family(tool),
-            "task": str(task),
-            "bound": False,
-        }
-    verdicts: dict = {
-        "policy": [v._asdict() for v in violations],
-        "warnings": launch_policy.check_warnings(tool),
-    }
-    quota = os.environ.get("TH_IGNORE_QUOTA_LOCK") != "1" and quota_lock_active(
-        wd / f"quota_lock.{tool}"
-    )
-    prompt = _prompt(tool, args)
-    findings = check_brief_text(prompt, task) if prompt is not None else []
-    verdicts.update(
-        work_location=os.getcwd(),
-        quota_lock=quota,
-        brief=[
-            {"level": f.level, "rule": f.rule, "line": f.line, "message": f.message}
-            for f in findings
-        ]
-        if prompt is not None
-        else "unavailable_stdin",
-        prompt_hash=hashlib.sha256(prompt.encode()).hexdigest()
-        if prompt is not None
-        else None,
-    )
-    max_depth = int(os.environ.get("TH_SHIM_MAX_DEPTH", "4"))
-    verdicts["depth_exceeded"] = depth > max_depth
-    wd.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(wd / "th.db", timeout=0.1) as db:
-        db.execute(
-            "CREATE TABLE IF NOT EXISTS shim_decisions(at TEXT, pid INTEGER, session_id TEXT, workspace TEXT, worker_task TEXT, tool TEXT, model TEXT, effort TEXT, depth INTEGER, verdicts_json TEXT, would_block INTEGER, mode TEXT)"
-        )
-        workspace = os.environ.get("TH_WORKSPACE") or os.getcwd()
-        previous = db.execute(
-            "SELECT verdicts_json, worker_task FROM shim_decisions WHERE workspace=? AND at>=?",
-            (
-                workspace,
-                datetime.fromtimestamp(
-                    datetime.now(UTC).timestamp() - 86400, UTC
-                ).isoformat(),
-            ),
-        ).fetchall()
-        same = [
-            row
-            for row in previous
-            if prompt is not None
-            and json.loads(row[0]).get("prompt_hash") == verdicts["prompt_hash"]
-            and json.loads(row[0]).get("work_location") == verdicts["work_location"]
-        ]
-        verdicts["recent_repeats"] = len(same)
-        # Only indexed task failures can be attributed; direct exec exit status
-        # itself cannot be observed after replacing this process.
-        task_paths = {row[1] for row in same if row[1]}
-        try:
-            verdicts["recent_failures"] = (
-                sum(
-                    db.execute(
-                        "SELECT count(DISTINCT attempt) FROM failures WHERE task=? AND at>=?",
-                        (
-                            path,
-                            datetime.fromtimestamp(
-                                datetime.now(UTC).timestamp() - 86400, UTC
-                            ).isoformat(),
-                        ),
-                    ).fetchone()[0]
-                    for path in task_paths
-                )
-                if task_paths
-                else None
-            )
-        except sqlite3.OperationalError:
-            verdicts["recent_failures"] = None
-        blocked = (
-            any(v.code != "budget" for v in violations)
-            or quota
-            or verdicts["depth_exceeded"]
-            or (
-                verdicts["recent_failures"] is not None
-                and verdicts["recent_failures"] >= 2
-            )
-            or any(f.level == "error" for f in findings)
-        )
-        db.execute(
-            "INSERT INTO shim_decisions VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                datetime.now(UTC).isoformat(),
-                pid if pid is not None else os.getpid(),
-                os.environ.get("CLAUDE_CODE_SESSION_ID"),
-                workspace,
-                str(task)
-                if (task / "task.md").is_file()
-                else (
-                    os.environ.get("TH_WORKER_OUTPUT_DIR")
-                    or os.environ.get("TH_JOB_TASK")
-                ),
-                tool,
-                model,
-                effort,
-                depth,
-                json.dumps(verdicts, ensure_ascii=False),
-                int(blocked),
-                "observe",
-            ),
-        )
-
-    warnings = [f"{f.level} {f.rule}:{f.line}: {f.message}" for f in findings]
-    warnings.extend(
-        v.message.replace("거부", "상한 초과")
-        for v in violations
-        if v.code in {"parallel", "budget"}
-    )
-    if quota:
-        warnings.append(f"{tool}: quota lock active")
-    if verdicts["depth_exceeded"]:
-        warnings.append(f"실행 깊이 {depth}가 상한 {max_depth}을 초과했습니다")
-    if verdicts["recent_failures"] is not None and verdicts["recent_failures"] >= 2:
-        warnings.append(f"같은 작업의 최근 실패 {verdicts['recent_failures']}회")
-    return [" ".join(w.splitlines()) for w in warnings]
+    run_pre(event)
+    return event.warnings
 
 
 def main(tool: str) -> None:
@@ -273,7 +123,7 @@ def main(tool: str) -> None:
             if not has_ancestor_command("th-launch.sh"):
                 depth = int(os.environ.get("TH_SHIM_DEPTH", "0")) + 1
                 os.environ["TH_SHIM_DEPTH"] = str(depth)
-                warnings = _record(tool, args, depth)
+                warnings = _run_pipeline(tool, args, depth)
                 if os.environ.get("TH_SHIM_QUIET") != "1":
                     for warning in warnings[:5]:
                         print(f"[th] {warning}", file=sys.stderr)
@@ -302,7 +152,7 @@ def observe_child() -> None:
     if has_ancestor_command("th-launch.sh"):
         return
     depth = int(os.environ.get("TH_SHIM_DEPTH", "0")) + 1
-    warnings = _record(tool, args, depth, int(os.environ["TH_SHIM_PARENT_PID"]))
+    warnings = _run_pipeline(tool, args, depth, int(os.environ["TH_SHIM_PARENT_PID"]))
     print(depth)
     if os.environ.get("TH_SHIM_QUIET") != "1":
         for warning in warnings[:5]:

@@ -862,3 +862,19 @@ scripts 또는 src/team_harness 변경이 포함된 push는 pre-push 훅이 후�
 **대안.** 자동 불안정 분류(실패 ID 재실행, 전체 재실행+최종 명령 조건)는 셸 해석 반례 세 건(export 누락, 무시된 pytest 뒤 다른 실패, `! pytest` 반전)으로 기각한다. 출력에서 실패 테스트 id 파싱은 경계 반례(공백 매개변수, 스트림 결합)로 기각한다. 원문을 넘기고 해석은 받는 쪽이 한다. 판단은 증거를 받은 코디네이터와 워커가 한다.
 
 **영향.** 검수를 자동 재실행하지 않으며 최초 결과와 출력으로 후속 판단을 지원한다.
+
+## TH-D55. 공통 실행 파이프라인의 PATH shim 연결
+
+`exec_pipeline.py`에 실행 사건과 단계 등록 API를 두고 PATH shim 관찰과 관찰 종료 검수에서 호출한다. 기존 단계의 관찰 모드 및 비동기 검수를 유지한다. PID와 시작 토큰으로 관찰 종료를 원래 사건과 결합한다. 그 밖의 진입점은 후속 단위이며 직접 exec의 종료 코드는 수집하지 못한다. 상세 범위는 `design/designs/exec_pipeline.md`를 따른다.
+
+### 적용 경로
+
+| 경로 | 붙는 지점 | 시험 |
+| --- | --- | --- |
+| th-launch | 없음: P1 (후속 단위 예정) | 해당 없음 |
+| watchd | `observation_events.py` 관찰 종료 `exec_pipeline.run_post` | `src/tests/test_exec_pipeline.py`, `src/tests/test_observed_verify.py` |
+| run/repl · protocol · SDK · Codex hook | 없음: 후속 단위 | 해당 없음 |
+| PATH shim | codex/agy/claude: `shim/<tool>` → `launch_shim.py` → `exec_pipeline.run_pre` (관찰 종료 시 `observation_events.py` → `exec_pipeline.run_post`) | `src/tests/test_exec_pipeline.py`, `src/tests/test_launch_shim.py` |
+| th 밖(직접 실행) | 사용자·코디가 th 없이 codex/agy/claude 직접 실행 = PATH shim(`launch_shim.py` `run_pre`) 및 관찰 종료(`observation_events.py` `run_post`) 경유 | `src/tests/test_exec_pipeline.py` |
+| Claude hook | 없음: P1 (예정) | 해당 없음 |
+| git hook | 없음: P2 (현 단위 없음) | 해당 없음 |

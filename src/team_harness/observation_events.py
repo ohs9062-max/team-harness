@@ -164,6 +164,32 @@ def _stamp(value: str | None) -> datetime | None:
         return result.astimezone(UTC) if result else None
 
 
+def _shim_only_reservation(location: str, pid: int, start: str) -> bool:
+    """An unbound shim slot is not an independently registered th task."""
+    from team_harness.exec_pipeline import find_pre_event
+
+    if find_pre_event(pid, start) is None:
+        return False
+    wd = watch_dir()
+    try:
+        for name in ("tasks.txt", "tasks_done.txt"):
+            path = wd / name
+            if path.exists() and Path(location).resolve() in {
+                Path(line.strip()).expanduser().resolve()
+                for line in path.read_text().splitlines()
+                if line.strip()
+            }:
+                return False
+        rows = json.loads((wd / "admission.json").read_text())
+        matching = [row for row in rows.values() if row.get("task") == location]
+        return bool(matching) and all(
+            not row.get("bound") and row.get("pid") == pid and row.get("start") == start
+            for row in matching
+        )
+    except (OSError, ValueError, AttributeError, TypeError):
+        return False
+
+
 def process_events(db: sqlite3.Connection, registered: set[Path], now: str) -> None:
     """Called only by maintenance, after processes and attempts have been indexed."""
     now_dt = datetime.fromisoformat(now)
@@ -191,7 +217,11 @@ def process_events(db: sqlite3.Connection, registered: set[Path], now: str) -> N
                 continue
             if origin == "user" and not workspace and task:
                 workspace = task
-            if not workspace or (location and Path(location) in registered):
+            if not workspace or (
+                location
+                and Path(location) in registered
+                and not _shim_only_reservation(location, pid, start)
+            ):
                 continue
             identity = "task:" + location if location else f"pid:{pid}:{start}"
             if db.execute(
@@ -215,15 +245,28 @@ def process_events(db: sqlite3.Connection, registered: set[Path], now: str) -> N
             owner = coordinator_workspace(workspace, pid, claude_pid)
             message = f"{now_dt.astimezone().strftime('%Y-%m-%d %H:%M')} | 관찰:{label} | 관찰 종료 | {detail}{_result(location)}"
             if origin in {"user", "coordinator"} and task:
-                from team_harness.observed_verify import launch
+                from team_harness.exec_pipeline import ExecEvent
+                from team_harness.exec_pipeline import find_pre_event
+                from team_harness.exec_pipeline import run_post
 
-                if launch(
-                    Path(task),
-                    ended_at,
-                    owner,
-                    (session or "") if notify else "",
-                    message,
-                ):
+                event = find_pre_event(pid, start) or ExecEvent(
+                    pid=pid,
+                    cwd=workspace,
+                    task=task,
+                    owner=owner,
+                    session=session or "",
+                    argv=[command],
+                    ended_at=ended_at,
+                    route=(session or "") if notify else "",
+                    message=message,
+                )
+                event.ended_at = ended_at
+                event.route = (session or "") if notify else ""
+                event.message = message
+                event.owner = owner
+                event.task = task
+                results = run_post(event)
+                if results and results[0].code == 0:
                     db.execute(
                         "INSERT OR IGNORE INTO observed_notices VALUES (?,?)",
                         (identity, now),
