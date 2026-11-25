@@ -1,6 +1,6 @@
 # AGENTS.md — team-harness 작업 기준 (정본)
 
-> **이 파일과 `CLAUDE.md`는 같은 파일이다**(`CLAUDE.md`는 이 파일의 심볼릭 링크). Codex·agy는 `AGENTS.md`를, Claude는 `CLAUDE.md`를 자동으로 읽는다. 누가 코디네이터·워커가 되든 같은 규칙을 본다. 규칙은 여기 한 곳에만 쓴다.
+> **이 파일과 `CLAUDE.md`는 내용이 같아야 한다**(바이트 동일; `.githooks/pre-commit`이 다르면 커밋을 거부한다. 심볼릭 링크는 독립 검증 스냅샷이 거부하므로 쓰지 않는다). Codex·agy는 `AGENTS.md`를, Claude는 `CLAUDE.md`를 자동으로 읽는다. 누가 코디네이터·워커가 되든 같은 규칙을 본다. 규칙은 여기 한 곳에만 쓴다.
 > upstream(writeitai/team-harness) 원문은 `docs/upstream/`에 참고용으로만 보관한다. 이 저장소는 upstream과 갈라진 fork이며 upstream 계약(loopy-loop API, PyPI 릴리스)을 따르지 않는다.
 
 ## 1. 이 워크스페이스는 무엇이고 왜 있나

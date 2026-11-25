@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# CLAUDE.md and AGENTS.md must stay byte-identical (Claude reads CLAUDE.md, Codex/agy read AGENTS.md).
+set -euo pipefail
+root=$(git rev-parse --show-toplevel)
+a=$(git -C "$root" show :AGENTS.md 2>/dev/null | sha256sum) || exit 0
+c=$(git -C "$root" show :CLAUDE.md 2>/dev/null | sha256sum) || exit 0
+if [[ $a != "$c" ]]; then
+  echo "pre-commit: CLAUDE.md와 AGENTS.md 내용이 다릅니다. 두 파일을 같게 맞춘 뒤 커밋하세요." >&2
+  exit 1
+fi
