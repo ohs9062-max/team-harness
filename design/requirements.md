@@ -43,6 +43,7 @@
 | R8 | `th-stop.sh` + `STOPPED_BY_USER` 표식, watchd 자동 재시도·계속·롤오버·자동 검증 차단, 수동 th-launch 시 해제, 부모 정지 시 하위 검증 워커 정지 | **main 반영** | `scripts/th-stop.sh`, `src/team_harness/task_stop.py` |
 | R9 | 쿼터 잠금 `expires=`(메시지 시각+5분, 기본 12h, 용량 15분), 자정 넘김 다음 날 보정, 기존 잠금 작성+12h | **main 반영** | `src/team_harness/quota_lock.py` |
 | R10 | 자동 재시도 실패 알림 작업·종류·사유 기준 1회 | **main 반영** | `scripts/th-watch-lib.sh` |
+| R10 | 검수 실패 알림에 FAIL 항목의 원인 표시 | **main 반영** | `scripts/th-watchd.sh` |
 | R3 | REPORT 첫 줄·저널 결정 줄 정확 형식 판정, 누락·오형식=1; result_guard.py(미반영 A07)는 반영 시 새 방향(0=성공·2=실패)으로 | 통합 커밋(미반영) | `src/team_harness/result_guard.py` |
 | R1 일부 | 결과 2(실패류)·실험 완료 시 자동 독립 검증(일반 작업의 단순 FAILED는 제외; 미반영 A07 result_guard.py는 반영 시 새 방향으로 전환), 쿼터 거부 시 pending 후 재시도 | 통합 커밋(미반영) + 미커밋 수정 | result_guard.py, th-watchd.sh |
 | R1 일부 | 실험 지시서 `## 입력 반영`·`## 대조군` 필수(TH_BRIEF_OK로 우회 불가) | 통합 커밋(미반영) | `src/team_harness/brief_check.py` |
@@ -58,6 +59,7 @@
 
 | # | 내용 | 근거 | 상태 |
 |---|---|---|---|
+| K29 | `verify_result.json`을 처음부터 못 읽으면(깨진 JSON) 검수 알림이 아예 나가지 않음(`th-watchd.sh:236-237`, main부터 있던 동작) | `_outputs/a06_verify_fail_reason_20261126_v1/.th_adopt/terra/VERDICT.md` | 알려진 한계, 후속 |
 | K1 | 저널: inode 교체 + 앞부분 편집 시 새 결정 누락(오프셋 방식) | `_outputs/final_fix_20261125/.th_adopt/terra/VERDICT.md` | 해시 집합 방식으로 해결 |
 | K2 | 저널: 첫 줄 삭제 + 새 결정 추가 시 누락 | `_outputs/final_fix_20261125/.th_adopt_retry/terra/VERDICT.md` | 해결 |
 | K3 | 저널: 이전 offset 커서 이행 시 대기 결정 누락(2건) | `_outputs/journal_cursor_20261125/.th_adopt*/terra/VERDICT.md` | 이행 코드 제거로 해결(이전 형식은 배포된 적 없음) |
