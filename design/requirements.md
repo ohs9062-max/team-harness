@@ -41,7 +41,7 @@
 |---|---|---|---|
 | R11 | 손실 리포트: 디렉터리 아닌 owner 정규화, 루트별 실패 격리, report.last 기록 | **main 반영** | 376283a |
 | R8 | `th-stop.sh` + `STOPPED_BY_USER` 표식, watchd 자동 재시도·계속·롤오버·자동 검증 차단, 수동 th-launch 시 해제, 부모 정지 시 하위 검증 워커 정지 | 통합 커밋(미반영) | 193e53c |
-| R9 | 쿼터 잠금 `expires=`(메시지 시각+5분, 기본 12h, 용량 15분), 자정 넘김 다음 날 보정, 기존 잠금 작성+12h | 구현됨 (A03) | `src/team_harness/quota_lock.py` |
+| R9 | 쿼터 잠금 `expires=`(메시지 시각+5분, 기본 12h, 용량 15분), 자정 넘김 다음 날 보정, 기존 잠금 작성+12h | **main 반영** | `src/team_harness/quota_lock.py` |
 | R10 | 자동 재시도 실패 알림 작업·종류·사유 기준 1회 | 통합 커밋(미반영) | `scripts/th-watch-lib.sh` |
 | R3 | REPORT 첫 줄·저널 결정 줄 정확 형식 판정, 누락·오형식=1; result_guard.py(미반영 A07)는 반영 시 새 방향(0=성공·2=실패)으로 | 통합 커밋(미반영) | `src/team_harness/result_guard.py` |
 | R1 일부 | 결과 2(실패류)·실험 완료 시 자동 독립 검증(일반 작업의 단순 FAILED는 제외; 미반영 A07 result_guard.py는 반영 시 새 방향으로 전환), 쿼터 거부 시 pending 후 재시도 | 통합 커밋(미반영) + 미커밋 수정 | result_guard.py, th-watchd.sh |
@@ -73,6 +73,7 @@
 | K13 | 실제 inbox(`/home/hs/rang/team-harness/.claude/inbox.md`) 884~894줄 가짜 사건 남음(저장소 안 fixture 원인) | 코디네이터 확인 | 삭제는 승인 필요, 재발 방지: fixture는 저장소 밖 `mktemp -d` |
 | K14 | `/tmp/th-test-home-*` 약 60개 잔존 | test_hygiene3 REPORT | 이번 실행 증가분만 관리 |
 | A01 한계 | pidfd 미지원 또는 강제 중단 시 테스트 자원 정리 미보장 | 기존 동작과 동일 | 알려진 한계 (K8, K14) |
+| K24 | 쿼터 잠금 판정에서 파일 읽기 직후 stat이 FileNotFoundError면 해제로 본다(quota_lock.py:47,77; 실제로는 파일 삭제 시에만) | `_outputs/a03_quota_expiry_20261126_r2_v3/.th_adopt/terra/VERDICT.md` | 알려진 한계, 사용자 결정 |
 | K23 | design 디렉터리 source의 채택 영수증에 decisions.md 대상 누락 | `src/team_harness/adoption_gate.py` | 해결 (커밋: fix(R6,K23): bind design directory receipt subject) |
 | K22 | Claude hook 실행 감싸기(P1)는 `&&`·`;`·`\|`·`&` 복합 셸 명령을 감싸지 않고 원래대로 실행(`exec_map.py:14`) | `_outputs/p1_claude_hook_20261125_v2/.th_adopt/terra/VERDICT.md` | 알려진 한계, 사용자 결정으로 반영 후 후속 단위 |
 
