@@ -8,6 +8,6 @@
 
 | th-launch | watchd | run/repl | protocol | SDK | PATH shim | Claude hook | Codex hook | git hook |
 |---|---|---|---|---|---|---|---|---|
-| 없음: P1 | `observation_events.py` 관찰 종료 post | 없음: 후속 단위 | 없음: 후속 단위 | 없음: 후속 단위 | `launch_shim.py` pre | 없음: P1 | 없음: 후속 단위 | 없음: P2 |
+| th 하위 건너뜀 | 기존 작업 감시 | 없음: 내장 코디 별도 | th 하위 건너뜀 | 없음 | P2 예정 | `th-exec-pipeline.py` pre/post 및 job-start | 없음: 후속 단위 | 없음 |
 
 새 기능은 사건을 받아 `StageResult(name, code, message, block)`를 반환하는 함수를 만들고, 파이프라인을 실행할 프로세스에서 `register_pre(name, fn)` 또는 `register_post(name, fn)`을 호출한다. 단계는 등록 순서로 실행된다. `block`은 호출자가 해석하는 데이터이며 이 관찰 전용 shim은 기존처럼 차단하지 않는다. 다른 진입점의 연결과 강제 실행은 후속 단위다.

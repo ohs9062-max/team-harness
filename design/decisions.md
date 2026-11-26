@@ -878,3 +878,22 @@ scripts 또는 src/team_harness 변경이 포함된 push는 pre-push 훅이 후�
 | th 밖(직접 실행) | 사용자·코디가 th 없이 codex/agy/claude 직접 실행 = PATH shim(`launch_shim.py` `run_pre`) 및 관찰 종료(`observation_events.py` `run_post`) 경유 | `src/tests/test_exec_pipeline.py` |
 | Claude hook | 없음: P1 (예정) | 해당 없음 |
 | git hook | 없음: P2 (현 단위 없음) | 해당 없음 |
+
+## TH-D56. Claude Bash 실행의 공통 실행기 연결
+
+매핑된 비대화형 명령에 공통 pre/post 단계를 적용하고 동기 job-start로 출력과 종료 코드를 전달한다. th 하위는 중복 포장을 피하며 PATH shim의 실행기 연결은 P2에서 처리한다.
+
+### 적용 경로
+
+| 경로 | 붙는 지점 | 시험 |
+| --- | --- | --- |
+| th-launch | worker 환경 건너뜀 (`scripts/th-launch.sh`, `scripts/hooks/th-exec-pipeline.py`) | `after.log` (`TH_ROLE=worker` 건너뜀) |
+| watchd | 작업 등록(`scripts/hooks/th-exec-pipeline.py` `execute`) 및 감시(`scripts/th-watchd.sh`); 실제 완료 사건은 별도 검증하지 못함 | 임시 registry 등록만 확인 (`REPORT.md` 알려진 한계) |
+| run/repl | 없음: 내장 코디 별도 | 해당 없음 |
+| protocol | th 하위 건너뜀 (`scripts/hooks/th-exec-pipeline.py` `ancestor_is_th`) | 해당 없음 |
+| SDK | 없음 | 해당 없음 |
+| PATH shim | `src/team_harness/launch_shim.py` 기존 pre만 유지, 실행기 연결 P2 | 해당 없음 |
+| Claude hook | `scripts/hooks/th-exec-pipeline.py` (`PreToolUse`·`PostToolUse`·`execute` 동기 `scripts/th-job-start.sh --wait`, 복합 셸 명령 제외) | `src/tests/test_exec_map.py`, `src/tests/test_deployment.py`, `after.log` |
+| Codex hook | 없음: 후속 | 해당 없음 |
+| git hook | 없음 | 해당 없음 |
+| th 밖(직접 실행) | 사용자·코디가 th-launch 없이 Claude에서 직접 실행하는 매핑 대상 Bash 명령 = Claude 전역 `PreToolUse`·`PostToolUse` hook(`scripts/hooks/th-exec-pipeline.py`)이 `run_pre`·동기 `scripts/th-job-start.sh --wait`·`run_post` 경유 (PATH shim 실행기 연결은 P2) | `direct-repro.sh`, `src/tests/test_exec_map.py` |

@@ -88,6 +88,8 @@
 | K15 | **오늘까지 지시서가 th 경로 구현만 요구했다.** `paths:` 줄에 "가드 hook(th 밖 직접 실행)" 같은 단어만 넣었고, th 밖에서 같은 판정이 **어디에 붙어 동작하는지·재현 명령**은 요구하지 않았다. 설계 v2도 "th 밖"이 1회만 나온다. `brief_check.py:221`·`paths_check.py:62`는 "th 밖" 단어 존재만 확인해 통과시켰다 | `_outputs/stop_retry_fix_20261125/task.md:7`, `verify_policy_design3_20261125/design.md` | **미해결** — work_units 단위 0: 지시서·설계에 기능별 `th 밖 적용 지점`(전역 hook·git hook·전역 명령)과 `## th 밖 재현`(th-launch 없이 실행한 명령·출력) 필수, 없으면 brief_check error·verify FAIL |
 
 ## 6. 구조 원칙 (15:35 — 사용자 지시, 모든 단위의 기준)
+
+- 상태: Claude Bash hook에 공통 파이프라인과 동기 job-start 연결을 추가한다. PATH shim 실행기 연결은 P2 범위다.
 - 원인: 판정 로직의 **입력이 th 작업 폴더(STATUS·DONE·REPORT)** 였다. th로 띄우지 않으면 폴더가 없어 아무것도 발동하지 않는다. 그 위에 "th 밖" 행을 덧붙이는 식이라 반복 실패.
 - 원칙: 판정 로직은 **실행 사건 하나**(누가·어디서·어떤 명령·출력·종료 코드·결과 파일)를 입력으로 받는 공통 함수다. th는 여러 호출자 중 하나일 뿐이다.
 - 진입점 매핑(어댑터): th-launch/watchd(작업 폴더 → 사건), Claude hook(PreToolUse/PostToolUse의 Bash 명령·출력 → 사건, Stop → 최종 보고), Codex/agy hook 또는 전역 래퍼, git hook(merge·push), th run/repl·protocol·SDK. 코디네이터가 무엇으로 실행하든 hook이 사건을 넘긴다 — 코디네이터 선택에 의존하지 않는다.

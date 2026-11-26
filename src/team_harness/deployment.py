@@ -197,6 +197,7 @@ INSTALLER_ASSETS = (
     ".codex/hooks.json",
     ".claude/hooks/image_guard.py",
     ".claude/hooks/coordinator_zone_guard.py",
+    ".claude/hooks/th-exec-pipeline.py",
 )
 
 
@@ -231,6 +232,7 @@ def install_hooks(root: Path, home: Path) -> dict[str, str]:
             "install-journal-rule.sh",
             "install-image-guard.sh",
             "install-coordinator-zone-guard.sh",
+            "install-exec-pipeline-hook.sh",
         ):
             script = root / "scripts" / name
             if not script.is_file():
