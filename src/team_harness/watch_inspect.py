@@ -84,6 +84,8 @@ def resolve_captured_session(task: Path, agent_type: str, session_id: str) -> st
 
 
 def main(task: Path) -> None:
+    if (task / "STOPPED_BY_USER").exists():
+        return
     worker_pid = read_pid(task / "worker.pid")
     job_pid = read_pid(task / "job.pid")
     worker_alive = pid_alive(worker_pid) if worker_pid is not None else False

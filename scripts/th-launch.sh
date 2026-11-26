@@ -53,6 +53,9 @@ if [[ ${TH_PREFLIGHT_ONLY:-0} != 1 ]]; then
     exit 75
   fi
 fi
+if [[ -e $task_dir/STOPPED_BY_USER && ( ${TH_ROLLOVER:-0} == 1 || ${TH_AUTO_CONTINUE:-0} == 1 || ${TH_RELAUNCH:-0} == 1 ) ]]; then
+  echo "사용자가 정지한 작업입니다" >&2; exit 1
+fi
 if [[ ${TH_ROLLOVER:-0} == 1 || ${TH_AUTO_CONTINUE:-0} == 1 || ${TH_RELAUNCH:-0} == 1 ]]; then
   unset TH_RETRY_REASON
   eval "$(th_python -m team_harness.launch_env load "$task_dir")"
@@ -255,6 +258,10 @@ usage_record
 # These flags describe this launch only; child workers must not exempt their
 # own later launches from normal retry accounting.
 unset TH_AUTO_CONTINUE TH_ROLLOVER
+if [[ -e $task_dir/STOPPED_BY_USER ]]; then
+  printf '%s 사용자 직접 재실행: STOPPED_BY_USER 해제\n' "$(date '+%F %T')" >> "$task_dir/STATUS"
+  rm -f -- "$task_dir/STOPPED_BY_USER" "$task_dir/.th_daemon.user_stopped"
+fi
 # Attempt markers are reset, but policy overrides must survive every relaunch.
 for marker in "$task_dir"/.th_*; do
   [[ -d $marker ]] && continue

@@ -62,6 +62,8 @@ def find_pattern(command):
             continue
         name = os.path.basename(args[0])
         rest = args[1:]
+        if name in ('th-stop', 'th-stop.sh') or (name in ('bash', 'sh', 'env') and any(os.path.basename(x) in ('th-stop', 'th-stop.sh') for x in rest)):
+            return 'th-stop'
         if name in ('kill', 'pkill', 'killall') and not (name == 'kill' and '-0' in rest):
             return name
         if name == 'systemctl' and any(x in ('stop', 'restart') for x in rest):
@@ -115,7 +117,7 @@ def main():
         if approved and approved.strip():
             return
         reason = ('[가드] 실행 중 작업 중단·결과 삭제/이동은 사용자 승인 필요: ' + pattern
-                  + ' — 사용자에게 이유를 말하고, 이번 대화에서 승인받은 경우에만 명령 맨 앞에 TH_GUARD_APPROVED="<사용자가 승인한 내용>"을 붙여 다시 실행할 것')
+                  + ' — 작업 정지는 scripts/th-stop.sh를 사용. 사용자에게 이유를 말하고, 이번 대화에서 승인받은 경우에만 명령 맨 앞에 TH_GUARD_APPROVED="<사용자가 승인한 내용>"을 붙여 다시 실행할 것')
         print(json.dumps({'hookSpecificOutput': {'hookEventName': 'PreToolUse', 'permissionDecision': 'deny', 'permissionDecisionReason': reason}}, ensure_ascii=False))
     except Exception:
         return

@@ -363,7 +363,7 @@ safe_step_auto_retry() {
   # The interactive watcher only reports.  The daemon alone may relaunch a
   # bounded, explicitly safe step, and never changes its worker settings.
   local task=$1 watch_dir=$2 marker=$3 callback_fn=$4 owner=$5
-  [[ ${TH_AUTO_RETRY:-1} != 0 ]] || return 1
+  [[ ! -e $task/STOPPED_BY_USER && ${TH_AUTO_RETRY:-1} != 0 ]] || return 1
 
   local program py_src
   program=$(worker_digest_program)
@@ -468,6 +468,13 @@ PY
 inspect_task_event() {
   local task=$1 watch_dir=$2 marker_prefix=$3 stall_sec=$4 target_workspace=$5 callback_fn=$6
   [[ -n $task && -d $task ]] || return 0
+  if [[ -f $task/STOPPED_BY_USER ]]; then
+    if [[ $marker_prefix == .th_daemon && ! -e $task/.th_daemon.user_stopped ]]; then
+      "$callback_fn" "$task" "사용자 정지" "사용자 정지 — $(head -n 1 "$task/STOPPED_BY_USER")" "-" "$(cat "$task/.th_owner" 2>/dev/null || true)"
+      touch "$task/.th_daemon.user_stopped"
+    fi
+    return 0
+  fi
   local marker="$task/$marker_prefix" initial_signature=""
   if [[ $marker_prefix == .th_daemon ]]; then
     initial_signature=$(watch_task_signature "$task")

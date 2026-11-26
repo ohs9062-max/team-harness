@@ -3647,3 +3647,21 @@ def test_registration_conflict_does_not_roll_back_another_pending_launch(
     assert len(sessions) == 1
     assert sessions[0]["pending_launch"] is True
     assert json.loads((test_env["watch_dir"] / "admission.json").read_text()) == {}
+
+
+def test_user_stopped_launch_requires_direct_launch(test_env: dict):
+    task = _create_task_dir(test_env["tmp_path"], "user_stopped_launch")
+    (task / "STOPPED_BY_USER").write_text("user stop\n")
+    args = [str(SCRIPTS_DIR / "th-launch.sh"), str(task), str(task)]
+    automatic = subprocess.run(
+        args,
+        env={**test_env["env"], "TH_ROLLOVER": "1"},
+        capture_output=True,
+        text=True,
+    )
+    assert automatic.returncode != 0
+    assert (task / "STOPPED_BY_USER").exists()
+    direct = subprocess.run(args, env=test_env["env"], capture_output=True, text=True)
+    assert direct.returncode == 0, direct.stderr
+    assert not (task / "STOPPED_BY_USER").exists()
+    assert "사용자 직접 재실행" in (task / "STATUS").read_text()

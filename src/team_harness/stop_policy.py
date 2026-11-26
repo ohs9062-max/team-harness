@@ -253,7 +253,11 @@ def continue_stopped_task(task: Path, watch_dir: Path, owner: Path) -> str:
     lock_path = task / ".auto_continue.lock"
     with lock_path.open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        if (task / "KILLED").exists() or classify_stop(task) != "self_stop":
+        if (
+            (task / "STOPPED_BY_USER").exists()
+            or (task / "KILLED").exists()
+            or classify_stop(task) != "self_stop"
+        ):
             (task / ".th_daemon.settled").touch()
             return ""
         fingerprint_path = task / ".auto_continue_done_fingerprint"
