@@ -73,6 +73,7 @@
 | K13 | 실제 inbox(`/home/hs/rang/team-harness/.claude/inbox.md`) 884~894줄 가짜 사건 남음(저장소 안 fixture 원인) | 코디네이터 확인 | 삭제는 승인 필요, 재발 방지: fixture는 저장소 밖 `mktemp -d` |
 | K14 | `/tmp/th-test-home-*` 약 60개 잔존 | test_hygiene3 REPORT | 이번 실행 증가분만 관리 |
 | K23 | design 디렉터리 source의 채택 영수증에 decisions.md 대상 누락 | `src/team_harness/adoption_gate.py` | 해결 (커밋: fix(R6,K23): bind design directory receipt subject) |
+| K22 | Claude hook 실행 감싸기(P1)는 `&&`·`;`·`\|`·`&` 복합 셸 명령을 감싸지 않고 원래대로 실행(`exec_map.py:14`) | `_outputs/p1_claude_hook_20261125_v2/.th_adopt/terra/VERDICT.md` | 알려진 한계, 사용자 결정으로 반영 후 후속 단위 |
 
 ## 4. 오늘의 진행 원칙 (R13)
 
@@ -89,7 +90,7 @@
 
 ## 6. 구조 원칙 (15:35 — 사용자 지시, 모든 단위의 기준)
 
-- 상태: Claude Bash hook에 공통 파이프라인과 동기 job-start 연결을 추가한다. PATH shim 실행기 연결은 P2 범위다.
+- 상태: Claude Bash hook에 공통 파이프라인과 동기 job-start 연결을 추가했다(P1: `160b74f`, `5a5d12e`; 복합 명령 한계 K22). PATH shim 실행기 연결은 P2 범위다.
 - 원인: 판정 로직의 **입력이 th 작업 폴더(STATUS·DONE·REPORT)** 였다. th로 띄우지 않으면 폴더가 없어 아무것도 발동하지 않는다. 그 위에 "th 밖" 행을 덧붙이는 식이라 반복 실패.
 - 원칙: 판정 로직은 **실행 사건 하나**(누가·어디서·어떤 명령·출력·종료 코드·결과 파일)를 입력으로 받는 공통 함수다. th는 여러 호출자 중 하나일 뿐이다.
 - 진입점 매핑(어댑터): th-launch/watchd(작업 폴더 → 사건), Claude hook(PreToolUse/PostToolUse의 Bash 명령·출력 → 사건, Stop → 최종 보고), Codex/agy hook 또는 전역 래퍼, git hook(merge·push), th run/repl·protocol·SDK. 코디네이터가 무엇으로 실행하든 hook이 사건을 넘긴다 — 코디네이터 선택에 의존하지 않는다.
