@@ -224,3 +224,88 @@ def test_independent_stop_and_incomplete_watch_event(
             if proc.poll() is None:
                 proc.terminate()
             proc.wait()
+
+
+def test_observed_ignoring_term_is_killed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    watch = tmp_path / "watch"
+    watch.mkdir()
+    task = tmp_path / "task"
+    task.mkdir()
+    monkeypatch.setenv("TH_WATCH_DIR", str(watch))
+    proc = subprocess.Popen(
+        [
+            "python3",
+            "-u",
+            "-c",
+            "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); print('ready'); time.sleep(300)",
+        ],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert proc.stdout is not None and proc.stdout.readline().strip() == "ready"
+        (watch / "exec_pipeline.jsonl").write_text(
+            json.dumps(
+                {
+                    "phase": "pre",
+                    "event": {
+                        "pid": proc.pid,
+                        "process_start": capture_starttime(proc.pid),
+                        "task": str(task),
+                        "route": "",
+                        "tool": "codex",
+                    },
+                }
+            )
+        )
+        from team_harness.task_stop import stop
+
+        assert stop(task, "test") == []
+        assert proc.wait(timeout=3) == -9
+        assert "rc=130" in (task / "STATUS").read_text()
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait()
+
+
+def test_observed_signal_error_reports_incomplete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from team_harness import task_stop
+
+    watch = tmp_path / "watch"
+    watch.mkdir()
+    task = tmp_path / "task"
+    task.mkdir()
+    monkeypatch.setenv("TH_WATCH_DIR", str(watch))
+    proc = subprocess.Popen(["sleep", "300"])
+    try:
+        (watch / "exec_pipeline.jsonl").write_text(
+            json.dumps(
+                {
+                    "phase": "pre",
+                    "event": {
+                        "pid": proc.pid,
+                        "process_start": capture_starttime(proc.pid),
+                        "task": str(task),
+                        "route": "",
+                        "tool": "codex",
+                    },
+                }
+            )
+        )
+
+        def denied(*args: object) -> None:
+            raise PermissionError("denied")
+
+        monkeypatch.setattr(task_stop.signal, "pidfd_send_signal", denied)
+        assert task_stop.stop(task, "test")
+        assert "STOP_INCOMPLETE" in (task / "STATUS").read_text()
+        assert "incomplete" in (task / "STOPPED_BY_USER").read_text()
+        assert proc.poll() is None
+    finally:
+        proc.terminate()
+        proc.wait()

@@ -7,6 +7,7 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import select
 import signal
 import sys
 
@@ -17,13 +18,14 @@ from team_harness.worker_relaunch import terminate_worker_group
 from team_harness.workspace_archive import watch_dir
 
 
-def stop_observed(task: Path) -> None:
-    """Signal only identity-verified PATH-shim processes attributed to this task."""
+def stop_observed(task: Path) -> list[str]:
+    """Stop identity-verified PATH-shim processes and report unconfirmed exits."""
     ledger = watch_dir() / "exec_pipeline.jsonl"
     try:
         lines = ledger.read_text(encoding="utf-8").splitlines()
     except FileNotFoundError:
-        return
+        return []
+    failures: list[str] = []
     seen: set[tuple[int, str]] = set()
     for line in lines:
         try:
@@ -44,14 +46,29 @@ def stop_observed(task: Path) -> None:
             ):
                 continue
             seen.add((pid, start))
+        except (ValueError, KeyError, TypeError, AttributeError):
+            continue
+        try:
             fd = os.pidfd_open(pid)
             try:
-                if capture_starttime(pid) == start:
-                    signal.pidfd_send_signal(fd, signal.SIGTERM)
+                if capture_starttime(pid) != start:
+                    continue
+                signal.pidfd_send_signal(fd, signal.SIGTERM)
+                poller = select.poll()
+                poller.register(fd, select.POLLIN)
+                events = poller.poll(10_000)
+                if not events:
+                    signal.pidfd_send_signal(fd, signal.SIGKILL)
+                    events = poller.poll(10_000)
+                if not events or not events[0][1] & (select.POLLIN | select.POLLHUP):
+                    failures.append(f"observed PID {pid}: termination unconfirmed")
             finally:
                 os.close(fd)
-        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        except ProcessLookupError:
             continue
+        except OSError as exc:
+            failures.append(f"observed PID {pid}: {exc}")
+    return failures
 
 
 def stop(task: Path, reason: str) -> list[str]:
@@ -105,7 +122,7 @@ def stop(task: Path, reason: str) -> list[str]:
             continue
         except (OSError, ValueError, RuntimeError) as exc:
             failures.append(f"{name} PID {pid or '?'}: {exc}")
-    stop_observed(task)
+    failures.extend(stop_observed(task))
     if failures:
         detail = "; ".join(failures).replace("\n", " ")
         marker.write_text(f"incomplete {detail} | {reason}\n", encoding="utf-8")
