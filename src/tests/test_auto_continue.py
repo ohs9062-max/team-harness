@@ -659,10 +659,10 @@ def test_watch_failure_once_deduplicates_by_kind_and_full_reason(
 source "$1"
 callback() { printf '%s | %s\n' "$2" "$3"; }
 for i in 1 2 3; do
-  watch_failure_once "$2" "자동 계속 실패" $'warning\nreason one' callback owner
+  watch_failure_once "$2" "자동 계속 실패" $'warning\nreason one' callback "$2"
 done
-watch_failure_once "$2" "자동 계속 실패" $'warning\nreason two' callback owner
-watch_failure_once "$2" "자동 재시도 실패" $'warning\nreason one' callback owner
+watch_failure_once "$2" "자동 계속 실패" $'warning\nreason two' callback "$2"
+watch_failure_once "$2" "자동 재시도 실패" $'warning\nreason one' callback "$2"
 """
     result = subprocess.run(
         ["bash", "-c", script, "test", str(library), str(tmp_path)],
@@ -673,6 +673,27 @@ watch_failure_once "$2" "자동 재시도 실패" $'warning\nreason one' callbac
     assert result.stdout.count(" | ") == 3
     assert result.stdout.count("reason one") == 2
     assert result.stdout.count("reason two") == 1
+
+
+def test_watch_failure_once_retries_after_owner_becomes_valid(tmp_path: Path) -> None:
+    library = Path(__file__).resolve().parents[2] / "scripts" / "th-watch-lib.sh"
+    script = r"""
+source "$1"
+callback() { [[ -d $5 ]] && printf '%s\n' "$3"; return 0; }
+watch_failure_once "$2" failure reason callback ''
+watch_failure_once "$2" failure reason callback "$2/missing"
+for i in 1 2 3; do
+  watch_failure_once "$2" failure reason callback "$2"
+done
+watch_failure_once "$2" failure changed callback "$2"
+"""
+    result = subprocess.run(
+        ["bash", "-c", script, "test", str(library), str(tmp_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert result.stdout.splitlines() == ["failure — reason", "failure — changed"]
 
 
 def test_continue_failure_keeps_kind_and_skips_digest(tmp_path: Path) -> None:
@@ -700,7 +721,7 @@ consumer() { local task=$1 event_type=$2 summary=$3 v_res=$4 owner=$5
             + branch
             + r"""
 }
-task=$2; continue_event='자동 계속 실패: same reason'; callback_fn=callback; owner=''
+task=$2; continue_event='자동 계속 실패: same reason'; callback_fn=callback; owner=$2
 for i in 1 2 3; do
 """
             + line

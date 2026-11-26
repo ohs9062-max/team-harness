@@ -365,6 +365,7 @@ watch_failure_once() {
   file="$task/.th_failure_$(printf '%s' "$kind" | sha256sum | cut -d' ' -f1)"
   [[ -f $file && $(<"$file") == "$key" ]] && return 0
   "$callback" "$task" "$kind" "${6:-$kind — $reason}" "-" "$owner"
+  [[ -n $owner && -d $owner ]] || return 0
   printf '%s' "$key" > "$file"
 }
 
