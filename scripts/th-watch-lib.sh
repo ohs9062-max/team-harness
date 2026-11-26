@@ -470,7 +470,19 @@ inspect_task_event() {
   [[ -n $task && -d $task ]] || return 0
   if [[ -f $task/STOPPED_BY_USER ]]; then
     if [[ $marker_prefix == .th_daemon && ! -e $task/.th_daemon.user_stopped ]]; then
-      "$callback_fn" "$task" "사용자 정지" "사용자 정지 — $(head -n 1 "$task/STOPPED_BY_USER")" "-" "$(cat "$task/.th_owner" 2>/dev/null || true)"
+      local stop_detail stop_lock
+      exec {stop_lock}>"$task/.th_launch.lock" || return 0
+      if ! flock -sn "$stop_lock"; then
+        exec {stop_lock}>&-
+        return 0
+      fi
+      stop_detail=$(head -n 1 "$task/STOPPED_BY_USER")
+      exec {stop_lock}>&-
+      if [[ $stop_detail == incomplete\ * ]]; then
+        "$callback_fn" "$task" "사용자 정지 미완료" "사용자 정지 미완료 — 생존 PID 또는 판정 불가: ${stop_detail#incomplete }" "-" "$(cat "$task/.th_owner" 2>/dev/null || true)"
+      else
+        "$callback_fn" "$task" "사용자 정지" "사용자 정지 — $stop_detail" "-" "$(cat "$task/.th_owner" 2>/dev/null || true)"
+      fi
       touch "$task/.th_daemon.user_stopped"
     fi
     return 0

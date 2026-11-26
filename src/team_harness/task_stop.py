@@ -54,13 +54,11 @@ def stop_observed(task: Path) -> None:
             continue
 
 
-def stop(task: Path, reason: str) -> None:
+def stop(task: Path, reason: str) -> list[str]:
     marker = task / "STOPPED_BY_USER"
-    if not marker.exists():
-        marker.write_text(
-            f"{datetime.now():%F %T} | {reason.replace(chr(10), ' ')}\n",
-            encoding="utf-8",
-        )
+    reason = reason.replace("\n", " ")
+    marker.write_text(f"incomplete 처리 중 | {reason}\n", encoding="utf-8")
+    failures: list[str] = []
     # watchd checks this notification marker before it inspects task state.
     (task / ".th_daemon.verify_notice").write_text(
         "사용자 정지로 알림 보류\n", encoding="utf-8"
@@ -71,14 +69,18 @@ def stop(task: Path, reason: str) -> None:
         for child in adopt.iterdir():
             if not child.is_dir():
                 continue
-            with (child / ".th_launch.lock").open("a") as lock:
-                fcntl.flock(lock, fcntl.LOCK_EX)
-                stop(child, reason)
+            try:
+                with (child / ".th_launch.lock").open("a") as lock:
+                    fcntl.flock(lock, fcntl.LOCK_EX)
+                    failures.extend(f"{child}: {item}" for item in stop(child, reason))
+            except (OSError, RuntimeError, ValueError) as exc:
+                failures.append(f"{child}: 판정 불가: {exc}")
     (task / ".th_daemon.settled").unlink(missing_ok=True)
     for name in ("worker.pid", "job.pid"):
         pid_file = task / name
         if not pid_file.exists():
             continue
+        pid = 0
         try:
             pid = int(pid_file.read_text().strip())
             if pid <= 1:
@@ -101,9 +103,15 @@ def stop(task: Path, reason: str) -> None:
                     raise ValueError(f"job termination deferred: {result}")
         except ProcessLookupError:
             continue
-        except (OSError, ValueError) as exc:
-            raise RuntimeError(f"{name}: {exc}") from exc
+        except (OSError, ValueError, RuntimeError) as exc:
+            failures.append(f"{name} PID {pid or '?'}: {exc}")
     stop_observed(task)
+    if failures:
+        detail = "; ".join(failures).replace("\n", " ")
+        marker.write_text(f"incomplete {detail} | {reason}\n", encoding="utf-8")
+        with (task / "STATUS").open("a", encoding="utf-8") as status:
+            status.write(f"{datetime.now():%F %T} STOP_INCOMPLETE {detail}\n")
+        return failures
     open_steps = [
         record.name for record in parse_task(task).values() if record.state == "open"
     ]
@@ -112,7 +120,12 @@ def stop(task: Path, reason: str) -> None:
             status.write(
                 f"{datetime.now():%F %T} END step={name} rc=130 out=STOPPED_BY_USER\n"
             )
+    marker.write_text(f"{datetime.now():%F %T} | {reason}\n", encoding="utf-8")
+    return []
 
 
 if __name__ == "__main__":
-    stop(Path(sys.argv[1]), sys.argv[2])
+    failures = stop(Path(sys.argv[1]), sys.argv[2])
+    if failures:
+        print("STOP_INCOMPLETE: " + "; ".join(failures), file=sys.stderr)
+        sys.exit(2)

@@ -1,6 +1,7 @@
 """User stops never signal unrelated or recycled processes."""
 
 import json
+import os
 from pathlib import Path
 import subprocess
 import threading
@@ -164,3 +165,62 @@ def test_stop_suppresses_pending_watch_verification_notice(tmp_path: Path) -> No
     (tmp_path / ".th_digest.done").touch()
     stop(tmp_path, "test")
     assert (tmp_path / ".th_daemon.verify_notice").is_file()
+
+
+@pytest.mark.parametrize("job_mismatch", [False, True])
+def test_independent_stop_and_incomplete_watch_event(
+    tmp_path: Path, job_mismatch: bool
+) -> None:
+    task = tmp_path / "task"
+    task.mkdir()
+    watch = tmp_path / "watch"
+    watch.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
+    env = dict(
+        os.environ, HOME=str(home), TH_WATCH_DIR=str(watch), TH_JOB_TASK=str(task)
+    )
+    worker = subprocess.Popen(["sleep", "300"], start_new_session=True, env=env)
+    job = subprocess.Popen(["sleep", "300"], start_new_session=True, env=env)
+    try:
+        for name, proc, token in (
+            ("worker", worker, "linux:1"),
+            ("job", job, "linux:1" if job_mismatch else capture_starttime(job.pid)),
+        ):
+            (task / f"{name}.pid").write_text(str(proc.pid))
+            (task / f"{name}.pid.start").write_text(
+                json.dumps({"pid": proc.pid, "start": token})
+            )
+        (task / "STATUS").write_text(
+            "2026-01-01 00:00:00 START step=check replay=safe\n"
+        )
+        result = subprocess.run(
+            [str(SCRIPTS / "th-stop.sh"), str(task)], env=env, capture_output=True
+        )
+        assert result.returncode != 0
+        assert str(worker.pid).encode() in result.stderr
+        assert worker.poll() is None
+        if job_mismatch:
+            assert job.poll() is None
+            assert str(job.pid).encode() in result.stderr
+        else:
+            assert job.wait(timeout=3) != 0
+        assert "incomplete" in (task / "STOPPED_BY_USER").read_text()
+        status = (task / "STATUS").read_text()
+        assert "STOP_INCOMPLETE" in status and "rc=130" not in status
+        (watch / "tasks.txt").write_text(f"{task}\n")
+        for _ in range(2):
+            subprocess.run(
+                [str(SCRIPTS / "th-watchd.sh")],
+                env=dict(env, TH_ONCE="1"),
+                check=True,
+                capture_output=True,
+            )
+        events = (watch / "events.log").read_text()
+        assert events.count("[사용자 정지 미완료]") == 1
+        assert str(worker.pid) in events
+    finally:
+        for proc in (worker, job):
+            if proc.poll() is None:
+                proc.terminate()
+            proc.wait()
