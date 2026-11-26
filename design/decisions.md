@@ -897,3 +897,17 @@ scripts 또는 src/team_harness 변경이 포함된 push는 pre-push 훅이 후�
 | Codex hook | 없음: 후속 | 해당 없음 |
 | git hook | 없음 | 해당 없음 |
 | th 밖(직접 실행) | 사용자·코디가 th-launch 없이 Claude에서 직접 실행하는 매핑 대상 Bash 명령 = Claude 전역 `PreToolUse`·`PostToolUse` hook(`scripts/hooks/th-exec-pipeline.py`)이 `run_pre`·동기 `scripts/th-job-start.sh --wait`·`run_post` 경유 (PATH shim 실행기 연결은 P2) | `direct-repro.sh`, `src/tests/test_exec_map.py` |
+
+## TH-D57. 결과 코드 방향을 종료 코드 관례에 맞춤
+
+**결정.** `REPORT.md` 첫 줄 `결과: N`의 결과 코드 방향(R3)을 종료 코드 관례에 맞춰 `0` = 성공(요구 전부 완료·관문 통과), `1` = 애매·대기·멈춤·일부 미완·판정 보류(변경 없음), `2` = 실패류(실패·미달·구현 안 됨·효과 없음·기각)로 바꾼다. 자동 독립 검증이 발동하는 실패 결과 조건도 `결과 2`로 바꾼다.
+
+**맥락(왜).** 2026-11-24 원안(`2`=정상, `0`=실패)은 유닉스·셸 종료 코드(`0`=성공, non-zero=실패), ROS2(`RCL_RET_OK=0`), Nagios 상태 코드(`0` OK / `1` WARNING / `2` CRITICAL)와 반대 방향이어서 사용자가 결과 의미를 읽을 때 헷갈렸다. 표준 종료 코드 관례와 방향을 일치시켜 혼동을 없앤다.
+
+**적용 시점과 옛 REPORT 해석 규칙.** 이 결정 커밋이 `main`에 반영된 시각(2026-11-26)부터 새로 작성하는 `REPORT.md`에 적용한다. 이 결정 이전 날짜·시각에 작성된 기존 `REPORT.md`는 수정하지 않으며 옛 규칙(`2`=정상, `1`=애매·보류, `0`=실패)으로 해석한다. 현재 `main`에는 `REPORT.md` 첫 줄 `결과:`를 파싱하는 코드가 없으며, 미반영 `result_guard.py`(A07) 및 TH-D53 당시 기록된 관찰 검수 알림 문구(`observed_verify.py`)는 해당 코드 반영·수정 단위에서 새 방향으로 전환한다.
+
+### 적용 경로
+
+| th-launch | watchd | run/repl | protocol | SDK | PATH shim | Claude hook | Codex hook | git hook |
+|---|---|---|---|---|---|---|---|---|
+| 지시서·REPORT 규칙(AGENTS.md) | 파싱 코드 없음(미반영 A07이 반영 시 새 방향) | 같음 | 같음 | 같음 | 없음 | 전역 CLAUDE.md 블록(th-sync 배포 후) = th 밖 Claude 직접 실행 | AGENTS.md(Codex 자동 읽음) | 없음(pre-commit은 CLAUDE.md=AGENTS.md 동일만 확인) |

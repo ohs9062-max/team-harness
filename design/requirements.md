@@ -20,7 +20,7 @@
 |---|---|---|
 | R1 | 중요한 결정·확인·채택·결과 순간에 검증이 **자동 발동**. 사용자가 "이거 중요하니 검증해"라고 하거나 코디네이터 재량으로 정하지 않고, **정책·로직이 정한다**. 학습·로직에 국한하지 않고 어떤 프로젝트·작업공간에서도 | 11-24 |
 | R2 | team-harness에서 만들어 **전역 배포**(다른 프로젝트에 따로 만들지 않음) | 11-24 |
-| R3 | 결과 코드: **0 = 실패류**(실패·미달·구현 안 됨·효과 없음·기각), **1 = 애매·대기·멈춤**, **2 = 정상**. 문장 해석 없음 | 11-24 |
+| R3 | 결과 코드: **0 = 성공**(요구 전부 완료·관문 통과), **1 = 애매·대기·멈춤**, **2 = 실패류**(실패·미달·구현 안 됨·효과 없음·기각). 문장 해석 없음 (11-26 개정: 11-24 원안은 2=정상) | 11-24, 11-26 |
 | R4 | **사실로 확인된 심각한 결함만 사용자에게**. 나머지는 워커끼리 조율. 사용자 개입 최소 | 11-25 |
 | R5 | **같은 문제는 최대 2회 검증**. 하루 상한 없음(문제당 2회만) | 11-25 |
 | R6 | 코디네이터가 검증 없이 넘어가는 것 차단 + 워커와 싸우며 하루 허비하지 않기 | 11-24 |
@@ -43,14 +43,14 @@
 | R8 | `th-stop.sh` + `STOPPED_BY_USER` 표식, watchd 자동 재시도·계속·롤오버·자동 검증 차단, 수동 th-launch 시 해제, 부모 정지 시 하위 검증 워커 정지 | 통합 커밋(미반영) | 193e53c |
 | R9 | 쿼터 잠금 `expires=`(메시지 시각+5분, 기본 12h, 용량 15분), 자정 넘김 다음 날 보정, 기존 잠금 작성+12h | 통합 커밋(미반영) | `src/team_harness/quota_lock.py` |
 | R10 | 자동 재시도 실패 알림 작업·종류·사유 기준 1회 | 통합 커밋(미반영) | `scripts/th-watch-lib.sh` |
-| R3 | REPORT 첫 줄·저널 결정 줄 정확 형식 판정, 누락·오형식=1 | 통합 커밋(미반영) | `src/team_harness/result_guard.py` |
-| R1 일부 | 결과 0·실험 완료 시 자동 독립 검증(일반 작업의 단순 FAILED는 제외), 쿼터 거부 시 pending 후 재시도 | 통합 커밋(미반영) + 미커밋 수정 | result_guard.py, th-watchd.sh |
+| R3 | REPORT 첫 줄·저널 결정 줄 정확 형식 판정, 누락·오형식=1; result_guard.py(미반영 A07)는 반영 시 새 방향(0=성공·2=실패)으로 | 통합 커밋(미반영) | `src/team_harness/result_guard.py` |
+| R1 일부 | 결과 2(실패류)·실험 완료 시 자동 독립 검증(일반 작업의 단순 FAILED는 제외; 미반영 A07 result_guard.py는 반영 시 새 방향으로 전환), 쿼터 거부 시 pending 후 재시도 | 통합 커밋(미반영) + 미커밋 수정 | result_guard.py, th-watchd.sh |
 | R1 일부 | 실험 지시서 `## 입력 반영`·`## 대조군` 필수(TH_BRIEF_OK로 우회 불가) | 통합 커밋(미반영) | `src/team_harness/brief_check.py` |
 | R5 | 결정 ID별 crosscheck 2회 상한, 3번째 rc=2 + `채택 판단 요청 — 사용자` 사건. **같은 decision ID일 때만 공유** | 통합 커밋(미반영) | `src/team_harness/crosscheck.py` |
 | R6 | main push 범위에 `Crosscheck:` 또는 `Verify-Exempt:` trailer 필수(team-harness 저장소만) | 통합 커밋(미반영) | `.githooks/pre-push` |
 | R12 | DONE 뒤 증거 변경에도 FAIL+반례 보존(PASS는 엄격), FAIL 문구는 실제 FAIL 항목, 테스트 TH_NO_DAEMON 기본, TH_ONCE crosscheck 제외, adopt_brief 경로 오인 수정 | 통합 커밋에 cherry-pick(미반영) | 30220b6, a6b4887 |
 | R12 | watch 디렉터리·잠금 파일이 사라지면 watchd 자기 종료 | 정리 브랜치, 통합 커밋 포함 여부 **impl_audit 확인 필요** | 0ecc0b3 |
-| R7 일부 | 저널(코디네이터 work_log) 중요 결정·결과 0 → 자동 검증. 줄 내용 해시 집합 커서 | **구현됐으나 기본 꺼짐**(`.team-harness/journal-auto-verify`=true일 때만) | result_guard.py, `scripts/journal-hook.sh` |
+| R7 일부 | 저널(코디네이터 work_log) 중요 결정·결과 2(실패류; 미반영 A07 result_guard.py는 반영 시 새 방향으로 전환) → 자동 검증. 줄 내용 해시 집합 커서 | **구현됐으나 기본 꺼짐**(`.team-harness/journal-auto-verify`=true일 때만) | result_guard.py, `scripts/journal-hook.sh` |
 | R1·R4·R7·R14·R15 나머지 | 설계 v2 1~3단계: `verify_policy.toml`, 장부 `verify/events.jsonl`, 심각도 수치 기준, case.json 재실행 판정, 제3 검토자 1명, 자동 수정 1회, 장시간 작업 전 검증, 직접 수정 코드 첫 결과 검증, merge·push·배포·삭제 전 관문(전역), Stop hook(결과 없이 턴 종료 차단), run/repl 최종 게이트, 21시 일일 목록, 지시서에 결과 코드 뜻 자동 삽입, VERIFIED/VALIDATED, 메커니즘 측정 게이트, 요구사항 ID | **미구현** | 설계 v2 |
 | R2 | 전역 배포 | **미실행**(승인 필요) | th-sync |
 
@@ -81,7 +81,7 @@
 2. 검증 주장은 "main 376283a 대비 회귀 없음 + 심각 결함(보안·삭제·손실·잘못된 성공 보고) 없음". 새 기능 경계 사례는 위 3장에 추가.
 3. 검증 중에는 작업 폴더·worktree를 수정하지 않는다(증거 변경 → UNAVAILABLE).
 4. 재현·테스트 fixture는 저장소 밖. 관문: `uv run ruff check src/`, `uv run ruff format --check src/`, `uv run pyright src/`, `env -u PYTHONPATH -u TH_USER_REQUESTED_CLAUDE bash scripts/th-test-watchd.sh`.
-5. 결과 코드 뜻: 2 = 요구 전부 완료·관문 통과, 1 = 일부 미완·판정 보류, 0 = 실패(종료 코드 관례와 반대).
+5. 결과 코드 뜻: 0 = 성공(요구 전부 완료·관문 통과), 1 = 일부 미완·판정 보류, 2 = 실패(종료 코드 관례와 같은 방향; 11-26 개정).
 
 ## 5. 지시서 결함 (15:30 추가 — 사용자 지적)
 | # | 내용 | 근거 | 상태 |
