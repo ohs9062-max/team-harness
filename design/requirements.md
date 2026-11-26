@@ -65,13 +65,14 @@
 | K5 | 재시도 중 쿼터 재거부를 failed로 기록 → 이후 자동 검증 영구 0회 | `_outputs/ship_core_20261125/.th_adopt/terra/VERDICT.md`, `result_guard.py:127` | 미커밋 수정으로 해결(impl_audit mock: pending→pending→started), 커밋 전 |
 | K6 | `observed_verify.py:109` FAIL이 아닌 WARN·검증 없음도 PASS로 전달 | 외부 분석, 코디네이터·impl_audit 확인(main·통합 둘 다) | **미해결, 심각(잘못된 성공 보고)** — main에 이미 있는 결함 |
 | K7 | `brief_check.py:212` 원인 가설 있는데 증상 재현 절 누락이 warn | 외부 분석, 코디네이터 확인 | **미해결** |
-| K8 | 테스트 리퍼가 다른 실행의 테스트 watchd까지 TERM | `_outputs/ship_core_20261125/REPORT.md` | 범위 축소 지시만, **미구현** |
+| K8 | 테스트 리퍼가 다른 실행의 테스트 watchd까지 TERM | `_outputs/ship_core_20261125/REPORT.md` | 테스트 실행 자손의 PID·시작시각과 pidfd로 범위 축소, 채택 검증 대기 |
 | K9 | 2회 상한은 같은 decision ID만 공유(자동·수동·저널 키가 다르면 각각) | `_outputs/final_review_codex_20261125/findings.md` #5 | 문서화만 |
 | K10 | run/repl 내장 코디네이터는 실험 절 누락을 경고만, 자동 crosscheck 없음 | agy findings F10 | 문서화만 |
 | K11 | 검증 중 추적되지 않은 운영 파일 변화로 저장소 상태 변경 UNAVAILABLE | CROSSCHECK.md 다수 | 저장소 상태 비교에서 추적되지 않은 파일 제외; HEAD와 추적 파일 변경은 감지 |
 | K12 | 전체 테스트 중 `test_th_launch_rejects_claude_without_user_request`는 워커 환경의 `TH_USER_REQUESTED_CLAUDE=1` 상속 시 실패 | test_hygiene2 REPORT | 관문은 `env -u TH_USER_REQUESTED_CLAUDE`로 실행 |
 | K13 | 실제 inbox(`/home/hs/rang/team-harness/.claude/inbox.md`) 884~894줄 가짜 사건 남음(저장소 안 fixture 원인) | 코디네이터 확인 | 삭제는 승인 필요, 재발 방지: fixture는 저장소 밖 `mktemp -d` |
 | K14 | `/tmp/th-test-home-*` 약 60개 잔존 | test_hygiene3 REPORT | 이번 실행 증가분만 관리 |
+| A01 한계 | pidfd 미지원 또는 강제 중단 시 테스트 자원 정리 미보장 | 기존 동작과 동일 | 알려진 한계 (K8, K14) |
 | K23 | design 디렉터리 source의 채택 영수증에 decisions.md 대상 누락 | `src/team_harness/adoption_gate.py` | 해결 (커밋: fix(R6,K23): bind design directory receipt subject) |
 | K22 | Claude hook 실행 감싸기(P1)는 `&&`·`;`·`\|`·`&` 복합 셸 명령을 감싸지 않고 원래대로 실행(`exec_map.py:14`) | `_outputs/p1_claude_hook_20261125_v2/.th_adopt/terra/VERDICT.md` | 알려진 한계, 사용자 결정으로 반영 후 후속 단위 |
 

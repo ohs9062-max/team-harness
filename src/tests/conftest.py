@@ -1,13 +1,18 @@
 # pyright: reportMissingParameterType=false
 
 import asyncio
+import atexit
 import os
 from pathlib import Path
+import shutil
 import sys
 import tempfile
 
 # Establish HOME before application modules cache paths during test collection.
-os.environ["HOME"] = tempfile.mkdtemp(prefix="th-test-home-")
+_test_home = tempfile.mkdtemp(prefix="th-test-home-")
+atexit.register(shutil.rmtree, _test_home, ignore_errors=True)
+os.environ["HOME"] = _test_home
+os.environ["TH_NO_DAEMON"] = "1"
 os.environ["TH_WATCH_DIR"] = str(Path(os.environ["HOME"]) / "watch")
 os.environ["PATH"] = (
     str(Path(sys.executable).parent) + os.pathsep + os.environ.get("PATH", "")
@@ -38,6 +43,7 @@ from team_harness.tracking.context import ContextTracker  # noqa: E402
 def isolate_worker_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     # Tests must never register real workers or start persistent maintenance.
     monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
+    monkeypatch.setenv("TH_NO_DAEMON", "1")
     monkeypatch.setenv("TH_NO_MAINTENANCE", "1")
     monkeypatch.setenv("TH_OBSERVE", "0")
     monkeypatch.setenv("TH_SKIP_COORD_LOG", "1")
