@@ -911,3 +911,17 @@ scripts 또는 src/team_harness 변경이 포함된 push는 pre-push 훅이 후�
 | th-launch | watchd | run/repl | protocol | SDK | PATH shim | Claude hook | Codex hook | git hook |
 |---|---|---|---|---|---|---|---|---|
 | 지시서·REPORT 규칙(AGENTS.md) | 파싱 코드 없음(미반영 A07이 반영 시 새 방향) | 같음 | 같음 | 같음 | 없음 | 전역 CLAUDE.md 블록(th-sync 배포 후) = th 밖 Claude 직접 실행 | AGENTS.md(Codex 자동 읽음) | 없음(pre-commit은 CLAUDE.md=AGENTS.md 동일만 확인) |
+
+
+## TH-D58. PATH shim 비대화 실행을 공통 실행기로 감싼다
+
+셸에서 직접 실행한 비대화형 codex·agy·claude에 공통 작업 준비와 동기 실행을 적용한다. 실행 상태·감시와 종료 기록을 Claude Bash 경로와 통일하면서 stdin, 출력 및 신호와 종료 코드를 호출자에게 전달한다. 기존 th 실행 하위와 워커는 중첩하지 않는다. `shim/*`, `src/team_harness/launch_shim.py`, `src/team_harness/exec_wrap.py`, `scripts/th-job-start.sh`와 Claude hook이 구현한다.
+
+PATH shim은 백그라운드 실행기 대신 같은 세션의 자식 프로세스를 실행하고 기다린다.
+두 반례에서 백그라운드 실행기는 각각 출력 TTY와 제어 터미널을 잃었다.
+
+### 적용 경로
+
+| 구분 | th-launch | watchd | run/repl | protocol | SDK | PATH shim | Claude hook | Codex hook | git hook |
+|---|---|---|---|---|---|---|---|---|---|
+| th 밖(직접 실행) | 상위 실행 시 중첩 방지 | 등록 작업 감시 | 없음: 실행기 진입점 아님 | 없음: 직접 셸 실행 아님 | 없음: 직접 셸 실행 아님 | 비대화 실행 → 공통 실행기 | P1 공통 실행기 | 후속 P4 | 후속 P4 |

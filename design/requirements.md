@@ -98,7 +98,7 @@
 
 ## 6. 구조 원칙 (15:35 — 사용자 지시, 모든 단위의 기준)
 
-- 상태: Claude Bash hook에 공통 파이프라인과 동기 job-start 연결을 추가했다(P1: `160b74f`, `5a5d12e`; 복합 명령 한계 K22). PATH shim 실행기 연결은 P2 범위다.
+- 상태: Claude Bash hook에 공통 파이프라인과 동기 job-start 연결을 추가했다(P1: `160b74f`, `5a5d12e`; 복합 명령 한계 K22). PATH shim 비대화 실행도 공통 실행기에 연결했다(P2, TH-D58).
 - 원인: 판정 로직의 **입력이 th 작업 폴더(STATUS·DONE·REPORT)** 였다. th로 띄우지 않으면 폴더가 없어 아무것도 발동하지 않는다. 그 위에 "th 밖" 행을 덧붙이는 식이라 반복 실패.
 - 원칙: 판정 로직은 **실행 사건 하나**(누가·어디서·어떤 명령·출력·종료 코드·결과 파일)를 입력으로 받는 공통 함수다. th는 여러 호출자 중 하나일 뿐이다.
 - 진입점 매핑(어댑터): th-launch/watchd(작업 폴더 → 사건), Claude hook(PreToolUse/PostToolUse의 Bash 명령·출력 → 사건, Stop → 최종 보고), Codex/agy hook 또는 전역 래퍼, git hook(merge·push), th run/repl·protocol·SDK. 코디네이터가 무엇으로 실행하든 hook이 사건을 넘긴다 — 코디네이터 선택에 의존하지 않는다.
