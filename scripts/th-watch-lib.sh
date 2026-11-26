@@ -359,6 +359,15 @@ watch_event_log() {
   printf '%s [인계 대기] %s: %s\n' "$(date '+%F %T')" "$task" "$detail" >> "$watch_dir/events.log"
 }
 
+watch_failure_once() {
+  local task=$1 kind=$2 reason=$3 callback=$4 owner=$5 key file
+  key=$(printf '%s' "$reason" | sha256sum | cut -d' ' -f1)
+  file="$task/.th_failure_$(printf '%s' "$kind" | sha256sum | cut -d' ' -f1)"
+  [[ -f $file && $(<"$file") == "$key" ]] && return 0
+  "$callback" "$task" "$kind" "$kind — $reason" "-" "$owner"
+  printf '%s' "$key" > "$file"
+}
+
 safe_step_auto_retry() {
   # The interactive watcher only reports.  The daemon alone may relaunch a
   # bounded, explicitly safe step, and never changes its worker settings.
@@ -461,7 +470,10 @@ PY
     return 0
   fi
   [[ ${rc:-0} -eq 75 ]] && return 0
-  "$callback_fn" "$task" "자동 재시도 실패" "자동 재시도 실패 — $retry_output" "-" "$owner"
+  local failure_reason
+  failure_reason=$(printf '%s\n' "$retry_output" | sed '/^\[th-launch\] 경고:/d')
+  [[ -z $failure_reason ]] || retry_output=$failure_reason
+  watch_failure_once "$task" "자동 재시도 실패" "$retry_output" "$callback_fn" "$owner"
   return 0
 }
 
@@ -632,7 +644,11 @@ inspect_task_event() {
       continue_event=$(th_python -m team_harness.stop_policy "$task" "$watch_dir" "$owner") || continue_event=""
       if [[ -n $continue_event ]]; then
         [[ $continue_event == 자동\ 계속\ 소진* || $continue_event == 자동\ 계속\ 실패* ]] && touch "$marker.auto_continue"
-        "$callback_fn" "$task" "자동 계속" "$continue_event" "-" "$owner"
+        if [[ $continue_event == 자동\ 계속\ 실패* ]]; then
+          watch_failure_once "$task" "자동 계속 실패" "$continue_event" "$callback_fn" "$owner"
+        else
+          "$callback_fn" "$task" "자동 계속" "$continue_event" "-" "$owner"
+        fi
       fi
       if [[ ( -z $ctx_event || $ctx_event == none ) && ! -e $task/context_exit_requested.json ]] && [[ -f $marker.settled || $continue_event == 자동\ 계속\ 소진* || $continue_event == 자동\ 계속\ 실패* ]]; then
         after_signature=$(watch_task_signature "$task")
@@ -681,7 +697,11 @@ inspect_task_event() {
       continue_event=$(th_python -m team_harness.stop_policy "$task" "$watch_dir" "$owner") || continue_event=""
       if [[ -n $continue_event ]]; then
         [[ $continue_event == 자동\ 계속\ 소진* || $continue_event == 자동\ 계속\ 실패* ]] && touch "$marker.auto_continue"
-        "$callback_fn" "$task" "자동 계속" "$continue_event" "-" "$owner"
+        if [[ $continue_event == 자동\ 계속\ 실패* ]]; then
+          watch_failure_once "$task" "자동 계속 실패" "$continue_event" "$callback_fn" "$owner"
+        else
+          "$callback_fn" "$task" "자동 계속" "$continue_event" "-" "$owner"
+        fi
       fi
       if [[ ( -z $ctx_event || $ctx_event == none ) && ! -e $task/context_exit_requested.json ]] && [[ -f $marker.settled || $continue_event == 자동\ 계속\ 소진* || $continue_event == 자동\ 계속\ 실패* ]]; then
         after_signature=$(watch_task_signature "$task")

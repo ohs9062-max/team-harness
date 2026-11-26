@@ -649,3 +649,27 @@ def test_continue_duplicate_does_not_consume_attempt(
     assert (tmp_path / ".auto_continue_count").read_text() == "1"
     assert task_file.read_text() == "kind: code\n"
     assert not (tmp_path / ".auto_continue_signature").exists()
+
+
+def test_watch_failure_once_deduplicates_by_kind_and_full_reason(
+    tmp_path: Path,
+) -> None:
+    library = Path(__file__).resolve().parents[2] / "scripts" / "th-watch-lib.sh"
+    script = r"""
+source "$1"
+callback() { printf '%s | %s\n' "$2" "$3"; }
+for i in 1 2 3; do
+  watch_failure_once "$2" "자동 계속 실패" $'warning\nreason one' callback owner
+done
+watch_failure_once "$2" "자동 계속 실패" $'warning\nreason two' callback owner
+watch_failure_once "$2" "자동 재시도 실패" $'warning\nreason one' callback owner
+"""
+    result = subprocess.run(
+        ["bash", "-c", script, "test", str(library), str(tmp_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert result.stdout.count(" | ") == 3
+    assert result.stdout.count("reason one") == 2
+    assert result.stdout.count("reason two") == 1
