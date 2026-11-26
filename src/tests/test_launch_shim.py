@@ -120,7 +120,7 @@ def test_broken_or_slow_observer_keeps_real_command(tmp_path: Path) -> None:
             '#!/bin/sh\nread -r line\nprintf "%s|%s\\n" "$*" "$line"\nexit 37\n'
         )
         real.chmod(0o755)
-    env = dict(os.environ, PATH=f"{shim}:{bin_dir}", PYTHONPATH="")
+    env = dict(os.environ, PATH=f"{shim}:{bin_dir}", PYTHONPATH="", TH_EXEC_WRAP="0")
     python = python_dir / "python"
     for contents in (None, "#!/bin/sh\nexit 42\n", "#!/bin/sh\nexec /bin/sleep 5\n"):
         if contents is not None:
@@ -159,7 +159,9 @@ def test_observer_termination_and_inherited_stdout(tmp_path: Path) -> None:
             '#!/bin/sh\nread -r line\nprintf "%s|%s\\n" "$*" "$line"\nexit 37\n'
         )
         real.chmod(0o755)
-    env = dict(os.environ, PATH=f"{shim}:{bin_dir}", PYTHONPATH=str(tmp_path))
+    env = dict(
+        os.environ, PATH=f"{shim}:{bin_dir}", PYTHONPATH=str(tmp_path), TH_EXEC_WRAP="0"
+    )
     scenarios = (
         "import signal, time\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\ntime.sleep(10)\n",
         "import os, time\nif os.fork() == 0:\n    time.sleep(2)\n    os._exit(0)\nos._exit(0)\n",
@@ -224,7 +226,9 @@ def test_invalid_durations_keep_real_command(
     (tmp_path / "sitecustomize.py").write_text(
         "import signal, time\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\ntime.sleep(10)\n"
     )
-    env = dict(os.environ, PATH=f"{shim}:{bin_dir}", PYTHONPATH=str(tmp_path))
+    env = dict(
+        os.environ, PATH=f"{shim}:{bin_dir}", PYTHONPATH=str(tmp_path), TH_EXEC_WRAP="0"
+    )
     env.pop("TH_SHIM_TIMEOUT", None)
     env.pop("TH_SHIM_KILL_AFTER", None)
     env[variable] = value
