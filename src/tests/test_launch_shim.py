@@ -36,7 +36,13 @@ def setup_cli(tmp_path: Path) -> tuple[dict[str, str], Path]:
 
 def run(env: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        args, env=env, input="input\n", capture_output=True, text=True, check=False
+        args,
+        env=env,
+        cwd=env["HOME"],
+        input="input\n",
+        capture_output=True,
+        text=True,
+        check=False,
     )
 
 
@@ -338,7 +344,9 @@ def test_active_slot_visible_during_execution(tmp_path: Path) -> None:
     env, _ = setup_cli(tmp_path)
     fake = tmp_path / "bin/codex"
     fake.write_text('#!/bin/sh\nprintf ready > "$HOME/ready"\nread line\n')
-    proc = subprocess.Popen(["codex", "exec", "hello"], env=env, stdin=subprocess.PIPE)
+    proc = subprocess.Popen(
+        ["codex", "exec", "hello"], env=env, cwd=tmp_path, stdin=subprocess.PIPE
+    )
     try:
         for _ in range(200):
             if (tmp_path / "ready").exists():
@@ -413,6 +421,7 @@ def test_direct_executor_artifacts_and_signals(tmp_path: Path) -> None:
         proc = subprocess.Popen(
             ["codex", "exec", "-"],
             env=dict(env, SIGNAL_TEST="1"),
+            cwd=tmp_path,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

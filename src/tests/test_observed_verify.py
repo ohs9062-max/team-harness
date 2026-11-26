@@ -196,3 +196,17 @@ def test_unreadable_brief_is_deferred(
     )
     assert observed_verify.launch(tmp_path, "ended", "owner", "route", "finished")
     assert "검수 판정 보류 (결과 1): 판독 불가" in notices[0]
+
+
+def test_empty_message_gets_notice_format(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import re
+
+    notices = []
+    monkeypatch.delenv("TH_OBSERVED_VERIFY", raising=False)
+    monkeypatch.setattr(
+        observation_events, "_append", lambda *args: notices.append(args[2])
+    )
+    observed_verify.launch(tmp_path, "ended", "owner", "route", "")
+    assert re.match(r"^\d{4}-\d\d-\d\d \d\d:\d\d \| .+ \| 관찰 종료 \|", notices[0])

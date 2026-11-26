@@ -77,6 +77,8 @@ def test_real_path_shim_observed_exit(
     root = Path(__file__).resolve().parents[2]
     task = tmp_path / "task"
     task.mkdir()
+    (task / ".git").mkdir()
+    (task / ".claude").mkdir()
     (task / "task.md").write_text("# Task\n## 검수\n```bash\ntrue\n```\n")
     real = tmp_path / "bin"
     real.mkdir()
@@ -145,10 +147,27 @@ def test_real_path_shim_observed_exit(
     assert len(post) == 1 and post[0]["stage"]["name"] == "observed_verify"
     assert pre[0]["event"]["event_id"] == post[0]["event"]["event_id"]
     assert post[0]["event"]["exit_code"] == 0
+    assert not (task / ".claude" / "inbox.md").exists()
     process.stdin.close()
     process.stdout.close()
     assert process.stderr is not None
     process.stderr.close()
+
+
+def test_claude_hook_post_does_not_write_inbox(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    owner = tmp_path / "owner"
+    (owner / ".git").mkdir(parents=True)
+    (owner / ".claude").mkdir()
+    task = tmp_path / "watch" / "claude-jobs" / "job"
+    task.mkdir(parents=True)
+    monkeypatch.setenv("TH_WATCH_DIR", str(tmp_path / "watch"))
+    event = exec_pipeline.ExecEvent(
+        task=str(task), owner=str(owner), route="claude_hook", message="response"
+    )
+    assert exec_pipeline.run_post(event)[0].code == 0
+    assert not (owner / ".claude" / "inbox.md").exists()
 
 
 def test_register_pre_then_exec_real_binary(tmp_path: Path) -> None:

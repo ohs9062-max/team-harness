@@ -13,9 +13,17 @@ import sys
 from team_harness.internal_python import command
 
 
+def _message(task: Path, message: str) -> str:
+    if re.match(r"^\d{4}-\d\d-\d\d \d\d:\d\d \| [^|\n]+ \| [^|\n]+ \|", message):
+        return message
+    folder = str(task).replace("|", " ").replace("\n", " ") or "관찰 작업"
+    return f"{datetime.now().strftime('%Y-%m-%d %H:%M')} | {folder} | 관찰 종료 | {message}"
+
+
 def launch(task: Path, ended_at: str, owner: str, route: str, message: str) -> bool:
     from team_harness.observation_events import _append
 
+    message = _message(task, message)
     if os.environ.get("TH_OBSERVED_VERIFY") == "0":
         _append(owner, route, f"{message} | 검수 판정 보류 (결과 1): 검수 없음 | -")
         return True
@@ -66,6 +74,7 @@ def run(task: Path, ended_at: str, owner: str, route: str, message: str) -> None
     from team_harness.worker_digest import digest
     from team_harness.worker_digest import verify
 
+    message = _message(task, message)
     verdict = "판정 보류 (결과 1)"
     detail = ""
     try:

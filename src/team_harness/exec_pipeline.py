@@ -319,6 +319,9 @@ def _repeat(event: ExecEvent) -> StageResult:
 
 
 def _observed_verify(event: ExecEvent) -> StageResult:
+    if event.route in {"path_shim", "claude_hook"}:
+        return StageResult("observed_verify", 0, "registered task handled by watchd")
+
     from team_harness.observed_verify import launch
 
     launched = launch(
