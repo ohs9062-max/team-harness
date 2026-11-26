@@ -23,13 +23,7 @@ th_jev() {
 }
 
 watch_quota_lock_active() {
-  local file=$1 lock_text expiry
-  [[ -e $file ]] || return 1
-  [[ -r $file ]] || return 0
-  lock_text=$(<"$file")
-  expiry=""
-  [[ $lock_text =~ (^|[[:space:]])expires=([0-9]+)($|[[:space:]]) ]] && expiry=${BASH_REMATCH[2]}
-  [[ -z $expiry || $expiry -gt $(date +%s) ]]
+  th_python -c 'import sys; from pathlib import Path; from team_harness.quota_lock import active; sys.exit(0 if active(Path(sys.argv[1])) else 1)' "$1"
 }
 
 watch_task_signature() {
@@ -518,11 +512,9 @@ inspect_task_event() {
       local qline
       qline=$(quota_error_line "$cand")
       if [[ -n $qline ]]; then
-        if [[ ${qline,,} == *"at capacity"* || ${qline,,} == *"capacity exceeded"* ]]; then
-          printf '%s | %s | %s | expires=%s\n' "$(date '+%F %R')" "$task" "$qline" "$(( $(date +%s) + 900 ))" > "$lock"
-        else
-          printf '%s | %s | %s\n' "$(date '+%F %R')" "$task" "$qline" > "$lock"
-        fi
+        local expiry
+        expiry=$(th_python -c 'import sys; from team_harness.quota_lock import expiry_for_message; print(expiry_for_message(sys.argv[1]))' "$qline")
+        printf '%s | %s | %s | expires=%s\n' "$(date '+%F %R')" "$task" "$qline" "$expiry" > "$lock"
       fi
     done
     return 0
@@ -790,11 +782,9 @@ inspect_task_event() {
     [[ $lock_type == worker ]] && lock_type=unknown
     (
     flock -x 201 || exit 1
-    if [[ ${line,,} == *"at capacity"* || ${line,,} == *"capacity exceeded"* ]]; then
-      printf '%s | %s | %s | expires=%s\n' "$(date '+%F %R')" "$task" "$line" "$(( $(date +%s) + 900 ))" > "$watch_dir/quota_lock.$lock_type"
-    else
-      printf '%s | %s | %s\n' "$(date '+%F %R')" "$task" "$line" > "$watch_dir/quota_lock.$lock_type"
-    fi
+    local expiry
+    expiry=$(th_python -c 'import sys; from team_harness.quota_lock import expiry_for_message; print(expiry_for_message(sys.argv[1]))' "$line")
+    printf '%s | %s | %s | expires=%s\n' "$(date '+%F %R')" "$task" "$line" "$expiry" > "$watch_dir/quota_lock.$lock_type"
     ) 201>"$watch_dir/quota_locks.lock"
     "$callback_fn" "$task" "워커 오류(쿼터·용량)" "워커 오류(쿼터·용량) — $line (새 $lock_type 실행 잠금: $watch_dir/quota_lock.$lock_type)" "-" "$owner"
     # A quota event is non-terminal.  Continue so a later DONE/FAILED marker is

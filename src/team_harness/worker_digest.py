@@ -25,7 +25,6 @@ import signal
 import subprocess
 import sys
 import tempfile
-import time
 from typing import Any
 from typing import Iterator
 
@@ -58,15 +57,10 @@ GENERATED = {
 
 
 def quota_lock_active(path: Path) -> bool:
-    """Match th-launch: an expired capacity lock no longer blocks launches."""
-    try:
-        contents = path.read_text(encoding="utf-8", errors="replace")
-    except FileNotFoundError:
-        return False
-    except OSError:
-        return True
-    match = re.search(r"(?:^|\s)expires=(\d+)(?=\s|$)", contents)
-    return match is None or int(match.group(1)) > time.time()
+    """Return whether the shared quota lock is still active."""
+    from team_harness.quota_lock import active
+
+    return active(path)
 
 
 def read(path: Path) -> str:
@@ -679,11 +673,13 @@ def summarize(task: Path, verification: str) -> str:
                     )
                     for line in error_lines
                 ):
+                    from team_harness.quota_lock import expiry_for_message
+
                     with (watch / "quota_locks.lock").open("a") as lock:
                         fcntl.flock(lock, fcntl.LOCK_EX)
                         atomic_write(
                             watch / f"quota_lock.{worker}",
-                            f"{datetime.now():%F %T} | digest {task} | quota/capacity error\n",
+                            f"{datetime.now():%F %T} | digest {task} | {errors.splitlines()[0] if errors.splitlines() else 'quota error'} | expires={expiry_for_message(errors)}\n",
                         )
                 return ""
             if worker == "codex" and output.is_file():

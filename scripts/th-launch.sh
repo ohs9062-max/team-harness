@@ -137,15 +137,9 @@ watch_dir=${TH_WATCH_DIR:-"$HOME/.team-harness/watch"}
 suffix=${TH_WORKER_SUFFIX:-"$HOME/.team-harness/worker_suffix.md"}
 # 쿼터·용량 오류 뒤에는 같은 종류 워커를 새로 띄우지 않는다(th-watch가 잠금 생성).
 quota_lock="$watch_dir/quota_lock.$worker_type"
-if [[ -f $quota_lock && ${TH_IGNORE_QUOTA_LOCK:-0} != 1 ]]; then
-  lock_text=$(<"$quota_lock")
-  lock_expiry=""
-  [[ $lock_text =~ (^|[[:space:]])expires=([0-9]+)($|[[:space:]]) ]] && lock_expiry=${BASH_REMATCH[2]}
-  if [[ -z $lock_expiry || $lock_expiry -gt $(date +%s) ]]; then
-    echo "쿼터 잠금으로 $worker_type 실행 거부: $lock_text"
-    echo "쿼터가 풀렸으면 rm '$quota_lock' 후 다시 실행"
-    exit 3
-  fi
+if [[ ${TH_IGNORE_QUOTA_LOCK:-0} != 1 ]] && watch_quota_lock_active "$quota_lock"; then
+  echo "쿼터 잠금으로 $worker_type 실행 거부: $(<"$quota_lock")"
+  exit 3
 fi
 [[ -f $task_dir/task.md ]] || { echo "task.md 없음: $task_dir"; exit 1; }
 # worker_context imports the project dependency graph (including httpx).  Do

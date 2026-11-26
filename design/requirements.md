@@ -41,7 +41,7 @@
 |---|---|---|---|
 | R11 | 손실 리포트: 디렉터리 아닌 owner 정규화, 루트별 실패 격리, report.last 기록 | **main 반영** | 376283a |
 | R8 | `th-stop.sh` + `STOPPED_BY_USER` 표식, watchd 자동 재시도·계속·롤오버·자동 검증 차단, 수동 th-launch 시 해제, 부모 정지 시 하위 검증 워커 정지 | 통합 커밋(미반영) | 193e53c |
-| R9 | 쿼터 잠금 `expires=`(메시지 시각+5분, 기본 12h, 용량 15분), 자정 넘김 다음 날 보정, 기존 잠금 작성+12h | 통합 커밋(미반영) | `src/team_harness/quota_lock.py` |
+| R9 | 쿼터 잠금 `expires=`(메시지 시각+5분, 기본 12h, 용량 15분), 자정 넘김 다음 날 보정, 기존 잠금 작성+12h | 구현됨 (A03) | `src/team_harness/quota_lock.py` |
 | R10 | 자동 재시도 실패 알림 작업·종류·사유 기준 1회 | 통합 커밋(미반영) | `scripts/th-watch-lib.sh` |
 | R3 | REPORT 첫 줄·저널 결정 줄 정확 형식 판정, 누락·오형식=1; result_guard.py(미반영 A07)는 반영 시 새 방향(0=성공·2=실패)으로 | 통합 커밋(미반영) | `src/team_harness/result_guard.py` |
 | R1 일부 | 결과 2(실패류)·실험 완료 시 자동 독립 검증(일반 작업의 단순 FAILED는 제외; 미반영 A07 result_guard.py는 반영 시 새 방향으로 전환), 쿼터 거부 시 pending 후 재시도 | 통합 커밋(미반영) + 미커밋 수정 | result_guard.py, th-watchd.sh |

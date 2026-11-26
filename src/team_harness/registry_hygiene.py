@@ -7,9 +7,9 @@ import fcntl
 import json
 import os
 from pathlib import Path
-import re
 import tempfile
 
+from team_harness.quota_lock import lock_expiry
 from team_harness.workspace_archive import _alive
 
 
@@ -142,17 +142,14 @@ def clean(wd: Path, now: datetime) -> dict[str, list[str]]:
                 except OSError:
                     result["unknown_quota"].append(path.name)
                     continue
-                match = re.search(r"(?:^|\s)expires=(\d+)(?=\s|$)", content)
-                if not match:
+                try:
+                    expiry = lock_expiry(path, content)
+                except OSError:
                     result["unknown_quota"].append(path.name)
-                elif int(match.group(1)) <= now.timestamp():
-                    archive = wd / "archive"
-                    archive.mkdir(exist_ok=True)
-                    fd, target = tempfile.mkstemp(
-                        prefix=f"{path.name}.{now:%Y%m%d}.", dir=archive
-                    )
-                    os.close(fd)
-                    os.replace(path, target)
+                    continue
+                if expiry <= now.timestamp():
                     result["quota"].append(path.name)
+                elif "expires=" not in content:
+                    result["unknown_quota"].append(path.name)
         stamp.write_text(str(now.timestamp()), encoding="utf-8")
     return result

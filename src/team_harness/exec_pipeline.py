@@ -185,12 +185,12 @@ def _policy(event: ExecEvent) -> StageResult:
 
 
 def _quota(event: ExecEvent) -> StageResult:
-    from team_harness.worker_digest import quota_lock_active
+    from team_harness.quota_lock import active
     from team_harness.workspace_archive import watch_dir
 
     event.context["quota_lock"] = os.environ.get(
         "TH_IGNORE_QUOTA_LOCK"
-    ) != "1" and quota_lock_active(watch_dir() / f"quota_lock.{event.tool}")
+    ) != "1" and active(watch_dir() / f"quota_lock.{event.tool}")
     return StageResult("quota_lock", 0)
 
 
