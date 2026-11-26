@@ -1,4 +1,5 @@
 from datetime import datetime
+import os
 from pathlib import Path
 
 from pytest import MonkeyPatch
@@ -27,6 +28,41 @@ def test_existing_lock_and_logging(tmp_path: Path, monkeypatch: MonkeyPatch) -> 
     assert not quota_lock.active(lock)
     assert lock.exists()
     assert (tmp_path / "events.log").read_text().count("[quota expired]") == 1
+
+
+def test_legacy_retry_time_prevents_early_unlock(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    from team_harness import quota_lock
+
+    lock = tmp_path / "quota_lock.codex"
+    lock.write_text("2026-11-25 17:21 | task | try again at 8:00 AM")
+    for now, expected in [
+        (datetime(2026, 11, 26, 6), True),
+        (datetime(2026, 11, 26, 8, 6), False),
+    ]:
+        monkeypatch.setattr(quota_lock.time, "time", lambda now=now: now.timestamp())
+        assert quota_lock.active(lock) is expected
+
+
+def test_legacy_expiry_from_timestamp_and_mtime(tmp_path: Path) -> None:
+    from team_harness.quota_lock import lock_expiry
+
+    lock = tmp_path / "quota_lock.codex"
+    cases = [
+        ("2026-11-25 23:50 | try again at 12:30 AM", datetime(2026, 11, 26, 0, 35)),
+        ("2026-11-25 17:21 | quota", datetime(2026, 11, 26, 5, 21)),
+        ("2026-11-25 17:21 | at capacity", datetime(2026, 11, 25, 17, 36)),
+    ]
+    for content, expected in cases:
+        lock.write_text(content)
+        assert lock_expiry(lock, content) == expected.timestamp()
+    content = "try again at 8:00 AM"
+    lock.write_text(content)
+    stamp = datetime(2026, 11, 25, 17, 21).timestamp()
+    os.utime(lock, (stamp, stamp))
+    assert lock_expiry(lock, content) == datetime(2026, 11, 26, 8, 5).timestamp()
+    assert lock_expiry(lock, content + " expires=123") == 123
 
 
 def test_message_expiries() -> None:

@@ -32,15 +32,21 @@ def lock_expiry(path: Path, content: str) -> float:
     if match:
         stamp = match.group(1)
         try:
-            return (
-                datetime.strptime(
-                    stamp, "%Y-%m-%d %H:%M:%S" if len(stamp) == 19 else "%Y-%m-%d %H:%M"
-                ).timestamp()
-                + 43200
+            created = datetime.strptime(
+                stamp, "%Y-%m-%d %H:%M:%S" if len(stamp) == 19 else "%Y-%m-%d %H:%M"
             )
         except ValueError:
-            pass
-    return path.stat().st_mtime + 43200
+            created = None
+    else:
+        created = None
+    timestamp = created.timestamp() if created else path.stat().st_mtime
+    if re.search(
+        r"try again at\s+\d{1,2}:\d{2}\s*[AP]M|at capacity|capacity exceeded",
+        content,
+        re.I,
+    ):
+        return float(expiry_for_message(content, datetime.fromtimestamp(timestamp)))
+    return timestamp + 43200
 
 
 def active(path: Path) -> bool:
