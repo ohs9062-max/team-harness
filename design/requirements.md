@@ -45,7 +45,7 @@
 | R10 | 자동 재시도 실패 알림 작업·종류·사유 기준 1회 | **main 반영** | `scripts/th-watch-lib.sh` |
 | R10 | 검수 실패 알림에 FAIL 항목의 원인 표시 | **main 반영** | `scripts/th-watchd.sh` |
 | R3 | REPORT 첫 줄·저널 결정 줄 정확 형식 판정, 누락·오형식=1; result_guard.py(미반영 A07)는 반영 시 새 방향(0=성공·2=실패)으로 | 통합 커밋(미반영) | `src/team_harness/result_guard.py` |
-| R1 일부 | 결과 2(실패류)·실험 완료 시 자동 독립 검증(일반 작업의 단순 FAILED는 제외; 미반영 A07 result_guard.py는 반영 시 새 방향으로 전환), 쿼터 거부 시 pending 후 재시도 | 통합 커밋(미반영) + 미커밋 수정 | result_guard.py, th-watchd.sh |
+| R1 일부 | 결과 2(실패류)·실험 완료 시 자동 독립 검증(일반 작업의 단순 FAILED는 제외; A07 result_guard.py 순수 함수 main 반영(TH-D57 방향), 호출처 연결은 후속), 쿼터 거부 시 pending 후 재시도 | 통합 커밋(미반영) + 미커밋 수정 | result_guard.py, th-watchd.sh |
 | R1 일부 | 실험 지시서 `## 입력 반영`·`## 대조군` 필수(TH_BRIEF_OK로 우회 불가) | 통합 커밋(미반영) | `src/team_harness/brief_check.py` |
 | R5 | 결정 ID별 crosscheck 2회 상한, 3번째 rc=2 + `채택 판단 요청 — 사용자` 사건. **같은 decision ID일 때만 공유** | 통합 커밋(미반영) | `src/team_harness/crosscheck.py` |
 | R6 | main push 범위에 `Crosscheck:` 또는 `Verify-Exempt:` trailer 필수(team-harness 저장소만) | 통합 커밋(미반영) | `.githooks/pre-push` |
