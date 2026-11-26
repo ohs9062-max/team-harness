@@ -364,3 +364,62 @@ def test_quota_and_depth_warn_without_blocking(tmp_path: Path) -> None:
     assert "[th] codex: quota lock active" in proc.stderr
     assert "[th] 실행 깊이" in proc.stderr
     assert (watch / "admission.json").exists()
+
+
+def test_direct_executor_artifacts_and_signals(tmp_path: Path) -> None:
+    import json
+
+    env, _ = setup_cli(tmp_path)
+    env.pop("TH_ROLE", None)
+    env.pop("TH_JOB_TASK", None)
+    env["TH_NO_DAEMON"] = "1"
+    fake = tmp_path / "bin/codex"
+    fake.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os, signal, sys, time\n"
+        "if os.getenv('SIGNAL_TEST'):\n"
+        " def stop(sig, frame):\n"
+        "  print(f'signal={sig}', flush=True); sys.exit(128 + sig)\n"
+        " signal.signal(signal.SIGINT, stop); signal.signal(signal.SIGTERM, stop)\n"
+        " print('ready', flush=True)\n"
+        " while True: time.sleep(1)\n"
+        "print(sys.stdin.read(), end='', flush=True)\n"
+        "print('error', file=sys.stderr, flush=True)\n"
+        "sys.exit(int(os.getenv('FAKE_RC', '0')))\n"
+    )
+    for code in (0, 3):
+        result = run(dict(env, FAKE_RC=str(code)), "codex", "exec", "-")
+        assert result.returncode == code and result.stdout == "input\n"
+        assert "error" in result.stderr
+        task = Path((tmp_path / "watch/tasks.txt").read_text().splitlines()[-1])
+        assert (task / "exit_code").read_text().strip() == str(code)
+        assert f"rc={code}" in (task / "STATUS").read_text()
+        assert (task / ("DONE" if code == 0 else "FAILED")).exists()
+        assert "input\n" in (task / "logs/job.log").read_text()
+        assert "error" in (task / "logs/job.log").read_text()
+        events = [
+            json.loads(line)
+            for line in (tmp_path / "watch/exec_pipeline.jsonl")
+            .read_text()
+            .splitlines()
+        ]
+        assert any(
+            x["phase"] == "post"
+            and x["event"]["task"] == str(task)
+            and x["event"]["exit_code"] == code
+            for x in events
+        )
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        proc = subprocess.Popen(
+            ["codex", "exec", "-"],
+            env=dict(env, SIGNAL_TEST="1"),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        assert proc.stdout is not None
+        assert proc.stdout.readline() == "ready\n"
+        proc.send_signal(sig)
+        stdout, _ = proc.communicate(timeout=10)
+        assert f"signal={sig.value}" in stdout and proc.returncode == 128 + sig

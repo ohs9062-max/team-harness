@@ -144,7 +144,7 @@ def test_real_path_shim_observed_exit(
     assert all(x["stage"]["code"] == 0 for x in pre)
     assert len(post) == 1 and post[0]["stage"]["name"] == "observed_verify"
     assert pre[0]["event"]["event_id"] == post[0]["event"]["event_id"]
-    assert post[0]["event"]["exit_code"] is None
+    assert post[0]["event"]["exit_code"] == 0
     process.stdin.close()
     process.stdout.close()
     assert process.stderr is not None

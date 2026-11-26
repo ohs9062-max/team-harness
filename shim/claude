@@ -22,6 +22,19 @@ if [ -z "${real-}" ]; then
     printf '%s: command not found\n' "$tool" >&2
     exit 127
 fi
+# Eligible invocations use the shared synchronous executor.
+if [ "${TH_SHIM-}" != 0 ] && [ "${TH_EXEC_WRAP-}" != 0 ] && [ "${TH_ROLE-}" != worker ] && [ -x "$root/scripts/th-env.sh" ]; then
+    tty=0
+    [ -t 0 ] && tty=1
+    case "$tool:$tty:$*" in
+        codex:*:*) case " $* " in *" exec "*) wrap=1 ;; esac ;;
+        agy:0:*|claude:0:*) wrap=1 ;;
+        agy:1:*|claude:1:*) case " $* " in *" -p "*|*" --prompt "*|*" --prompt="*) wrap=1 ;; esac ;;
+    esac
+    if [ "${wrap-}" = 1 ]; then
+        exec "$root/scripts/th-env.sh" -c 'from team_harness.launch_shim import wrap_direct; wrap_direct()' "$tool" "$real" "$tty" "$@"
+    fi
+fi
 # Accept decimal seconds from 0.05 through 2 without external commands.
 valid_duration() {
     [ ${#1} -le 8 ] || return 1

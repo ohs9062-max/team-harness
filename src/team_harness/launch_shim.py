@@ -159,3 +159,73 @@ def observe_child() -> None:
             print(f"[th] {warning}")
         if len(warnings) > 5:
             print(f"[th] 외 {len(warnings) - 5}건")
+
+
+def wrap_direct() -> None:
+    """Run eligible direct invocations as managed tasks, preserving argv and stdin."""
+    from datetime import datetime
+    from datetime import UTC
+
+    from team_harness.internal_python import caller_environment
+
+    tool, real, tty, *args = sys.argv[1:]
+    noninteractive = (
+        "exec" in args
+        and ("resume" not in args or args.index("exec") < args.index("resume"))
+        if tool == "codex"
+        else bool(_option(args, "-p", "--prompt")) or tty == "0"
+    )
+    if (
+        not noninteractive
+        or os.environ.get("TH_ROLE") == "worker"
+        or os.environ.get("TH_EXEC_WRAP") == "0"
+    ):
+        os.execve(real, [real, *args], caller_environment())
+    try:
+        from team_harness.exec_pipeline import ExecEvent
+        from team_harness.exec_pipeline import run_post
+        from team_harness.exec_pipeline import run_pre
+        from team_harness.exec_wrap import execute
+        from team_harness.exec_wrap import prepare_task
+        from team_harness.proc_observer import has_ancestor_command
+
+        if (
+            has_ancestor_command("th-launch.sh")
+            or has_ancestor_command("th-job-start.sh")
+            or os.environ.get("TH_JOB_TASK")
+        ):
+            os.execve(real, [real, *args], caller_environment())
+        event = ExecEvent(
+            tool=tool,
+            role=os.environ.get("TH_ROLE", ""),
+            session=os.environ.get("CLAUDE_CODE_SESSION_ID", ""),
+            cwd=os.getcwd(),
+            argv=args,
+            route="path_shim",
+            depth=int(os.environ.get("TH_SHIM_DEPTH", "0")) + 1,
+        )
+        event.task = os.environ.get("TH_WORKER_OUTPUT_DIR") or os.getcwd()
+        run_pre(event)
+        task = prepare_task(event, "shim-jobs")
+    except Exception as exc:  # noqa: BLE001
+        print(
+            f"th execution fail-open: preparation failed ({type(exc).__name__}: {exc})",
+            file=sys.stderr,
+        )
+        os.execve(real, [real, *args], caller_environment())
+    if os.environ.get("TH_SHIM_QUIET") != "1":
+        for warning in event.warnings[:5]:
+            print(f"[th] {warning}", file=sys.stderr)
+    os.environ["TH_SHIM_DEPTH"] = str(event.depth)
+    rc = execute(task, [real, *args])
+    event.exit_code = rc
+    event.ended_at = datetime.now(UTC).isoformat()
+    event.output_paths = [str(task / "logs/job.log")]
+    try:
+        run_post(event)
+    except Exception as exc:  # noqa: BLE001
+        print(
+            f"th execution fail-open: post failed ({type(exc).__name__}: {exc})",
+            file=sys.stderr,
+        )
+    raise SystemExit(rc)
