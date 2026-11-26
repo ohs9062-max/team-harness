@@ -23,7 +23,7 @@ if [ -z "${real-}" ]; then
     exit 127
 fi
 # Eligible invocations use the shared synchronous executor.
-if [ "${TH_SHIM-}" != 0 ] && [ "${TH_EXEC_WRAP-}" != 0 ] && [ "${TH_ROLE-}" != worker ] && [ -x "$root/scripts/th-env.sh" ]; then
+if [ "${TH_SHIM-}" != 0 ] && [ "${TH_EXEC_WRAP-}" != 0 ] && [ "${TH_ROLE-}" != worker ]; then
     tty=0
     [ -t 0 ] && tty=1
     case "$tool:$tty:$*" in
@@ -32,7 +32,12 @@ if [ "${TH_SHIM-}" != 0 ] && [ "${TH_EXEC_WRAP-}" != 0 ] && [ "${TH_ROLE-}" != w
         agy:1:*|claude:1:*) case " $* " in *" -p "*|*" --prompt "*|*" --prompt="*) wrap=1 ;; esac ;;
     esac
     if [ "${wrap-}" = 1 ]; then
-        exec "$root/scripts/th-env.sh" -c 'from team_harness.launch_shim import wrap_direct; wrap_direct()' "$tool" "$real" "$tty" "$@"
+        if [ -x /usr/bin/timeout ] && [ -x "$root/scripts/th-env.sh" ] &&
+            /usr/bin/timeout -k 0.2 2 "$root/scripts/th-env.sh" -c 'import team_harness.launch_shim' </dev/null >/dev/null 2>&1; then
+            exec "$root/scripts/th-env.sh" -c 'from team_harness.launch_shim import wrap_direct; wrap_direct()' "$tool" "$real" "$tty" "$@"
+        fi
+        printf '%s\n' 'th execution fail-open: executor unavailable' >&2
+        exec "$real" "$@"
     fi
 fi
 # Accept decimal seconds from 0.05 through 2 without external commands.

@@ -432,3 +432,43 @@ def test_direct_executor_artifacts_and_signals(tmp_path: Path) -> None:
         proc.send_signal(sig)
         stdout, _ = proc.communicate(timeout=10)
         assert f"signal={sig.value}" in stdout and proc.returncode == 128 + sig
+
+
+@pytest.mark.parametrize("name", ["codex", "agy", "claude"])
+@pytest.mark.parametrize(
+    "failure", ["missing_bootstrap", "nonexecutable", "import_failure"]
+)
+def test_direct_executor_bootstrap_failure(
+    tmp_path: Path, name: str, failure: str
+) -> None:
+    shim = tmp_path / "shim"
+    shim.mkdir()
+    target = shim / name
+    target.write_bytes((ROOT / "shim" / name).read_bytes())
+    target.chmod(0o755)
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    env_script = scripts / "th-env.sh"
+    env_script.write_bytes((ROOT / "scripts/th-env.sh").read_bytes())
+    env_script.chmod(0o644 if failure == "nonexecutable" else 0o755)
+    if failure == "import_failure":
+        (scripts / "th-python-bootstrap.py").write_text("raise ImportError('broken')\n")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    real = bin_dir / name
+    real.write_text('#!/bin/sh\nprintf "REAL_EXECUTED\\n"\n/bin/cat\nexit 7\n')
+    real.chmod(0o755)
+    env = dict(os.environ, PATH=f"{shim}:{bin_dir}:/usr/bin:/bin", HOME=str(tmp_path))
+    for key in ("TH_ROLE", "TH_SHIM", "TH_EXEC_WRAP"):
+        env.pop(key, None)
+    result = subprocess.run(
+        [name, "exec"],
+        input="payload\n",
+        text=True,
+        capture_output=True,
+        env=env,
+        check=False,
+    )
+    assert result.returncode == 7
+    assert result.stdout == "REAL_EXECUTED\npayload\n"
+    assert result.stderr == "th execution fail-open: executor unavailable\n"
