@@ -4,13 +4,16 @@ import json
 from pathlib import Path
 import subprocess
 
+import pytest
+
 from team_harness.adoption_gate import receipt_valid
 from team_harness.adoption_gate import record_receipt
 from team_harness.adoption_gate import sha
 
 
-def test_directory_and_file_receipt_subjects(tmp_path: Path) -> None:
-    repo = tmp_path / "repo"
+@pytest.mark.parametrize("repo_name", ["repo", "design"])
+def test_directory_and_file_receipt_subjects(tmp_path: Path, repo_name: str) -> None:
+    repo = tmp_path / repo_name
     repo.mkdir()
 
     def git(*args: str) -> None:
