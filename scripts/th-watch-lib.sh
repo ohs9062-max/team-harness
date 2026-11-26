@@ -364,7 +364,7 @@ watch_failure_once() {
   key=$(printf '%s' "$reason" | sha256sum | cut -d' ' -f1)
   file="$task/.th_failure_$(printf '%s' "$kind" | sha256sum | cut -d' ' -f1)"
   [[ -f $file && $(<"$file") == "$key" ]] && return 0
-  "$callback" "$task" "$kind" "$kind — $reason" "-" "$owner"
+  "$callback" "$task" "$kind" "${6:-$kind — $reason}" "-" "$owner"
   printf '%s' "$key" > "$file"
 }
 
@@ -645,7 +645,7 @@ inspect_task_event() {
       if [[ -n $continue_event ]]; then
         [[ $continue_event == 자동\ 계속\ 소진* || $continue_event == 자동\ 계속\ 실패* ]] && touch "$marker.auto_continue"
         if [[ $continue_event == 자동\ 계속\ 실패* ]]; then
-          watch_failure_once "$task" "자동 계속 실패" "$continue_event" "$callback_fn" "$owner"
+          watch_failure_once "$task" "자동 계속" "$continue_event" "$callback_fn" "$owner" "$continue_event"
         else
           "$callback_fn" "$task" "자동 계속" "$continue_event" "-" "$owner"
         fi
@@ -698,7 +698,7 @@ inspect_task_event() {
       if [[ -n $continue_event ]]; then
         [[ $continue_event == 자동\ 계속\ 소진* || $continue_event == 자동\ 계속\ 실패* ]] && touch "$marker.auto_continue"
         if [[ $continue_event == 자동\ 계속\ 실패* ]]; then
-          watch_failure_once "$task" "자동 계속 실패" "$continue_event" "$callback_fn" "$owner"
+          watch_failure_once "$task" "자동 계속" "$continue_event" "$callback_fn" "$owner" "$continue_event"
         else
           "$callback_fn" "$task" "자동 계속" "$continue_event" "-" "$owner"
         fi

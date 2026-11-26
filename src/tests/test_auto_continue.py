@@ -673,3 +673,45 @@ watch_failure_once "$2" "자동 재시도 실패" $'warning\nreason one' callbac
     assert result.stdout.count(" | ") == 3
     assert result.stdout.count("reason one") == 2
     assert result.stdout.count("reason two") == 1
+
+
+def test_continue_failure_keeps_kind_and_skips_digest(tmp_path: Path) -> None:
+    root = Path(__file__).resolve().parents[2]
+    library = root / "scripts" / "th-watch-lib.sh"
+    lines = [
+        line.strip()
+        for line in library.read_text().splitlines()
+        if 'watch_failure_once "$task" "자동 계속' in line
+    ]
+    assert len(lines) == 2
+    daemon = (root / "scripts" / "th-watchd.sh").read_text()
+    start = daemon.index("  local digest_event\n")
+    branch = daemon[start : daemon.index("\n  local jev_suffix", start)]
+    for index, line in enumerate(lines):
+        task = tmp_path / str(index)
+        task.mkdir()
+        script = (
+            r"""
+source "$1"
+queue_digest() { printf 'queued=%s\n' "$2"; }
+callback() { printf 'kind=%s summary=%s\n' "$2" "$3"; consumer "$@"; }
+consumer() { local task=$1 event_type=$2 summary=$3 v_res=$4 owner=$5
+"""
+            + branch
+            + r"""
+}
+task=$2; continue_event='자동 계속 실패: same reason'; callback_fn=callback; owner=''
+for i in 1 2 3; do
+"""
+            + line
+            + r"""
+done
+"""
+        )
+        result = subprocess.run(
+            ["bash", "-c", script, "test", str(library), str(task)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert result.stdout == "kind=자동 계속 summary=자동 계속 실패: same reason\n"
