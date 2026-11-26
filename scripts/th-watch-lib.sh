@@ -23,7 +23,9 @@ th_jev() {
 }
 
 watch_quota_lock_active() {
-  th_python -c 'import sys; from pathlib import Path; from team_harness.quota_lock import active; sys.exit(0 if active(Path(sys.argv[1])) else 1)' "$1"
+  local rc=0
+  th_python -c 'import sys; from pathlib import Path; from team_harness.quota_lock import active; sys.exit(0 if active(Path(sys.argv[1])) else 3)' "$1" || rc=$?
+  [[ $rc != 3 ]]
 }
 
 watch_task_signature() {

@@ -11,7 +11,12 @@ def expiry_for_message(message: str, now: datetime | None = None) -> int:
     now = now or datetime.now()
     match = re.search(r"try again at\s+(\d{1,2}:\d{2}\s*[AP]M)", message, re.I)
     if match:
-        clock = datetime.strptime(match.group(1).upper().replace(" ", ""), "%I:%M%p")
+        try:
+            clock = datetime.strptime(
+                match.group(1).upper().replace(" ", ""), "%I:%M%p"
+            )
+        except ValueError:
+            return int(now.timestamp()) + 43200
         reset = now.replace(
             hour=clock.hour, minute=clock.minute, second=0, microsecond=0
         )
@@ -71,5 +76,5 @@ def active(path: Path) -> bool:
         return not expired
     except FileNotFoundError:
         return False
-    except OSError:
+    except Exception:
         return True

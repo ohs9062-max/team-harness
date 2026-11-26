@@ -138,7 +138,7 @@ suffix=${TH_WORKER_SUFFIX:-"$HOME/.team-harness/worker_suffix.md"}
 # 쿼터·용량 오류 뒤에는 같은 종류 워커를 새로 띄우지 않는다(th-watch가 잠금 생성).
 quota_lock="$watch_dir/quota_lock.$worker_type"
 if [[ ${TH_IGNORE_QUOTA_LOCK:-0} != 1 ]] && watch_quota_lock_active "$quota_lock"; then
-  echo "쿼터 잠금으로 $worker_type 실행 거부: $(<"$quota_lock")"
+  echo "쿼터 잠금으로 $worker_type 실행 거부: $(cat "$quota_lock" 2>/dev/null || true)"
   exit 3
 fi
 [[ -f $task_dir/task.md ]] || { echo "task.md 없음: $task_dir"; exit 1; }

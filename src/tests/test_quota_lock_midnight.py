@@ -82,3 +82,34 @@ def test_explicit_expiry_and_mtime(tmp_path: Path) -> None:
     assert lock_expiry(lock, lock.read_text()) == 123
     lock.write_text("no timestamp")
     assert lock_expiry(lock, lock.read_text()) == lock.stat().st_mtime + 43200
+
+
+def test_invalid_retry_time_uses_twelve_hours(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    from team_harness import quota_lock
+
+    lock = tmp_path / "quota_lock.codex"
+    lock.write_text("2026-11-25 17:21 | quota exceeded try again at 13:00 PM")
+    monkeypatch.setattr(
+        quota_lock.time, "time", lambda: datetime(2026, 11, 26, 5).timestamp()
+    )
+    assert quota_lock.active(lock)
+    monkeypatch.setattr(
+        quota_lock.time, "time", lambda: datetime(2026, 11, 26, 6).timestamp()
+    )
+    assert not quota_lock.active(lock)
+
+
+def test_evaluation_exception_blocks(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+    from team_harness import quota_lock
+
+    lock = tmp_path / "quota_lock.codex"
+    lock.write_text("quota")
+
+    def fail(*args: object) -> float:
+        raise ValueError("evaluation failed")
+
+    monkeypatch.setattr(quota_lock, "lock_expiry", fail)
+    assert quota_lock.active(lock)
+    assert not quota_lock.active(tmp_path / "missing")
