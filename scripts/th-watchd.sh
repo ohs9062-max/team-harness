@@ -236,7 +236,7 @@ deliver_verification() {
   verify_title=$(th_python -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["overall"])' "$task/verify_result.json" 2>/dev/null || true)
   [[ -n $verify_title ]] || return 0
   if [[ $verify_title == FAIL ]]; then
-    verify_title=$(th_python -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); print("FAIL: " + d.get("items", {}).get("verify", {}).get("reason", ""))' "$task/verify_result.json" 2>/dev/null || printf FAIL)
+    verify_title=$(th_python -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); reasons=[item.get("reason") for item in d.get("items", {}).values() if item.get("verdict") == "FAIL"]; print("FAIL: " + "; ".join(reasons) if reasons and all(isinstance(r, str) and r for r in reasons) else "FAIL")' "$task/verify_result.json" 2>/dev/null || printf FAIL)
   elif [[ $verify_title != 'WARN 검증 없음' ]]; then
     touch "$task/.th_daemon.verify_notice"
     return 0

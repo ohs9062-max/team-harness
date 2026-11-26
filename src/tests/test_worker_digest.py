@@ -643,3 +643,47 @@ def test_verify_capture_normalizes_crlf_and_replaces_invalid_bytes(tmp_path: Pat
     (tmp_path / "verify.sh").write_text("printf 'a\\r\\nb\\n\\377\\n'\n")
     assert wd.check_script(tmp_path)["verdict"] == "PASS"
     assert (tmp_path / "verify_output.log").read_bytes() == "a\nb\n�\n".encode()
+
+
+@pytest.mark.parametrize(
+    ("items", "expected"),
+    [
+        (
+            {
+                "status": {"verdict": "FAIL", "reason": "status failed"},
+                "verify": {"verdict": "PASS", "reason": "verify passed"},
+            },
+            "FAIL: status failed",
+        ),
+        (
+            {"verify": {"verdict": "FAIL", "reason": "verify failed"}},
+            "FAIL: verify failed",
+        ),
+        (
+            {
+                "status": {"verdict": "FAIL", "reason": "status failed"},
+                "verify": {"verdict": "FAIL", "reason": "verify failed"},
+            },
+            "FAIL: status failed; verify failed",
+        ),
+        ({"status": {"verdict": "FAIL"}}, "FAIL"),
+    ],
+)
+def test_deliver_verification_fail_reason(
+    tmp_path: Path, sandbox: tuple[Path, Path, Path], items: dict, expected: str
+):
+    workspace, watch, _ = sandbox
+    task = make_task(tmp_path, "notice")
+    (task / ".th_owner").write_text(str(workspace))
+    (task / ".th_daemon.done").touch()
+    (task / ".th_digest.done").touch()
+    (task / "verify_result.json").write_text(
+        json.dumps({"overall": "FAIL", "items": items})
+    )
+    (watch / "tasks.txt").write_text(str(task) + "\n")
+    assert shell("th-watchd.sh").returncode == 0
+    assert shell("th-watchd.sh").returncode == 0
+    inbox = (workspace / ".claude/inbox.md").read_text()
+    assert inbox.count("검증 결과") == 1
+    assert f" | 완료 | {expected}\n" in inbox
+    assert "verify passed" not in inbox
