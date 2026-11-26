@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ -n ${TH_JOB_START_NOTIFY_FD:-} ]]; then
+  printf R >&"$TH_JOB_START_NOTIFY_FD"
+fi
 if (( $# < 3 )); then echo 'usage: th-job-start.sh TASK [--log FILE] -- COMMAND...' >&2; exit 2; fi
 task=$(realpath -e -- "$1"); shift
 [[ -d $task ]] || exit 2
@@ -13,7 +16,7 @@ mkdir -p -- "$(dirname "$log")"
 rm -f -- "$task/job.pid"
 export TH_JOB_TASK="$task"
 if (( wait_mode )); then
-  setsid bash -c 'echo $$ > "$TH_JOB_TASK/job.pid.tmp" && mv -f -- "$TH_JOB_TASK/job.pid.tmp" "$TH_JOB_TASK/job.pid" && exec "$@"' _ "$@" > >(tee -a "$log") 2> >(tee -a "$log" >&2) &
+  setsid bash -c 'echo $$ > "$TH_JOB_TASK/job.pid.tmp" && mv -f -- "$TH_JOB_TASK/job.pid.tmp" "$TH_JOB_TASK/job.pid" && { if [[ -n ${TH_JOB_START_NOTIFY_FD:-} ]]; then printf S >&"$TH_JOB_START_NOTIFY_FD" && exec {TH_JOB_START_NOTIFY_FD}>&- && unset TH_JOB_START_NOTIFY_FD; fi; } && exec "$@"' _ "$@" > >(tee -a "$log") 2> >(tee -a "$log" >&2) &
   child=$!
   set +e
   wait "$child"

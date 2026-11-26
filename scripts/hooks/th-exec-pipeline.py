@@ -137,43 +137,90 @@ def main(payload):
         state.unlink()
 
 
+def warning(message):
+    print(f"th execution fail-open: {message}", file=sys.stderr)
+
+
 def execute(task, command):
     task = Path(task)
     root = Path(__file__).resolve().parents[2]
-    with (task / "STATUS").open("a") as f:
-        f.write(datetime.now().strftime("%F %T") + " START step=command replay=never\n")
-    watch = watch_dir()
-    watch.mkdir(parents=True, exist_ok=True)
-    with (watch / "tasks.lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        with (watch / "tasks.txt").open("a") as registry:
-            registry.write(str(task) + "\n")
-    if os.environ.get("TH_NO_DAEMON") != "1":
-        subprocess.Popen(
-            [str(root / "scripts/th-watchd.sh")],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
-    rc = subprocess.call(
-        [
-            str(root / "scripts/th-job-start.sh"),
-            str(task),
-            "--wait",
-            "--",
-            "bash",
-            "-c",
-            command,
-        ]
-    )
-    (task / "exit_code").write_text(str(rc) + "\n")
-    with (task / "STATUS").open("a") as f:
-        f.write(
+    runner = None
+    try:
+        with (task / "STATUS").open("a") as f:
+            f.write(
+                datetime.now().strftime("%F %T") + " START step=command replay=never\n"
+            )
+        watch = watch_dir()
+        watch.mkdir(parents=True, exist_ok=True)
+        with (watch / "tasks.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            with (watch / "tasks.txt").open("a") as registry:
+                registry.write(str(task) + "\n")
+        if os.environ.get("TH_NO_DAEMON") != "1":
+            subprocess.Popen(
+                [str(root / "scripts/th-watchd.sh")],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        read_fd, write_fd = os.pipe()
+        try:
+            env = dict(os.environ, TH_JOB_START_NOTIFY_FD=str(write_fd))
+            try:
+                runner = subprocess.Popen(
+                    [
+                        str(root / "scripts/th-job-start.sh"),
+                        str(task),
+                        "--wait",
+                        "--",
+                        "bash",
+                        "-c",
+                        command,
+                    ],
+                    env=env,
+                    pass_fds=(write_fd,),
+                )
+            finally:
+                os.close(write_fd)
+            with os.fdopen(read_fd, "rb", buffering=0) as notification:
+                read_fd = -1
+                ready = notification.read(1)
+                started = notification.read(1) if ready == b"R" else b""
+            rc = runner.wait()
+        finally:
+            if read_fd != -1:
+                os.close(read_fd)
+        if ready == b"R" and not started:
+            runner = None
+            raise RuntimeError(f"runner failed before command (rc={rc})")
+        if ready != b"R" or started != b"S":
+            warning(f"runner start state unknown (rc={rc}); command not retried")
+    except Exception as exc:
+        if runner is None:
+            warning(
+                f"preparation failed ({type(exc).__name__}: {exc}); running command directly"
+            )
+            rc = subprocess.call(["bash", "-c", command])
+        else:
+            warning(
+                f"runner start state unknown ({type(exc).__name__}: {exc}); command not retried"
+            )
+            rc = runner.wait()
+    for path, content in (
+        (task / "exit_code", str(rc) + "\n"),
+        (
+            task / "STATUS",
             datetime.now().strftime("%F %T")
-            + f" END step=command rc={rc} out=logs/job.log\n"
-        )
-    (task / ("DONE" if rc == 0 else "FAILED")).write_text(f"command rc={rc}\n")
+            + f" END step=command rc={rc} out=logs/job.log\n",
+        ),
+        (task / ("DONE" if rc == 0 else "FAILED"), f"command rc={rc}\n"),
+    ):
+        try:
+            with path.open("a" if path.name == "STATUS" else "w") as f:
+                f.write(content)
+        except OSError as exc:
+            warning(f"cannot record {path.name}: {exc}")
     return rc
 
 
