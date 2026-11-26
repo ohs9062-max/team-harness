@@ -27,6 +27,8 @@ if ! flock -n 201; then
   echo "th-watchd is already running." >&2
   exit 0
 fi
+watch_identity=$(stat -Lc '%d:%i' "$watch_dir") || exit 1
+lock_identity=$(stat -Lc '%d:%i' /proc/$$/fd/201) || exit 1
 
 script_dir=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
 self_path=$(realpath "${BASH_SOURCE[0]}")
@@ -254,6 +256,11 @@ if [[ ${TH_ONCE:-0} != 1 ]]; then
 fi
 
 while true; do
+  if [[ $(stat -Lc '%d:%i' "$watch_dir" 2>/dev/null) != "$watch_identity" ||
+        $(stat -Lc '%d:%i' "$lock_file" 2>/dev/null) != "$lock_identity" ]]; then
+    trap - EXIT
+    exit 0
+  fi
   # 자기 스크립트 또는 라이브러리 파일 변경 시 스스로 재실행 (exec)
   current_sig=$(get_script_sig)
   if [[ -n $current_sig && -n $last_sig && $current_sig != "$last_sig" ]]; then

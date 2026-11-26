@@ -49,7 +49,7 @@
 | R5 | 결정 ID별 crosscheck 2회 상한, 3번째 rc=2 + `채택 판단 요청 — 사용자` 사건. **같은 decision ID일 때만 공유** | 통합 커밋(미반영) | `src/team_harness/crosscheck.py` |
 | R6 | main push 범위에 `Crosscheck:` 또는 `Verify-Exempt:` trailer 필수(team-harness 저장소만) | 통합 커밋(미반영) | `.githooks/pre-push` |
 | R12 | DONE 뒤 증거 변경에도 FAIL+반례 보존(PASS는 엄격), FAIL 문구는 실제 FAIL 항목, 테스트 TH_NO_DAEMON 기본, TH_ONCE crosscheck 제외, adopt_brief 경로 오인 수정 | 통합 커밋에 cherry-pick(미반영) | 30220b6, a6b4887 |
-| R12 | watch 디렉터리·잠금 파일이 사라지면 watchd 자기 종료 | 정리 브랜치, 통합 커밋 포함 여부 **impl_audit 확인 필요** | 0ecc0b3 |
+| R12 | watch 디렉터리·잠금 파일이 사라지면 watchd 자기 종료 | main 반영: fix(R12): stop watchd when its watch directory or lock is replaced | 0ecc0b3 |
 | R7 일부 | 저널(코디네이터 work_log) 중요 결정·결과 2(실패류; 미반영 A07 result_guard.py는 반영 시 새 방향으로 전환) → 자동 검증. 줄 내용 해시 집합 커서 | **구현됐으나 기본 꺼짐**(`.team-harness/journal-auto-verify`=true일 때만) | result_guard.py, `scripts/journal-hook.sh` |
 | R1·R4·R7·R14·R15 나머지 | 설계 v2 1~3단계: `verify_policy.toml`, 장부 `verify/events.jsonl`, 심각도 수치 기준, case.json 재실행 판정, 제3 검토자 1명, 자동 수정 1회, 장시간 작업 전 검증, 직접 수정 코드 첫 결과 검증, merge·push·배포·삭제 전 관문(전역), Stop hook(결과 없이 턴 종료 차단), run/repl 최종 게이트, 21시 일일 목록, 지시서에 결과 코드 뜻 자동 삽입, VERIFIED/VALIDATED, 메커니즘 측정 게이트, 요구사항 ID | **미구현** | 설계 v2 |
 | R2 | 전역 배포 | **미실행**(승인 필요) | th-sync |
