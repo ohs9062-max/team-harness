@@ -72,6 +72,7 @@
 | K12 | 전체 테스트 중 `test_th_launch_rejects_claude_without_user_request`는 워커 환경의 `TH_USER_REQUESTED_CLAUDE=1` 상속 시 실패 | test_hygiene2 REPORT | 관문은 `env -u TH_USER_REQUESTED_CLAUDE`로 실행 |
 | K13 | 실제 inbox(`/home/hs/rang/team-harness/.claude/inbox.md`) 884~894줄 가짜 사건 남음(저장소 안 fixture 원인) | 코디네이터 확인 | 삭제는 승인 필요, 재발 방지: fixture는 저장소 밖 `mktemp -d` |
 | K14 | `/tmp/th-test-home-*` 약 60개 잔존 | test_hygiene3 REPORT | 이번 실행 증가분만 관리 |
+| K23 | design 디렉터리 source의 채택 영수증에 decisions.md 대상 누락 | `src/team_harness/adoption_gate.py` | 해결 (커밋: fix(R6,K23): bind design directory receipt subject) |
 
 ## 4. 오늘의 진행 원칙 (R13)
 

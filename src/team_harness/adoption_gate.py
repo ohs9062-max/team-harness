@@ -56,7 +56,11 @@ def record_receipt(
     subjects = {}
     for source in data["source"]:
         path = Path(source["path"])
-        rel = "design/decisions.md" if path.is_dir() else "."
+        rel = (
+            ("decisions.md" if path.name == "design" else "design/decisions.md")
+            if path.is_dir()
+            else "."
+        )
         if path.is_file() and path.name != "decisions.md":
             continue
         expected = source["hashes"].get(rel)
