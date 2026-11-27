@@ -18,11 +18,15 @@ from team_harness.workspace_archive import watch_dir
 
 def prepare_task(event: ExecEvent, category: str) -> Path:
     task = watch_dir() / category / event.event_id
-    task.mkdir(parents=True, mode=0o700)
+    initialize_task(task, event.owner, event.session)
     event.task = str(task)
-    (task / ".th_owner").write_text(event.owner + "\n")
-    (task / ".th_session").write_text(event.session + "\n")
     return task
+
+
+def initialize_task(task: Path, owner: str, session: str) -> None:
+    task.mkdir(parents=True, mode=0o700)
+    (task / ".th_owner").write_text(owner + "\n")
+    (task / ".th_session").write_text(session + "\n")
 
 
 def warning(message: str) -> None:

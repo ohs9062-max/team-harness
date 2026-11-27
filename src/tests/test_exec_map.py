@@ -97,7 +97,6 @@ def test_codex_hook_rewrite_and_cleanup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     import importlib.util
-    import json
 
     path = Path(__file__).resolve().parents[2] / "scripts/hooks/th-exec-pipeline.py"
     spec = importlib.util.spec_from_file_location("codex_exec_hook", path)
@@ -121,14 +120,10 @@ def test_codex_hook_rewrite_and_cleanup(
         if command == "ls":
             assert not output
             continue
-        result = json.loads(output)["hookSpecificOutput"]
-        assert result["permissionDecision"] == "allow"
-        assert "--execute" in result["updatedInput"]["command"]
-        state = hook.state_path(payload)
-        assert state.exists()
-        payload["hook_event_name"] = "PostToolUse"
-        hook.main(payload, codex=True)
-        assert not state.exists()
+        # Codex cannot safely apply a rewrite without an implicit allow.
+        assert not output
+        assert not hook.state_path(payload).exists()
+        assert not (tmp_path / "claude-jobs").exists()
     monkeypatch.setenv("TH_ROLE", "worker")
     payload["hook_event_name"] = "PreToolUse"
     payload["tool_input"]["command"] = "codex exec hi"
@@ -186,7 +181,9 @@ def test_agy_hook_payload_rewrite_and_post(
     hook.main(pre, agy=True)
     output = json.loads(capsys.readouterr().out)
     assert output["decision"] == "allow"
+    assert output["overwrite"]["CommandLine"].startswith("TH_EXEC_ID=")
     assert "--execute" in output["overwrite"]["CommandLine"]
+    assert not (tmp_path / "claude-jobs").exists()
     state = next((tmp_path / "claude-exec").glob("*.json"))
     event = json.loads(state.read_text())
     assert event["route"] == "agy_hook" and event["tool"] == "agy"
@@ -249,7 +246,7 @@ def test_background_hook_rewrite(
         "updatedInput"
     ]["command"]
     assert rewritten.endswith(" &")
-    assert shlex.split(rewritten[:-2])[-1] == command[:-2]
+    assert shlex.split(rewritten[:-2])[-3] == command[:-2]
     assert classify("sleep 1 &", tmp_path / "missing") is None
 
 
@@ -270,3 +267,53 @@ def test_quoted_substitutions(
     tmp_path: Path, command: str, expected: str | None
 ) -> None:
     assert classify(command, tmp_path / "missing") == expected
+
+
+def test_hook_unique_prefix_and_delayed_task(tmp_path: Path) -> None:
+    import json
+    import os
+    import shlex
+
+    root = Path(__file__).resolve().parents[2]
+    runner = root / "scripts/hooks/th-exec-pipeline.py"
+    env = dict(
+        os.environ,
+        TH_WATCH_DIR=str(tmp_path),
+        TH_NO_DAEMON="1",
+        TH_HARNESS_SRC=str(root / "src"),
+    )
+    env.pop("TH_ROLE", None)
+    commands = []
+    for i, command in enumerate(("python3 a_train.py", "python3 b_eval.py")):
+        payload = {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": command},
+            "tool_use_id": str(i),
+            "session_id": "session",
+        }
+        raw = subprocess.check_output(
+            ["python3", str(runner)], input=json.dumps(payload), text=True, env=env
+        )
+        commands.append(
+            json.loads(raw)["hookSpecificOutput"]["updatedInput"]["command"]
+        )
+    assert all(c.startswith("TH_EXEC_ID=") for c in commands)
+    assert shlex.split(commands[0])[0] != shlex.split(commands[1])[0]
+    assert not (tmp_path / "claude-jobs").exists()
+    # Replace only the original shell body; retain the actual wrapper and metadata.
+    parts = shlex.split(commands[0])
+    parts[-3] = "true"
+    completed = subprocess.run(
+        shlex.join(parts),
+        shell=True,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert completed.returncode == 0, completed.stderr
+    tasks = list((tmp_path / "claude-jobs").iterdir())
+    assert len(tasks) == 1
+    assert (tasks[0] / ".th_session").read_text() == "session\n"
+    assert (tasks[0] / "exit_code").read_text().strip() == "0"

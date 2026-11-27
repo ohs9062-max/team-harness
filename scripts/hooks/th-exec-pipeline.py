@@ -20,7 +20,7 @@ from team_harness.exec_pipeline import ExecEvent
 from team_harness.exec_pipeline import run_post
 from team_harness.exec_pipeline import run_pre
 from team_harness.exec_wrap import execute as execute_shared
-from team_harness.exec_wrap import prepare_task
+from team_harness.exec_wrap import initialize_task
 from team_harness.workspace_archive import watch_dir
 
 
@@ -109,7 +109,11 @@ def main(payload, codex=False, agy=False):
                 )
             )
             return
-        task = prepare_task(event, "claude-jobs")
+        # Codex requires allow to apply updatedInput.  Its approval rules cannot
+        # be reconstructed here, so leave the original command for Codex.
+        if codex:
+            return
+        task = Path(event.task)
         state.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         fd = os.open(state, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "w") as f:
@@ -121,8 +125,16 @@ def main(payload, codex=False, agy=False):
         ).parent
         runner = source / "scripts/hooks/th-exec-pipeline.py"
         body, background = split_background(command)
-        new_command = shlex.join(
-            [sys.executable, str(runner), "--execute", str(task), body]
+        new_command = f"TH_EXEC_ID={event.event_id} " + shlex.join(
+            [
+                sys.executable,
+                str(runner),
+                "--execute",
+                str(task),
+                body,
+                event.owner,
+                event.session,
+            ]
         )
         if background:
             new_command += " &"
@@ -138,8 +150,6 @@ def main(payload, codex=False, agy=False):
             "hookEventName": event_name,
             "updatedInput": dict(payload["tool_input"], command=new_command),
         }
-        if codex:
-            output["permissionDecision"] = "allow"
         warnings = event.warnings + [r.message for r in results if r.code and r.message]
         if warnings:
             output["additionalContext"] = "\n".join(warnings)
@@ -165,15 +175,21 @@ def main(payload, codex=False, agy=False):
             print("{}")
 
 
-def execute(task, command):
+def execute(task, command, owner=None, session=None):
+    if owner is not None and session is not None:
+        try:
+            initialize_task(Path(task), owner, session)
+        except OSError:
+            # execute_shared handles preparation failure by running directly.
+            pass
     return execute_shared(
         task, ["bash", "-c", command], Path(__file__).resolve().parents[2]
     )
 
 
 if __name__ == "__main__":
-    if len(sys.argv) == 4 and sys.argv[1] == "--execute":
-        sys.exit(execute(sys.argv[2], sys.argv[3]))
+    if len(sys.argv) in (4, 6) and sys.argv[1] == "--execute":
+        sys.exit(execute(*sys.argv[2:]))
     try:
         main(
             json.load(sys.stdin),
