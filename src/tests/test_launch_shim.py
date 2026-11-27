@@ -476,3 +476,55 @@ def test_direct_executor_bootstrap_failure(
     assert result.returncode == 7
     assert result.stdout == "REAL_EXECUTED\npayload\n"
     assert result.stderr == "th execution fail-open: executor unavailable\n"
+
+
+@pytest.mark.parametrize(
+    "stdout_tty,stderr_tty",
+    [(True, True), (True, False), (False, True), (False, False)],
+)
+def test_wrapped_cli_terminal_streams(
+    tmp_path: Path, stdout_tty: bool, stderr_tty: bool
+) -> None:
+    env, _ = setup_cli(tmp_path)
+    for name in ("TH_ROLE", "TH_JOB_TASK", "TH_WORKER_OUTPUT_DIR", "PYTHONPATH"):
+        env.pop(name, None)
+    env.update(TH_NO_DAEMON="1", TH_SHIM_QUIET="1")
+    fake = tmp_path / "bin/codex"
+    fake.write_text(
+        "#!/bin/sh\n"
+        "if [ -t 1 ]; then echo stdout_tty=yes; else echo stdout_tty=no; fi\n"
+        "if [ -t 2 ]; then echo stderr_tty=yes >&2; else echo stderr_tty=no >&2; fi\n"
+        "exit 7\n"
+    )
+    master, slave = os.openpty()
+    try:
+        result = subprocess.run(
+            ["codex", "exec", "probe"],
+            cwd=tmp_path,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=slave if stdout_tty else subprocess.PIPE,
+            stderr=slave if stderr_tty else subprocess.PIPE,
+            timeout=20,
+            check=False,
+        )
+        assert result.returncode == 7
+        os.close(slave)
+        slave = -1
+        terminal = os.read(master, 65536).decode() if stdout_tty or stderr_tty else ""
+        stdout = terminal if stdout_tty else result.stdout.decode()
+        stderr = terminal if stderr_tty else result.stderr.decode()
+        assert f"stdout_tty={'yes' if stdout_tty else 'no'}" in stdout
+        assert f"stderr_tty={'yes' if stderr_tty else 'no'}" in stderr
+        task = Path((tmp_path / "watch/tasks.txt").read_text().splitlines()[-1])
+        log = (task / "logs/job.log").read_text()
+        assert (
+            "[th] stdout is a terminal; not captured" if stdout_tty else "stdout_tty=no"
+        ) in log
+        assert (
+            "[th] stderr is a terminal; not captured" if stderr_tty else "stderr_tty=no"
+        ) in log
+    finally:
+        os.close(master)
+        if slave != -1:
+            os.close(slave)

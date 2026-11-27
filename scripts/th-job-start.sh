@@ -21,9 +21,22 @@ rm -f -- "$task/job.pid" "$task/job.pid.start"
 export TH_JOB_TASK="$task" TH_JOB_PY="$script_dir/th-env.sh"
 if (( wait_mode )); then
   exec {input_fd}<&0
-  setsid bash -c '"$TH_JOB_PY" -c "import json,sys; from team_harness.agents.process_identity import capture_starttime; from pathlib import Path; p=Path(sys.argv[1]); pid=int(sys.argv[2]); start=capture_starttime(pid); assert start; (p / \"job.pid.start\").write_text(json.dumps({\"pid\":pid,\"start\":start}))" "$TH_JOB_TASK" "$$" && unset TH_JOB_PY && echo $$ > "$TH_JOB_TASK/job.pid.tmp" && mv -f -- "$TH_JOB_TASK/job.pid.tmp" "$TH_JOB_TASK/job.pid" && { if [[ -n ${TH_JOB_START_NOTIFY_FD:-} ]]; then printf S >&"$TH_JOB_START_NOTIFY_FD" && exec {TH_JOB_START_NOTIFY_FD}>&- && unset TH_JOB_START_NOTIFY_FD; fi; } && exec "$@"' _ "$@" <&$input_fd > >(exec {task_lock}>&-; tee -a "$log") 2> >(exec {task_lock}>&-; tee -a "$log" >&2) {task_lock}>&- &
+  if [[ -t 1 ]]; then
+    printf '[th] stdout is a terminal; not captured\n' >> "$log"
+    exec {output_fd}>&1
+  else
+    exec {output_fd}> >(exec {task_lock}>&-; tee -a "$log")
+  fi
+  if [[ -t 2 ]]; then
+    printf '[th] stderr is a terminal; not captured\n' >> "$log"
+    exec {error_fd}>&2
+  else
+    exec {error_fd}> >(exec {task_lock}>&-; tee -a "$log" >&2)
+  fi
+  setsid bash -c '"$TH_JOB_PY" -c "import json,sys; from team_harness.agents.process_identity import capture_starttime; from pathlib import Path; p=Path(sys.argv[1]); pid=int(sys.argv[2]); start=capture_starttime(pid); assert start; (p / \"job.pid.start\").write_text(json.dumps({\"pid\":pid,\"start\":start}))" "$TH_JOB_TASK" "$$" && unset TH_JOB_PY && echo $$ > "$TH_JOB_TASK/job.pid.tmp" && mv -f -- "$TH_JOB_TASK/job.pid.tmp" "$TH_JOB_TASK/job.pid" && { if [[ -n ${TH_JOB_START_NOTIFY_FD:-} ]]; then printf S >&"$TH_JOB_START_NOTIFY_FD" && exec {TH_JOB_START_NOTIFY_FD}>&- && unset TH_JOB_START_NOTIFY_FD; fi; } && exec "$@"' _ "$@" <&$input_fd >&$output_fd 2>&$error_fd {output_fd}>&- {error_fd}>&- {task_lock}>&- &
   child=$!
   exec {input_fd}<&-
+  exec {output_fd}>&- {error_fd}>&-
   trap 'kill -INT -- "-$child" 2>/dev/null || : ' INT
   trap 'kill -TERM -- "-$child" 2>/dev/null || : ' TERM
   for ((i=0; i<100; i++)); do
