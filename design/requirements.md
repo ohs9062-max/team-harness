@@ -92,7 +92,7 @@
 | K27 | 관찰 기록 읽기·디코딩 오류 시 th-stop rc1·STOP_INCOMPLETE 줄 없음, 표식은 incomplete | `_outputs/a04_user_stop_20261126_v3/.th_adopt/terra/VERDICT.md` | 알려진 한계, 사용자 결정 |
 | K24 | 쿼터 잠금 판정에서 파일 읽기 직후 stat이 FileNotFoundError면 해제로 본다(quota_lock.py:47,77; 실제로는 파일 삭제 시에만) | `_outputs/a03_quota_expiry_20261126_r2_v3/.th_adopt/terra/VERDICT.md` | 알려진 한계, 사용자 결정 |
 | K23 | design 디렉터리 source의 채택 영수증에 decisions.md 대상 누락 | `src/team_harness/adoption_gate.py` | 해결 (커밋: fix(R6,K23): bind design directory receipt subject) |
-| K22 | Claude hook 실행 감싸기(P1)는 `&&`·`;`·`\|`·`&` 복합 셸 명령을 감싸지 않고 원래대로 실행(`exec_map.py:14`) | `_outputs/p1_claude_hook_20261125_v2/.th_adopt/terra/VERDICT.md` | 공통 분류기에서 복합 명령 구간별 가로채기 구현; 끝의 단독 `&` 및 명령 치환은 제외 |
+| K22 | Claude hook 실행 감싸기(P1)는 `&&`·`;`·`\|`·`&` 복합 셸 명령을 감싸지 않고 원래대로 실행(`exec_map.py:14`) | `_outputs/p1_claude_hook_20261125_v2/.th_adopt/terra/VERDICT.md` | 공통 분류기에서 복합 명령 구간별 가로채기 구현; 끝의 단독 `&` 및 명령 치환은 제외. 인용된 `&&`·`;`도 구분자로 볼 수 있음(`echo "&&" python train.py` 과잉 감싸기); 복합 구간의 사용자 규칙은 인용 정규화 후 적용; 셸 주석(`#`) 안의 대상도 감쌀 수 있음 |
 
 ## 4. 오늘의 진행 원칙 (R13)
 
