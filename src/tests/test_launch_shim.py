@@ -392,7 +392,7 @@ def test_direct_executor_artifacts_and_signals(tmp_path: Path) -> None:
         "if os.getenv('SIGNAL_TEST'):\n"
         " def stop(sig, frame):\n"
         "  print(f'signal={sig}', flush=True); sys.exit(128 + sig)\n"
-        " signal.signal(signal.SIGINT, stop); signal.signal(signal.SIGTERM, stop)\n"
+        " signal.signal(signal.SIGINT, stop); signal.signal(signal.SIGTERM, stop); signal.signal(signal.SIGHUP, stop)\n"
         " print('ready', flush=True)\n"
         " while True: time.sleep(1)\n"
         "print(sys.stdin.read(), end='', flush=True)\n"
@@ -407,8 +407,9 @@ def test_direct_executor_artifacts_and_signals(tmp_path: Path) -> None:
         assert (task / "exit_code").read_text().strip() == str(code)
         assert f"rc={code}" in (task / "STATUS").read_text()
         assert (task / ("DONE" if code == 0 else "FAILED")).exists()
-        assert "input\n" in (task / "logs/job.log").read_text()
-        assert "error" in (task / "logs/job.log").read_text()
+        assert not (task / "logs/job.log").exists()
+        assert "out=-" in (task / "STATUS").read_text()
+        assert int((task / "job.pid").read_text()) > 0
         events = [
             json.loads(line)
             for line in (tmp_path / "watch/exec_pipeline.jsonl")
@@ -421,7 +422,7 @@ def test_direct_executor_artifacts_and_signals(tmp_path: Path) -> None:
             and x["event"]["exit_code"] == code
             for x in events
         )
-    for sig in (signal.SIGINT, signal.SIGTERM):
+    for sig in (signal.SIGTERM, signal.SIGHUP):
         proc = subprocess.Popen(
             ["codex", "exec", "-"],
             env=dict(env, SIGNAL_TEST="1"),
@@ -476,3 +477,72 @@ def test_direct_executor_bootstrap_failure(
     assert result.returncode == 7
     assert result.stdout == "REAL_EXECUTED\npayload\n"
     assert result.stderr == "th execution fail-open: executor unavailable\n"
+
+
+def test_direct_executor_tty_and_ctrl_c(tmp_path: Path) -> None:
+    import pty
+    import select
+
+    env, _ = setup_cli(tmp_path)
+    env.pop("TH_ROLE", None)
+    env.pop("TH_JOB_TASK", None)
+    env.update(TH_NO_DAEMON="1", TH_SHIM_QUIET="1")
+    fake = tmp_path / "bin/codex"
+    fake.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os, signal, sys, time\n"
+        "for fd in range(3): print(f'fd{fd}_tty={os.isatty(fd)}', flush=True)\n"
+        "fd = os.open('/dev/tty', os.O_RDONLY); os.close(fd)\n"
+        "print('controlling_tty=yes', flush=True)\n"
+        "if os.getenv('INT_TEST'):\n"
+        " signal.signal(signal.SIGINT, signal.SIG_DFL)\n"
+        " print('ready', flush=True)\n"
+        " while True: time.sleep(1)\n"
+        "sys.exit(7)\n"
+    )
+    for interrupt in (False, True):
+        pid, fd = pty.fork()
+        if pid == 0:
+            os.execvpe(
+                "codex",
+                ["codex", "exec", "probe"],
+                dict(env, INT_TEST="1" if interrupt else ""),
+            )
+        output = b""
+        try:
+            while True:
+                readable, _, _ = select.select([fd], [], [], 10)
+                assert readable, output
+                try:
+                    data = os.read(fd, 4096)
+                except OSError:
+                    break
+                if not data:
+                    break
+                output += data
+                if interrupt and b"ready" in output:
+                    os.killpg(pid, signal.SIGINT)
+                    interrupt = False
+            _, status = os.waitpid(pid, 0)
+        finally:
+            os.close(fd)
+        assert b"fd0_tty=True" in output and b"fd1_tty=True" in output
+        assert b"fd2_tty=True" in output and b"controlling_tty=yes" in output
+        expected = 130 if b"ready" in output else 7
+        assert os.waitstatus_to_exitcode(status) == expected
+        task = Path((tmp_path / "watch/tasks.txt").read_text().splitlines()[-1])
+        assert (task / "exit_code").read_text().strip() == str(expected)
+        assert (task / "FAILED").exists() and (task / "job.pid").exists()
+
+
+def test_direct_child_signal_exit_code(tmp_path: Path) -> None:
+    env, _ = setup_cli(tmp_path)
+    env.pop("TH_ROLE", None)
+    env.pop("TH_JOB_TASK", None)
+    env["TH_NO_DAEMON"] = "1"
+    (tmp_path / "bin/codex").write_text("#!/bin/sh\nkill -TERM $$\n")
+    result = run(env, "codex", "exec", "-")
+    assert result.returncode == 143
+    task = Path((tmp_path / "watch/tasks.txt").read_text().splitlines()[-1])
+    assert (task / "exit_code").read_text().strip() == "143"
+    assert (task / "FAILED").exists()

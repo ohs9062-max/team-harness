@@ -185,7 +185,7 @@ def wrap_direct() -> None:
         from team_harness.exec_pipeline import ExecEvent
         from team_harness.exec_pipeline import run_post
         from team_harness.exec_pipeline import run_pre
-        from team_harness.exec_wrap import execute
+        from team_harness.exec_wrap import execute_direct
         from team_harness.exec_wrap import prepare_task
         from team_harness.proc_observer import has_ancestor_command
 
@@ -217,10 +217,10 @@ def wrap_direct() -> None:
         for warning in event.warnings[:5]:
             print(f"[th] {warning}", file=sys.stderr)
     os.environ["TH_SHIM_DEPTH"] = str(event.depth)
-    rc = execute(task, [real, *args])
+    rc = execute_direct(task, [real, *args])
     event.exit_code = rc
     event.ended_at = datetime.now(UTC).isoformat()
-    event.output_paths = [str(task / "logs/job.log")]
+    event.output_paths = []
     try:
         run_post(event)
     except Exception as exc:  # noqa: BLE001
