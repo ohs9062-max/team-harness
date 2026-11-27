@@ -251,3 +251,22 @@ def test_background_hook_rewrite(
     assert rewritten.endswith(" &")
     assert shlex.split(rewritten[:-2])[-1] == command[:-2]
     assert classify("sleep 1 &", tmp_path / "missing") is None
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ('echo "$(python3 eval.py)"', "experiment"),
+        ('x="$(python3 train.py)"', "experiment"),
+        ('echo "`python3 train.py`"', "experiment"),
+        ("echo '$(python3 train.py)'", None),
+        ('echo "$(date)"', None),
+        ('echo "$(cd x && python3 train.py)"', "experiment"),
+        ('echo "$(echo $(python3 train.py))"', "experiment"),
+        ('echo "$(date) $(codex exec hi)"', "agent_cli"),
+    ],
+)
+def test_quoted_substitutions(
+    tmp_path: Path, command: str, expected: str | None
+) -> None:
+    assert classify(command, tmp_path / "missing") == expected

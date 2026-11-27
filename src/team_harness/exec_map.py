@@ -26,6 +26,10 @@ def split_background(command: str) -> tuple[str, bool]:
 
 
 def classify(command: str, config: Path | None = None) -> str | None:
+    return _classify(command, config, 0)
+
+
+def _classify(command: str, config: Path | None, depth: int) -> str | None:
     command, _ = split_background(command)
     try:
         lexer = shlex.shlex(command, posix=True, punctuation_chars=";|&\n")
@@ -67,7 +71,7 @@ def classify(command: str, config: Path | None = None) -> str | None:
         lexer.commenters = ""
         tokens = [part for token in lexer for part in re.split(r"(\n)", token) if part]
     except ValueError:
-        return None
+        return _classify_substitutions(command, config, depth)
     segments: list[list[str]] = [[]]
     for token in tokens:
         if token in (";", "&&", "||", "|", "\n"):
@@ -78,7 +82,70 @@ def classify(command: str, config: Path | None = None) -> str | None:
     kinds = {_classify_segment(segment, rules, original) for segment in segments}
     if "agent_cli" in kinds:
         return "agent_cli"
+    if "experiment" in kinds:
+        return "experiment"
+    return _classify_substitutions(command, config, depth)
+
+
+def _classify_substitutions(
+    command: str, config: Path | None, depth: int
+) -> str | None:
+    if depth >= 3:
+        return None
+    kinds = {_classify(body, config, depth + 1) for body in _substitutions(command)}
+    if "agent_cli" in kinds:
+        return "agent_cli"
     return "experiment" if "experiment" in kinds else None
+
+
+def _substitutions(command: str) -> list[str]:
+    """Extract complete substitutions outside single quotes, respecting nesting."""
+    bodies: list[str] = []
+
+    def scan(start: int, terminator: str = "") -> int:
+        quote = ""
+        i = start
+        parentheses = 0
+        while i < len(command):
+            char = command[i]
+            if char == "\\" and quote != "'":
+                i += 2
+                continue
+            if char == "'" and quote != '"':
+                quote = "" if quote else "'"
+            elif char == '"' and quote != "'":
+                quote = "" if quote else '"'
+            elif quote != "'":
+                if command.startswith("$(", i):
+                    end = scan(i + 2, ")")
+                    if end < len(command):
+                        if not terminator:
+                            bodies.append(command[i + 2 : end])
+                        i = end
+                    else:
+                        return end
+                elif char == "`":
+                    if terminator == "`":
+                        return i
+                    end = scan(i + 1, "`")
+                    if end < len(command):
+                        if not terminator:
+                            bodies.append(command[i + 1 : end])
+                        i = end
+                    else:
+                        return end
+                elif terminator == ")" and not quote:
+                    if char == "(":
+                        parentheses += 1
+                    elif char == ")":
+                        if not parentheses:
+                            return i
+                        parentheses -= 1
+            i += 1
+        return i
+
+    scan(0)
+    return bodies
 
 
 def _classify_segment(argv: list[str], rules: list, original: str | None) -> str | None:
