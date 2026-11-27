@@ -378,6 +378,7 @@ if [[ "$worker_type" == "codex" ]]; then
   else
     worker_cmd=(codex exec -m "$model" -c "model_reasoning_effort=$effort" -c "mcp_servers={}" "${project_doc_args[@]}" --dangerously-bypass-approvals-and-sandbox -C "$worktree")
   fi
+  timeout 2s "$script_dir/th-env.sh" -m team_harness.launch_pipeline pre "$task_dir" th_launch "$worker_type" "${worker_cmd[@]}" "${@}" -- "$prompt" >/dev/null 2>&1 || true
   (
     if [[ "$spawn_mode" == "resume" && -n "$resume_session_id" ]]; then cd "$worktree"; fi
     exec {launch_lock_fd}>&-
@@ -389,6 +390,7 @@ elif [[ "$worker_type" == "agy" ]]; then
   if [[ -n "$worktree" && "$worktree" != "$task_dir" && -d "$worktree" ]]; then
     add_dir_args+=("--add-dir" "$worktree")
   fi
+  timeout 2s "$script_dir/th-env.sh" -m team_harness.launch_pipeline pre "$task_dir" th_launch "$worker_type" agy --dangerously-skip-permissions --model "$model" "${add_dir_args[@]}" "$@" --print="$prompt" >/dev/null 2>&1 || true
   env -u TH_JOB_TASK "${worker_env[@]}" setsid nohup "${adopt_timeout[@]}" agy --dangerously-skip-permissions --model "$model" "${add_dir_args[@]}" "$@" --print="$prompt" < /dev/null > agy.log 2>&1 {launch_lock_fd}>&- &
   init_pid=$!
 
@@ -426,6 +428,7 @@ elif [[ "$worker_type" == "claude" ]]; then
   else
     worker_cmd=(claude -p --dangerously-skip-permissions --model "$model" --strict-mcp-config)
   fi
+  timeout 2s "$script_dir/th-env.sh" -m team_harness.launch_pipeline pre "$task_dir" th_launch "$worker_type" "${worker_cmd[@]}" "${@}" -- "$prompt" >/dev/null 2>&1 || true
   env -u TH_JOB_TASK "${worker_env[@]}" setsid nohup "${worker_cmd[@]}" "$@" -- "$prompt" < /dev/null > claude.log 2>&1 {launch_lock_fd}>&- &
   printf '%s\n' "$!" > "$task_dir/worker.pid"
 fi

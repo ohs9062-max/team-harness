@@ -16,6 +16,9 @@ log="$task/logs/job.log"
 if [[ ${1:-} == --log ]]; then [[ $# -ge 3 ]] || exit 2; log=$2; shift 2; fi
 [[ ${1:-} == -- && $# -ge 2 ]] || exit 2
 shift
+if [[ -z ${TH_EXEC_ID:-} && -z ${TH_EXEC_EVENT_ID:-} ]]; then
+  TH_PIPELINE_OUTPUT="$log" timeout 2s "$script_dir/th-env.sh" -m team_harness.launch_pipeline pre "$task" th_job_start "${1##*/}" "$@" >/dev/null 2>&1 || true
+fi
 mkdir -p -- "$(dirname "$log")"
 rm -f -- "$task/job.pid" "$task/job.pid.start"
 export TH_JOB_TASK="$task" TH_JOB_PY="$script_dir/th-env.sh"
@@ -37,6 +40,9 @@ if (( wait_mode )); then
   rc=$?
   if kill -0 "$child" 2>/dev/null; then wait "$child"; rc=$?; fi
   set -e
+  if [[ -z ${TH_EXEC_ID:-} && -z ${TH_EXEC_EVENT_ID:-} ]]; then
+    timeout 2s "$script_dir/th-env.sh" -m team_harness.launch_pipeline post "$task" th_job_start "$rc" >/dev/null 2>&1 || true
+  fi
   exit "$rc"
 fi
 setsid bash -c '"$TH_JOB_PY" -c "import json,sys; from team_harness.agents.process_identity import capture_starttime; from pathlib import Path; p=Path(sys.argv[1]); pid=int(sys.argv[2]); start=capture_starttime(pid); assert start; (p / \"job.pid.start\").write_text(json.dumps({\"pid\":pid,\"start\":start}))" "$TH_JOB_TASK" "$$" && unset TH_JOB_PY && echo $$ > "$TH_JOB_TASK/job.pid.tmp" && mv -f -- "$TH_JOB_TASK/job.pid.tmp" "$TH_JOB_TASK/job.pid" && exec "$@"' _ "$@" </dev/null >>"$log" 2>&1 {task_lock}>&- &

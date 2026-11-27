@@ -146,7 +146,7 @@ def _policy(event: ExecEvent) -> StageResult:
     wd = watch_dir()
     task = Path(event.task or event.cwd or os.getcwd()).resolve()
     cwd = Path(event.cwd or os.getcwd()).resolve()
-    if (cwd / "task.md").is_file():
+    if event.route not in {"th_launch", "th_job_start"} and (cwd / "task.md").is_file():
         task = cwd
     owner = next(
         (
@@ -319,7 +319,7 @@ def _repeat(event: ExecEvent) -> StageResult:
 
 
 def _observed_verify(event: ExecEvent) -> StageResult:
-    if event.route in {"path_shim", "claude_hook"}:
+    if event.route in {"path_shim", "claude_hook", "th_launch", "th_job_start"}:
         return StageResult("observed_verify", 0, "registered task handled by watchd")
 
     from team_harness.observed_verify import launch

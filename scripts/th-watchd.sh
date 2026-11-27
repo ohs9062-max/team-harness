@@ -164,6 +164,11 @@ handle_daemon_event() {
   local now_sec
   now_sec=$(date '+%F %T')
 
+  case "$event_type" in
+    완료|실패|'실패 의심'|'워커 중단(인계 없음)'|'워커 오류(쿼터·용량)'|중단)
+      timeout 2s "$script_dir/th-env.sh" -m team_harness.launch_pipeline post "$task" th_launch "$event_type" >/dev/null 2>&1 || true ;;
+  esac
+
   local digest_event
   case "$event_type" in
     완료) digest_event=done ;;
