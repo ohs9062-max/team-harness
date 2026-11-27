@@ -15,6 +15,7 @@ sys.path.insert(
     os.environ.get("TH_HARNESS_SRC", str(Path(__file__).resolve().parents[2] / "src")),
 )
 from team_harness.exec_map import classify
+from team_harness.exec_map import split_background
 from team_harness.exec_pipeline import ExecEvent
 from team_harness.exec_pipeline import run_post
 from team_harness.exec_pipeline import run_pre
@@ -119,9 +120,12 @@ def main(payload, codex=False, agy=False):
             os.environ.get("TH_HARNESS_SRC", str(runner.parents[2] / "src"))
         ).parent
         runner = source / "scripts/hooks/th-exec-pipeline.py"
+        body, background = split_background(command)
         new_command = shlex.join(
-            [sys.executable, str(runner), "--execute", str(task), command]
+            [sys.executable, str(runner), "--execute", str(task), body]
         )
+        if background:
+            new_command += " &"
         if agy:
             print(
                 json.dumps(

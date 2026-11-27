@@ -144,11 +144,11 @@ def test_codex_hook_rewrite_and_cleanup(
         ("A=1 python train.py; echo done", "experiment"),
         ("env A=1 python train.py\necho done", "experiment"),
         ("cd x &&\npython train.py", "experiment"),
-        ("python train.py &\n", None),
+        ("python train.py &\n", "experiment"),
         ('cd x && codex exec "hi"', "agent_cli"),
         ("python train.py && codex exec hi", "agent_cli"),
         ("ls && echo hi", None),
-        ("python3 train.py &", None),
+        ("python3 train.py &", "experiment"),
         ("bash scripts/th-job-start.sh task && python train.py", None),
         ("python 'train.py", None),
     ],
@@ -205,3 +205,49 @@ def test_agy_hook_payload_rewrite_and_post(
     monkeypatch.setattr(hook, "ancestor_is_th", lambda: True)
     hook.main(pre, agy=True)
     assert capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python3 train.py > /tmp/x.log 2>&1 &",
+        "nohup python train.py &",
+        "echo $(python3 eval.py)",
+        "x=`python3 train.py`",
+    ],
+)
+def test_background_and_substitution(tmp_path: Path, command: str) -> None:
+    assert classify(command, tmp_path / "missing") == "experiment"
+
+
+def test_background_hook_rewrite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import importlib.util
+    import json
+    import shlex
+
+    path = Path(__file__).resolve().parents[2] / "scripts/hooks/th-exec-pipeline.py"
+    spec = importlib.util.spec_from_file_location("background_hook", path)
+    assert spec and spec.loader
+    hook = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hook)
+    monkeypatch.setenv("TH_WATCH_DIR", str(tmp_path))
+    monkeypatch.delenv("TH_ROLE", raising=False)
+    monkeypatch.delenv("TH_EXEC_WRAP", raising=False)
+    monkeypatch.setattr(hook, "ancestor_is_th", lambda: False)
+    command = "python3 train.py > /tmp/x.log 2>&1 &"
+    hook.main(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": command},
+            "tool_use_id": "bg",
+        }
+    )
+    rewritten = json.loads(capsys.readouterr().out)["hookSpecificOutput"][
+        "updatedInput"
+    ]["command"]
+    assert rewritten.endswith(" &")
+    assert shlex.split(rewritten[:-2])[-1] == command[:-2]
+    assert classify("sleep 1 &", tmp_path / "missing") is None

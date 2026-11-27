@@ -6,7 +6,27 @@ import shlex
 import tomllib
 
 
+def split_background(command: str) -> tuple[str, bool]:
+    """Remove an unquoted trailing shell background operator."""
+    end = len(command.rstrip())
+    if not end or command[end - 1] != "&":
+        return command, False
+    quote = ""
+    escaped = False
+    for char in command[: end - 1]:
+        if escaped:
+            escaped = False
+        elif char == "\\" and quote != "'":
+            escaped = True
+        elif char in "'\"" and (not quote or quote == char):
+            quote = "" if quote else char
+    if quote or escaped or (end > 1 and command[end - 2] in "&>"):
+        return command, False
+    return command[: end - 1].rstrip(), True
+
+
 def classify(command: str, config: Path | None = None) -> str | None:
+    command, _ = split_background(command)
     try:
         lexer = shlex.shlex(command, posix=True, punctuation_chars=";|&\n")
         lexer.whitespace = " \t\r"
@@ -15,9 +35,7 @@ def classify(command: str, config: Path | None = None) -> str | None:
         tokens = [part for token in lexer for part in re.split(r"(\n)", token) if part]
     except ValueError:
         return None
-    if not tokens or next((t for t in reversed(tokens) if t != "\n"), "") == "&":
-        return None
-    if "`" in command or "$(" in command:
+    if not tokens:
         return None
     if any(Path(x).name in {"th-job-start.sh", "th-launch.sh"} for x in tokens):
         return None
@@ -36,6 +54,20 @@ def classify(command: str, config: Path | None = None) -> str | None:
     for rule in rules:
         if re.search(rule["pattern"], command):
             return rule["kind"]
+    # Split substitution delimiters for classification only; execution uses the original.
+    classification = (
+        re.sub(r"\$\(|`|[()]", "\n", command)
+        if "$(" in command or "`" in command
+        else command
+    )
+    try:
+        lexer = shlex.shlex(classification, posix=True, punctuation_chars=";|&\n")
+        lexer.whitespace = " \t\r"
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        tokens = [part for token in lexer for part in re.split(r"(\n)", token) if part]
+    except ValueError:
+        return None
     segments: list[list[str]] = [[]]
     for token in tokens:
         if token in (";", "&&", "||", "|", "\n"):
@@ -52,6 +84,8 @@ def classify(command: str, config: Path | None = None) -> str | None:
 def _classify_segment(argv: list[str], rules: list, original: str | None) -> str | None:
     initial = argv
     while argv and re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*=", argv[0]):
+        argv = argv[1:]
+    if argv and Path(argv[0]).name == "nohup":
         argv = argv[1:]
     if argv and Path(argv[0]).name == "env":
         argv = argv[1:]
