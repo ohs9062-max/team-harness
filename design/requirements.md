@@ -59,6 +59,16 @@
 
 | # | 내용 | 근거 | 상태 |
 |---|---|---|---|
+| K31 | 부분 설치 시 명령 미실행 | `_outputs/p2_review_20261127/sol/REPORT.md #1` | 알려진 한계, 후속 |
+| K32 | PID에 보낸 INT/QUIT 무시 | `_outputs/p2_review_20261127/sol/REPORT.md #2` | 알려진 한계, 후속 |
+| K33 | 잠금 무제한 대기 | `_outputs/p2_review_20261127/sol/REPORT.md #3; carbon/REPORT.md #2` | 알려진 한계, 후속 |
+| K34 | 신호 사망을 128+n 종료 코드로 보고 | `_outputs/p2_review_20261127/carbon/REPORT.md #4` | 알려진 한계, 후속 |
+| K35 | owner를 cwd 상위 .git으로 잡아 임시 실행 알림 유입 | `_outputs/p2_review_20261127/carbon/REPORT.md #1; sol/REPORT.md #8` | 알려진 한계, 후속 |
+| K36 | FAILED 미은퇴 | `_outputs/p2_review_20261127/carbon/REPORT.md #8` | 알려진 한계, 후속 |
+| K37 | 비대화 판정 5곳 불일치 | `_outputs/p2_review_20261127/carbon/REPORT.md #6; sol/REPORT.md #12` | 알려진 한계, 후속 |
+| K38 | FD/SIGPIPE 상속 변경 | `_outputs/p2_review_20261127/sol/REPORT.md #4` | 알려진 한계, 후속 |
+| K39 | 원본 task 검수 인계 단절 | `_outputs/p2_review_20261127/sol/REPORT.md #7` | 알려진 한계, 후속 |
+| K40 | Claude hook과 실행기 분열 | `_outputs/p2_review_20261127/sol/REPORT.md #9; carbon/REPORT.md` | 알려진 한계, 후속 |
 | K30 | 독립 검증자가 STATUS를 대상 worktree(cwd)에 써서 adopt 증거 해시가 바뀌고 종합이 '채택 보류'가 됨(crosscheck adopt_snapshot은 최상위 STATUS만 휘발 취급) | `_outputs/p2_shim_executor_20261126/.th_adopt/CROSSCHECK.md` | 미해결 — 후속 단위 |
 | K29 | `verify_result.json`을 처음부터 못 읽으면(깨진 JSON) 검수 알림이 아예 나가지 않음(`th-watchd.sh:236-237`, main부터 있던 동작) | `_outputs/a06_verify_fail_reason_20261126_v1/.th_adopt/terra/VERDICT.md` | 알려진 한계, 후속 |
 | K1 | 저널: inode 교체 + 앞부분 편집 시 새 결정 누락(오프셋 방식) | `_outputs/final_fix_20261125/.th_adopt/terra/VERDICT.md` | 해시 집합 방식으로 해결 |
@@ -99,7 +109,7 @@
 
 ## 6. 구조 원칙 (15:35 — 사용자 지시, 모든 단위의 기준)
 
-- 상태: Claude Bash hook에 공통 파이프라인과 동기 job-start 연결을 추가했다(P1: `160b74f`, `5a5d12e`; 복합 명령 한계 K22). PATH shim 실행기 연결(P2) main 반영: 셸 직접 실행 codex/agy/claude(비대화)를 공통 실행기로 감싸고 준비 실패 시 실제 CLI로 fail-open.
+- 상태: Claude Bash hook에 공통 파이프라인과 동기 job-start 연결을 추가했다(P1: `160b74f`, `5a5d12e`; 복합 명령 한계 K22). PATH shim(P2) main 반영: 셸에서 직접 친 비대화 codex/agy/claude를 th 작업(shim-jobs)으로 실행
 - 원인: 판정 로직의 **입력이 th 작업 폴더(STATUS·DONE·REPORT)** 였다. th로 띄우지 않으면 폴더가 없어 아무것도 발동하지 않는다. 그 위에 "th 밖" 행을 덧붙이는 식이라 반복 실패.
 - 원칙: 판정 로직은 **실행 사건 하나**(누가·어디서·어떤 명령·출력·종료 코드·결과 파일)를 입력으로 받는 공통 함수다. th는 여러 호출자 중 하나일 뿐이다.
 - 진입점 매핑(어댑터): th-launch/watchd(작업 폴더 → 사건), Claude hook(PreToolUse/PostToolUse의 Bash 명령·출력 → 사건, Stop → 최종 보고), Codex/agy hook 또는 전역 래퍼, git hook(merge·push), th run/repl·protocol·SDK. 코디네이터가 무엇으로 실행하든 hook이 사건을 넘긴다 — 코디네이터 선택에 의존하지 않는다.
