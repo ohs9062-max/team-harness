@@ -32,7 +32,7 @@
 | R12 | 테스트가 감시 프로세스를 남기지 않기, 가짜 알림 금지, 판정 뒤 반례가 버려지지 않기, 감시 프로세스 자기 종료 | 11-25 |
 | R13 | 반영은 **기능 단위로 작게**, 단계별로. 몰아서 하지 않기. 검증은 main 대비 회귀·심각 결함만 차단, 새 기능 경계 사례는 '알려진 한계' | 11-25 |
 | R14 | 외부 분석 반영: 실행≠검증≠결론 타당(**VERIFIED/VALIDATED 분리**), 장시간 학습 전 메커니즘 측정 게이트, 3계층 검증(결정론 우선), 요구사항 ID 추적 | 11-25 |
-| R15 | 모든 실행 경로 적용(th-launch·job-start·watchd·protocol A/B/C·run/repl·SDK + **th 밖 직접 실행**: Claude hook) — AGENTS.md 규칙 4 | 상시 |
+| R15 | 모든 실행 경로 적용(th-launch·job-start·watchd·protocol A/B/C·run/repl·SDK + **th 밖 직접 실행**: Claude hook) — AGENTS.md 규칙 4 | 측정 표 작성, 일부 미실측 (`design/designs/interception_matrix.md`) |
 | C1 | 우회 환경변수(TH_CROSSCHECK_SKIP, TH_CANARY_SKIP, TH_PATHS_SKIP) 금지. main merge·push는 승인 범위 안에서만. kill·삭제는 승인 필요 | 상시 |
 
 ## 2. 구현 상태
