@@ -928,16 +928,17 @@ PATH shim은 백그라운드 실행기 대신 같은 세션의 자식 프로세�
 
 ## TH-D59. Codex Bash hook을 공통 실행기로 연결한다
 
-Codex PreToolUse는 분류 대상 Bash에 사전 정책을 적용하고 `permission_mode == "bypassPermissions"`일 때만 `allow`와 `updatedInput`으로 공통 실행기 명령을 적용한다. 그 외 모드에서는 원래 명령을 유지해 Codex 승인 규칙에 맡긴다. 배포기는 기존 Codex hook을 보존하고 같은 hook을 중복 등록하지 않는다. TH-D57은 기존 결과 코드 결정이므로 번호 충돌을 피했다.
+Codex PreToolUse는 분류 대상 Bash에 사전 정책을 적용하고 `permission_mode == "bypassPermissions"`일 때 `allow`와 `updatedInput`으로 공통 실행기 명령을 적용한다. 확인된 승인 요구 `default` 모드에서는 원래 명령을 거부하고 감싼 명령을 재요청하도록 안내한다. 재요청은 Codex 승인 정책을 따르며 알 수 없는 모드는 원래대로 둔다.
+분류기는 실행기 명령을 재분류하지 않으며 작업 폴더와 재요청 사건은 실제 실행 시 만든다. 배포기는 기존 Codex hook을 보존하고 같은 hook을 중복 등록하지 않는다. TH-D57은 기존 결과 코드 결정이므로 번호 충돌을 피했다.
 
 배포 시 th가 설치한 Codex hook의 현재 위치와 정규화된 선언 해시를 `hooks.state`에 신뢰 등록한다.
 다른 hook의 신뢰 설정과 기존 TOML 내용은 보존하고 변경된 설정은 기존 배포 백업 규칙을 따른다.
 
 ### 적용 경로:
 
-| th-launch | watchd | run/repl | protocol | SDK | PATH shim | Claude hook | Codex hook | git hook | th 밖(직접 실행) |
-|---|---|---|---|---|---|---|---|---|---|
-| 기존 th | 변경 없음 | 변경 없음 | 변경 없음 | 변경 없음 | 변경 없음 | 공통 어댑터 분기 | PreToolUse 정책 적용, bypassPermissions에서만 `allow`와 `updatedInput`으로 변환하고 그 외에는 원래 명령 유지, 배포 시 신뢰 등록(`deployment.py`) | 변경 없음 | 셸에서 직접 실행한 codex 세션의 Bash 도구 → 이 Codex hook(전역 `~/.codex/hooks.json`) |
+| th-launch | watchd | run/repl | protocol | SDK | PATH shim | Claude hook | Codex hook | agy hook | git hook | th 밖(직접 실행) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 없음 | 없음 | 없음 | 없음 | 없음 | 없음 | 분류기 재귀 방지 공유(회귀 테스트) | 승인 요구 모드 재요청 | 분류기 공유(회귀 테스트) | 없음 | 사용자가 터미널에서 연 대화형 Codex(기본 승인 모드)의 Bash |
 
 ## TH-D60. agy run_command hook을 공통 실행기에 연결한다
 
