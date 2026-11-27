@@ -109,16 +109,16 @@ def main(payload, codex=False, agy=False):
                 )
             )
             return
-        # Only the explicitly observed automatic-approval mode can safely use
-        # Codex's allow decision; unknown and approval-requiring modes retain
-        # their original command and approval behavior.
-        if codex and payload.get("permission_mode") != "bypassPermissions":
+        mode = payload.get("permission_mode")
+        if codex and mode not in ("default", "bypassPermissions"):
             return
         task = Path(event.task)
-        state.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        fd = os.open(state, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "w") as f:
-            f.write(event.to_json())
+        reissue = codex and mode == "default"
+        if not reissue:
+            state.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            fd = os.open(state, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w") as f:
+                f.write(event.to_json())
         runner = Path(__file__).resolve()
         # Installed hook uses the source runner so paths remain stable after deployment.
         source = Path(
@@ -137,9 +137,25 @@ def main(payload, codex=False, agy=False):
                 event.owner,
                 event.session,
             ]
+            + ([event.to_json()] if reissue else [])
         )
         if background:
             new_command += " &"
+        if reissue:
+            print(
+                json.dumps(
+                    {
+                        "hookSpecificOutput": {
+                            "hookEventName": event_name,
+                            "permissionDecision": "deny",
+                            "permissionDecisionReason": "This command must run through th. Reissue exactly this command: "
+                            + new_command,
+                        }
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return
         if agy:
             print(
                 json.dumps(
@@ -160,6 +176,19 @@ def main(payload, codex=False, agy=False):
         print(json.dumps({"hookSpecificOutput": output}, ensure_ascii=False))
     elif event_name == "PostToolUse":
         state = state_path(payload)
+        if codex and not state.exists():
+            try:
+                parts = shlex.split(payload.get("tool_input", {}).get("command", ""))
+                index = parts.index("--execute")
+                runner = Path(parts[index - 1])
+                task = Path(parts[index + 1]).resolve()
+                if (
+                    runner.name == "th-exec-pipeline.py"
+                    and task.parent == (watch_dir() / "claude-jobs").resolve()
+                ):
+                    state = task / ".th_exec_event.json"
+            except (ValueError, IndexError):
+                return
         if not state.exists():
             if agy:
                 print("{}")
@@ -179,10 +208,12 @@ def main(payload, codex=False, agy=False):
             print("{}")
 
 
-def execute(task, command, owner=None, session=None):
+def execute(task, command, owner=None, session=None, event_json=None):
     if owner is not None and session is not None:
         try:
             initialize_task(Path(task), owner, session)
+            if event_json is not None:
+                (Path(task) / ".th_exec_event.json").write_text(event_json)
         except OSError:
             # execute_shared handles preparation failure by running directly.
             pass
@@ -192,7 +223,7 @@ def execute(task, command, owner=None, session=None):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) in (4, 6) and sys.argv[1] == "--execute":
+    if len(sys.argv) in (4, 6, 7) and sys.argv[1] == "--execute":
         sys.exit(execute(*sys.argv[2:]))
     try:
         main(

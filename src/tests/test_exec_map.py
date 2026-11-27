@@ -25,6 +25,7 @@ def test_default_mapping(tmp_path: Path) -> None:
         "claude",
         "agy",
         "th-job-start.sh task -- python train.py",
+        "TH_EXEC_ID=x /usr/bin/python3 /x/th-exec-pipeline.py --execute /t 'python3 train.py'",
     ):
         assert classify(cmd, missing) is None
 
@@ -125,19 +126,50 @@ def test_codex_hook_rewrite_and_cleanup(
         assert not output
         assert not hook.state_path(payload).exists()
         assert not (tmp_path / "claude-jobs").exists()
-    for i, mode in enumerate(("on-request", "default", "unknown", None)):
+    for i, mode in enumerate(("on-request", "unknown", None)):
         payload.update(permission_mode=mode, tool_use_id=f"mode-{i}")
         payload["tool_input"]["command"] = "python train.py"
         hook.main(payload, codex=True)
         assert not capsys.readouterr().out
         assert not hook.state_path(payload).exists()
+    payload.update(permission_mode="default", tool_use_id="ask")
+    hook.main(payload, codex=True)
+    result = json.loads(capsys.readouterr().out)["hookSpecificOutput"]
+    assert result["permissionDecision"] == "deny"
+    assert "updatedInput" not in result
+    command = result["permissionDecisionReason"].split(
+        "Reissue exactly this command: ", 1
+    )[1]
+    assert command.startswith("TH_EXEC_ID=")
+    assert not hook.state_path(payload).exists()
+    assert not (tmp_path / "claude-jobs").exists()
+    payload["tool_input"]["command"] = command
+    hook.main(payload, codex=True)
+    assert not capsys.readouterr().out
+    import shlex
+
+    parts = shlex.split(command)
+    index = parts.index("--execute")
+    monkeypatch.setattr(hook, "execute_shared", lambda *args: 7)
+    assert hook.execute(*parts[index + 1 :]) == 7
+    event_file = Path(parts[index + 1]) / ".th_exec_event.json"
+    assert event_file.exists()
+    recorded = []
+    monkeypatch.setattr(hook, "run_post", lambda event: recorded.append(event))
+    payload["hook_event_name"] = "PostToolUse"
+    payload["tool_use_id"] = "reissued"
+    hook.main(payload, codex=True)
+    assert len(recorded) == 1
+    assert not event_file.exists()
+    payload["hook_event_name"] = "PreToolUse"
+    payload["tool_input"]["command"] = "python train.py"
     payload.update(permission_mode="bypassPermissions", tool_use_id="auto")
     hook.main(payload, codex=True)
     result = json.loads(capsys.readouterr().out)["hookSpecificOutput"]
     assert result["permissionDecision"] == "allow"
     assert result["updatedInput"]["command"].startswith("TH_EXEC_ID=")
     assert hook.state_path(payload).exists()
-    assert not (tmp_path / "claude-jobs").exists()
+    assert list((tmp_path / "claude-jobs").iterdir()) == [event_file.parent]
     payload["hook_event_name"] = "PostToolUse"
     hook.main(payload, codex=True)
     assert not hook.state_path(payload).exists()

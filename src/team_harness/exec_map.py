@@ -41,7 +41,10 @@ def _classify(command: str, config: Path | None, depth: int) -> str | None:
         return None
     if not tokens:
         return None
-    if any(Path(x).name in {"th-job-start.sh", "th-launch.sh"} for x in tokens):
+    if any(
+        Path(x).name in {"th-job-start.sh", "th-launch.sh", "th-exec-pipeline.py"}
+        for x in tokens
+    ):
         return None
     config = config or Path.home() / ".team-harness/exec_map.toml"
     try:
