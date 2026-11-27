@@ -938,3 +938,13 @@ Codex의 PreToolUse는 분류 대상 Bash 명령을 공통 파이프라인과 �
 | th-launch | watchd | run/repl | protocol | SDK | PATH shim | Claude hook | Codex hook | git hook | th 밖(직접 실행) |
 |---|---|---|---|---|---|---|---|---|---|
 | 기존 th | 변경 없음 | 변경 없음 | 변경 없음 | 변경 없음 | 변경 없음 | 공통 어댑터 분기 | PreToolUse 변환·PostToolUse 정리, 배포 시 신뢰 등록(`deployment.py`) | 변경 없음 | 셸에서 직접 실행한 codex 세션의 Bash 도구 → 이 Codex hook(전역 `~/.codex/hooks.json`) |
+
+## TH-D60. agy run_command hook을 공통 실행기에 연결한다
+
+agy `PreToolUse`에서 분류 대상 `run_command`의 `CommandLine`을 공통 파이프라인과 동기 th 실행기로 바꾸고 `PostToolUse`에서 실행 사건을 마무리한다. 배포기는 `~/.gemini/config/hooks.json`의 다른 이름의 hook을 보존하며 `team-harness-exec`을 등록한다. 워커와 th 하위 실행은 건너뛴다.
+
+### 적용 경로:
+
+| th-launch | watchd | run/repl | protocol | SDK | PATH shim | Claude hook | Codex hook | agy hook | git hook | th 밖(직접 실행) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| th agy 워커의 셸 도구도 이 hook(단 TH_ROLE=worker 건너뜀 — 기존 정책 유지) | 없음 | 없음 | 없음 | 없음 | 변경 없음 | 공통 어댑터(회귀 테스트) | 공통 어댑터(회귀 테스트) | 새 분기 + 배포 | 없음 | 셸에서 직접 연 agy가 run_command를 쓰면 `~/.gemini/config/hooks.json` → 공통 어댑터 |
