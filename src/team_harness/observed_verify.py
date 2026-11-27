@@ -123,9 +123,9 @@ def run(task: Path, ended_at: str, owner: str, route: str, message: str) -> None
                 verification = verify(task, force=True)
             overall = verification[0].get("overall")
             if overall == "PASS":
-                verdict = "PASS (결과 2)"
+                verdict = "PASS (결과 0)"
             elif overall == "FAIL":
-                verdict = "FAIL (결과 0)"
+                verdict = "FAIL (결과 2)"
             else:
                 verdict = "판정 보류 (결과 1)"
             if overall == "FAIL":

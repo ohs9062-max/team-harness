@@ -155,8 +155,8 @@ def test_fresh_verification_reused_for_report(
 @pytest.mark.parametrize(
     ("overall", "expected"),
     [
-        ("PASS", "PASS (결과 2)"),
-        ("FAIL", "FAIL (결과 0)"),
+        ("PASS", "PASS (결과 0)"),
+        ("FAIL", "FAIL (결과 2)"),
         ("WARN", "판정 보류 (결과 1)"),
         ("SKIP", "판정 보류 (결과 1)"),
         (None, "판정 보류 (결과 1)"),
@@ -184,6 +184,19 @@ def test_observed_verdicts(
         "finished",
     )
     assert expected in notices[0]
+
+
+def test_run_without_verification_is_deferred(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "task.md").write_text("# No verification\n")
+    notices = []
+    monkeypatch.setattr(
+        observation_events, "_append", lambda *args: notices.append(args[2])
+    )
+    monkeypatch.setattr(state_index, "update", lambda **kwargs: None)
+    observed_verify.run(tmp_path, "unused", "owner", "route", "finished")
+    assert "검수 판정 보류 (결과 1): 검수 없음" in notices[0]
 
 
 def test_unreadable_brief_is_deferred(
