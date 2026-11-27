@@ -136,7 +136,9 @@ def execute_direct(task: str | Path, argv: list[str], root: Path | None = None) 
         warning(
             f"preparation failed ({type(exc).__name__}: {exc}); running command directly"
         )
-    child = subprocess.Popen(argv, env=caller_environment())
+    child = subprocess.Popen(
+        argv, env=dict(caller_environment(), TH_JOB_TASK=str(task))
+    )
     previous = {}
 
     def forward(signum: int, _frame: FrameType | None) -> None:

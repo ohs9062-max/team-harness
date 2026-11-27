@@ -242,3 +242,34 @@ def test_ledger_does_not_store_command_arguments_or_echoed_prompt(
     restored.message = secret
     exec_pipeline.run_post(restored)
     assert secret not in (tmp_path / "exec_pipeline.jsonl").read_text()
+
+
+def test_nested_path_shim_runs_real_cli_once(tmp_path: Path) -> None:
+    import subprocess
+
+    root = Path(__file__).resolve().parents[2]
+    real = tmp_path / "bin"
+    real.mkdir()
+    codex = real / "codex"
+    codex.write_text("#!/bin/sh\nagy -p inner\n")
+    codex.chmod(0o755)
+    agy = real / "agy"
+    agy.write_text("#!/bin/sh\nprintf 'inner=%s\\n' \"$TH_JOB_TASK\"\nexit 23\n")
+    agy.chmod(0o755)
+    env = dict(
+        os.environ,
+        HOME=str(tmp_path),
+        TH_WATCH_DIR=str(tmp_path / "watch"),
+        TH_NO_MAINTENANCE="1",
+        TH_SHIM_QUIET="1",
+        PATH=f"{root / 'shim'}:{real}:{os.environ['PATH']}",
+    )
+    for key in ("TH_ROLE", "TH_WORKER_OUTPUT_DIR", "TH_JOB_TASK", "TH_SHIM_DEPTH"):
+        env.pop(key, None)
+    result = subprocess.run(
+        ["codex", "exec", "outer"], env=env, capture_output=True, text=True, check=False
+    )
+    tasks = list((tmp_path / "watch" / "shim-jobs").iterdir())
+    assert len(tasks) == 1
+    assert result.stdout.strip() == f"inner={tasks[0]}"
+    assert result.returncode == 23
