@@ -951,3 +951,15 @@ Claude와 agy 변환 명령은 호출마다 고유한 환경 변수 할당으로
 | th-launch | watchd | run/repl | protocol | SDK | PATH shim | Claude hook | Codex hook | agy hook | git hook | th 밖(직접 실행) |
 |---|---|---|---|---|---|---|---|---|---|---|
 | th agy 워커의 셸 도구도 이 hook(단 TH_ROLE=worker 건너뜀 — 기존 정책 유지) | 없음 | 없음 | 없음 | 없음 | 변경 없음 | 공통 어댑터(회귀 테스트) | 공통 어댑터(회귀 테스트) | 새 분기 + 배포 | 없음 | 셸에서 직접 연 agy가 run_command를 쓰면 `~/.gemini/config/hooks.json` → 공통 어댑터 |
+
+## TH-D61. 셸 진입점의 공통 실행 사건 관찰
+
+`th-launch`와 `th-job-start`는 기존 명령을 시작하기 전에 공통 실행 파이프라인을 fail-open으로 호출한다. 감시 데몬의 워커 종료 사건과 job의 `--wait` 종료 지점은 같은 사건의 후처리를 한 번 호출한다. hook에서 이미 `TH_EXEC_ID`를 전달한 경우 중복 사건을 만들지 않는다. 사전 단계의 차단 판정은 기록만 하고 실행에는 적용하지 않는다.
+
+분리 job은 기존 코드가 명령을 `exec`하고 호출 셸이 즉시 반환하므로 종료 후 처리를 수행할 지점이 없다. 별도 감시 또는 실행 부모를 도입하지 않는 현재 조건에서는 이 경로의 post가 미구현이다. 감시 데몬을 실행하지 않은 워커도 post가 없다. 워커의 실제 종료 코드를 확인할 수 없는 사건은 값을 추정하지 않는다.
+
+### 적용 경로:
+
+| th-launch | watchd | run/repl | protocol | SDK | PATH shim | Claude hook | Codex hook | agy hook | git hook | th 밖(직접 실행) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| pre | 워커 완료·실패 시 post | P7b | P7b | P7b | 기존 유지 | 기존 사건 표시로 중복 방지 | 기존 사건 표시로 중복 방지 | 기존 사건 표시로 중복 방지 | P7c | 셸에서 직접 호출한 job은 pre, `--wait`는 post도 기록; 분리 job post 미구현 |
