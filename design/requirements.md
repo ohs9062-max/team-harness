@@ -92,7 +92,7 @@
 | K27 | 관찰 기록 읽기·디코딩 오류 시 th-stop rc1·STOP_INCOMPLETE 줄 없음, 표식은 incomplete | `_outputs/a04_user_stop_20261126_v3/.th_adopt/terra/VERDICT.md` | 알려진 한계, 사용자 결정 |
 | K24 | 쿼터 잠금 판정에서 파일 읽기 직후 stat이 FileNotFoundError면 해제로 본다(quota_lock.py:47,77; 실제로는 파일 삭제 시에만) | `_outputs/a03_quota_expiry_20261126_r2_v3/.th_adopt/terra/VERDICT.md` | 알려진 한계, 사용자 결정 |
 | K23 | design 디렉터리 source의 채택 영수증에 decisions.md 대상 누락 | `src/team_harness/adoption_gate.py` | 해결 (커밋: fix(R6,K23): bind design directory receipt subject) |
-| K22 | Claude hook 실행 감싸기(P1)는 `&&`·`;`·`\|`·`&` 복합 셸 명령을 감싸지 않고 원래대로 실행(`exec_map.py:14`) | `_outputs/p1_claude_hook_20261125_v2/.th_adopt/terra/VERDICT.md` | 알려진 한계, 사용자 결정으로 반영 후 후속 단위 |
+| K22 | Claude hook 실행 감싸기(P1)는 `&&`·`;`·`\|`·`&` 복합 셸 명령을 감싸지 않고 원래대로 실행(`exec_map.py:14`) | `_outputs/p1_claude_hook_20261125_v2/.th_adopt/terra/VERDICT.md` | 공통 분류기에서 복합 명령 구간별 가로채기 구현; 끝의 단독 `&` 및 명령 치환은 제외 |
 
 ## 4. 오늘의 진행 원칙 (R13)
 
@@ -109,7 +109,7 @@
 
 ## 6. 구조 원칙 (15:35 — 사용자 지시, 모든 단위의 기준)
 
-- 상태: Codex Bash hook에도 공통 실행기 연결(P4, TH-D59; 배포 전). Claude Bash hook에 공통 파이프라인과 동기 job-start 연결을 추가했다(P1: `160b74f`, `5a5d12e`; 복합 명령 한계 K22). PATH shim(P2) main 반영: 셸에서 직접 친 비대화 codex/agy/claude를 th 작업(shim-jobs)으로 실행
+- 상태: Codex Bash hook에도 공통 실행기 연결(P4, TH-D59; 배포 전). Claude Bash hook에 공통 파이프라인과 동기 job-start 연결을 추가했다(P1: `160b74f`, `5a5d12e`; 복합 명령 구간별 분류 K22). PATH shim(P2) main 반영: 셸에서 직접 친 비대화 codex/agy/claude를 th 작업(shim-jobs)으로 실행
 - 원인: 판정 로직의 **입력이 th 작업 폴더(STATUS·DONE·REPORT)** 였다. th로 띄우지 않으면 폴더가 없어 아무것도 발동하지 않는다. 그 위에 "th 밖" 행을 덧붙이는 식이라 반복 실패.
 - 원칙: 판정 로직은 **실행 사건 하나**(누가·어디서·어떤 명령·출력·종료 코드·결과 파일)를 입력으로 받는 공통 함수다. th는 여러 호출자 중 하나일 뿐이다.
 - 진입점 매핑(어댑터): th-launch/watchd(작업 폴더 → 사건), Claude hook(PreToolUse/PostToolUse의 Bash 명령·출력 → 사건, Stop → 최종 보고), Codex/agy hook 또는 전역 래퍼, git hook(merge·push), th run/repl·protocol·SDK. 코디네이터가 무엇으로 실행하든 hook이 사건을 넘긴다 — 코디네이터 선택에 의존하지 않는다.
