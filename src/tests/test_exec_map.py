@@ -23,7 +23,6 @@ def test_default_mapping(tmp_path: Path) -> None:
         "claude",
         "agy",
         "th-job-start.sh task -- python train.py",
-        "python train.py; ls",
     ):
         assert classify(cmd, missing) is None
 
@@ -32,6 +31,10 @@ def test_custom_and_invalid_config(tmp_path: Path) -> None:
     config = tmp_path / "map.toml"
     config.write_text('[[rules]]\nkind="experiment"\npattern="^custom "\n')
     assert classify("custom run", config) == "experiment"
+    config.write_text(
+        '[[rules]]\nkind="experiment"\npattern=' + "'" + '^custom "hi"$' + "'" + "\n"
+    )
+    assert classify('custom "hi"', config) == "experiment"
     config.write_text("invalid = [")
     assert classify("python train.py", config) == "experiment"
 
@@ -111,3 +114,30 @@ def test_codex_hook_rewrite_and_cleanup(
     payload["tool_input"]["command"] = "codex exec hi"
     hook.main(payload, codex=True)
     assert not capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ("cd /x && python3 train.py", "experiment"),
+        ("python3 train.py 2>&1 | tail -20", "experiment"),
+        ("A=1 python train.py; echo done", "experiment"),
+        ("env A=1 python train.py\necho done", "experiment"),
+        ("cd x &&\npython train.py", "experiment"),
+        ("python train.py &\n", None),
+        ('cd x && codex exec "hi"', "agent_cli"),
+        ("python train.py && codex exec hi", "agent_cli"),
+        ("ls && echo hi", None),
+        ("python3 train.py &", None),
+        ("bash scripts/th-job-start.sh task && python train.py", None),
+        ("python 'train.py", None),
+    ],
+)
+def test_compound_commands(tmp_path: Path, command: str, expected: str | None) -> None:
+    assert classify(command, tmp_path / "missing") == expected
+
+
+def test_custom_rule_on_compound_segment(tmp_path: Path) -> None:
+    config = tmp_path / "map.toml"
+    config.write_text('[[rules]]\nkind="experiment"\npattern="^custom "\n')
+    assert classify("cd x && env A=1 custom run", config) == "experiment"
