@@ -68,3 +68,46 @@ def test_hook_blocks_when_pre_stage_blocks(
     assert result["permissionDecision"] == "deny"
     assert result["permissionDecisionReason"] == "blocked test"
     assert not (tmp_path / "claude-jobs").exists()
+
+
+def test_codex_hook_rewrite_and_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import importlib.util
+    import json
+
+    path = Path(__file__).resolve().parents[2] / "scripts/hooks/th-exec-pipeline.py"
+    spec = importlib.util.spec_from_file_location("codex_exec_hook", path)
+    assert spec and spec.loader
+    hook = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hook)
+    monkeypatch.setenv("TH_WATCH_DIR", str(tmp_path))
+    monkeypatch.delenv("TH_ROLE", raising=False)
+    monkeypatch.delenv("TH_EXEC_WRAP", raising=False)
+    monkeypatch.setattr(hook, "ancestor_is_th", lambda: False)
+    for i, command in enumerate(("codex exec hi", "python train.py", "ls")):
+        payload = {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": command},
+            "tool_use_id": str(i),
+            "session_id": "s",
+        }
+        hook.main(payload, codex=True)
+        output = capsys.readouterr().out
+        if command == "ls":
+            assert not output
+            continue
+        result = json.loads(output)["hookSpecificOutput"]
+        assert result["permissionDecision"] == "allow"
+        assert "--execute" in result["updatedInput"]["command"]
+        state = hook.state_path(payload)
+        assert state.exists()
+        payload["hook_event_name"] = "PostToolUse"
+        hook.main(payload, codex=True)
+        assert not state.exists()
+    monkeypatch.setenv("TH_ROLE", "worker")
+    payload["hook_event_name"] = "PreToolUse"
+    payload["tool_input"]["command"] = "codex exec hi"
+    hook.main(payload, codex=True)
+    assert not capsys.readouterr().out

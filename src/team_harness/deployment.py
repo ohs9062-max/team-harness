@@ -17,6 +17,8 @@ import sys
 import tempfile
 import tomllib
 
+from team_harness.hook_identity import managed_hook
+
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -195,6 +197,7 @@ INSTALLER_ASSETS = (
     ".config/agy/AGENTS.md",
     ".claude/settings.json",
     ".codex/hooks.json",
+    ".codex/hooks/th-exec-pipeline.py",
     ".claude/hooks/image_guard.py",
     ".claude/hooks/coordinator_zone_guard.py",
     ".claude/hooks/th-exec-pipeline.py",
@@ -246,6 +249,36 @@ def install_hooks(root: Path, home: Path) -> dict[str, str]:
             )
             if setup.returncode:
                 raise RuntimeError(f"{name}: {setup.stderr.strip()}")
+        codex_hook = stage / ".codex/hooks/th-exec-pipeline.py"
+        codex_hook.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(root / "scripts/hooks/th-exec-pipeline.py", codex_hook)
+        codex_settings = stage / ".codex/hooks.json"
+        data = json.loads(codex_settings.read_text()) if codex_settings.exists() else {}
+        hook_path = home / ".codex/hooks/th-exec-pipeline.py"
+        command = f"TH_HARNESS_SRC={shlex.quote(str(root / 'src'))} python3 {shlex.quote(str(hook_path))} --codex"
+        hooks = data.setdefault("hooks", {})
+        for event in ("PreToolUse", "PostToolUse"):
+            entries = hooks.setdefault(event, [])
+            for entry in entries:
+                entry["hooks"] = [
+                    item
+                    for item in entry.get("hooks", [])
+                    if not managed_hook(
+                        item,
+                        [hook_path],
+                        allowed_args=[("--codex",)],
+                        allowed_env={"TH_HARNESS_SRC": str(root / "src")},
+                    )
+                ]
+            entries[:] = [entry for entry in entries if entry.get("hooks")]
+            target = next(
+                (entry for entry in entries if entry.get("matcher") == "^Bash$"), None
+            )
+            if target is None:
+                target = {"matcher": "^Bash$", "hooks": []}
+                entries.append(target)
+            target["hooks"].append({"type": "command", "command": command})
+        codex_settings.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
         for relative in INSTALLER_ASSETS:
             source = stage / relative
             if source.is_file():

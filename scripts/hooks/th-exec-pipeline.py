@@ -51,7 +51,7 @@ def state_path(payload):
     )
 
 
-def main(payload):
+def main(payload, codex=False):
     event_name = payload.get("hook_event_name")
     if (
         payload.get("tool_name") != "Bash"
@@ -112,6 +112,8 @@ def main(payload):
             "hookEventName": event_name,
             "updatedInput": dict(payload["tool_input"], command=new_command),
         }
+        if codex:
+            output["permissionDecision"] = "allow"
         warnings = event.warnings + [r.message for r in results if r.code and r.message]
         if warnings:
             output["additionalContext"] = "\n".join(warnings)
@@ -143,7 +145,7 @@ if __name__ == "__main__":
     if len(sys.argv) == 4 and sys.argv[1] == "--execute":
         sys.exit(execute(sys.argv[2], sys.argv[3]))
     try:
-        main(json.load(sys.stdin))
+        main(json.load(sys.stdin), codex="--codex" in sys.argv[1:])
     except Exception as exc:
         print(
             json.dumps(

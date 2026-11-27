@@ -486,3 +486,26 @@ def test_cause_check_does_not_create_missing_gemini(
     home = tmp_path / "home"
     dp.apply(deployable_repository, home)
     assert not (home / ".gemini/GEMINI.md").exists()
+
+
+def test_codex_exec_hook_preserves_existing_and_is_idempotent(tmp_path: Path):
+    import json
+
+    root = Path(__file__).resolve().parents[2]
+    home = tmp_path / "home"
+    (home / ".team-harness").mkdir(parents=True)
+    settings = home / ".codex/hooks.json"
+    settings.parent.mkdir(parents=True)
+    existing = {"type": "command", "command": "echo orca"}
+    settings.write_text(json.dumps({"hooks": {"PreToolUse": [{"hooks": [existing]}]}}))
+    dp.install_hooks(root, home)
+    first = json.loads(settings.read_text())
+    dp.install_hooks(root, home)
+    second = json.loads(settings.read_text())
+    assert first == second
+    assert existing in second["hooks"]["PreToolUse"][0]["hooks"]
+    for event in ("PreToolUse", "PostToolUse"):
+        commands = [
+            h["command"] for entry in second["hooks"][event] for h in entry["hooks"]
+        ]
+        assert sum("--codex" in command for command in commands) == 1
