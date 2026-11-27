@@ -33,6 +33,9 @@ def classify(command: str, config: Path | None = None) -> str | None:
             re.compile(rule["pattern"])
     except (OSError, ValueError, KeyError, TypeError, re.error):
         rules = []
+    for rule in rules:
+        if re.search(rule["pattern"], command):
+            return rule["kind"]
     segments: list[list[str]] = [[]]
     for token in tokens:
         if token in (";", "&&", "||", "|", "\n"):

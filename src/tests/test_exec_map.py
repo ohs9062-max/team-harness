@@ -1,4 +1,6 @@
 from pathlib import Path
+import subprocess
+import types
 
 import pytest
 
@@ -37,6 +39,24 @@ def test_custom_and_invalid_config(tmp_path: Path) -> None:
     assert classify('custom "hi"', config) == "experiment"
     config.write_text("invalid = [")
     assert classify("python train.py", config) == "experiment"
+
+
+def test_simple_commands_match_main(tmp_path: Path) -> None:
+    source = subprocess.check_output(
+        ["git", "show", "d7d57a9:src/team_harness/exec_map.py"], text=True
+    )
+    main = types.ModuleType("main_exec_map")
+    exec(compile(source, "main_exec_map.py", "exec"), main.__dict__)
+    config = tmp_path / "map.toml"
+    for contents in (
+        "",
+        '[[rules]]\nkind="experiment"\npattern="^codex exec"\n'
+        '[[rules]]\nkind="agent_cli"\npattern="^codex"\n',
+    ):
+        config.write_text(contents)
+        for command in ("codex exec hi", "python train.py", "claude -p hi", "ls"):
+            assert classify(command, config) == main.classify(command, config)
+    assert classify("codex exec hi", config) == "experiment"
 
 
 def test_hook_blocks_when_pre_stage_blocks(
