@@ -109,9 +109,10 @@ def main(payload, codex=False, agy=False):
                 )
             )
             return
-        # Codex requires allow to apply updatedInput.  Its approval rules cannot
-        # be reconstructed here, so leave the original command for Codex.
-        if codex:
+        # Only the explicitly observed automatic-approval mode can safely use
+        # Codex's allow decision; unknown and approval-requiring modes retain
+        # their original command and approval behavior.
+        if codex and payload.get("permission_mode") != "bypassPermissions":
             return
         task = Path(event.task)
         state.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -125,7 +126,8 @@ def main(payload, codex=False, agy=False):
         ).parent
         runner = source / "scripts/hooks/th-exec-pipeline.py"
         body, background = split_background(command)
-        new_command = f"TH_EXEC_ID={event.event_id} " + shlex.join(
+        prefix = "env " if agy else ""
+        new_command = f"{prefix}TH_EXEC_ID={event.event_id} " + shlex.join(
             [
                 sys.executable,
                 str(runner),
@@ -150,6 +152,8 @@ def main(payload, codex=False, agy=False):
             "hookEventName": event_name,
             "updatedInput": dict(payload["tool_input"], command=new_command),
         }
+        if codex:
+            output["permissionDecision"] = "allow"
         warnings = event.warnings + [r.message for r in results if r.code and r.message]
         if warnings:
             output["additionalContext"] = "\n".join(warnings)
