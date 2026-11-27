@@ -928,7 +928,7 @@ PATH shim은 백그라운드 실행기 대신 같은 세션의 자식 프로세�
 
 ## TH-D59. Codex Bash hook을 공통 실행기로 연결한다
 
-Codex의 PreToolUse는 분류 대상 Bash 명령을 공통 파이프라인과 동기 th 실행기로 바꾸고 PostToolUse는 실행 사건을 마무리한다. `permissionDecision: allow`와 `updatedInput`을 함께 반환하며 워커와 th 하위 실행은 건너뛴다. 배포기는 기존 Codex hook을 보존하고 같은 hook을 중복 등록하지 않는다. TH-D57은 기존 결과 코드 결정이므로 번호 충돌을 피했다.
+Codex PreToolUse는 분류 대상 Bash에 사전 정책을 적용하되 원래 명령을 유지해 Codex 승인 규칙에 맡긴다. 0.172 실측에서 `allow` 없는 `updatedInput`은 적용되지 않으며 `allow`는 승인 판단을 우회할 수 있으므로 공통 실행기 변환을 생략한다. 배포기는 기존 Codex hook을 보존하고 같은 hook을 중복 등록하지 않는다. TH-D57은 기존 결과 코드 결정이므로 번호 충돌을 피했다.
 
 배포 시 th가 설치한 Codex hook의 현재 위치와 정규화된 선언 해시를 `hooks.state`에 신뢰 등록한다.
 다른 hook의 신뢰 설정과 기존 TOML 내용은 보존하고 변경된 설정은 기존 배포 백업 규칙을 따른다.
@@ -937,11 +937,13 @@ Codex의 PreToolUse는 분류 대상 Bash 명령을 공통 파이프라인과 �
 
 | th-launch | watchd | run/repl | protocol | SDK | PATH shim | Claude hook | Codex hook | git hook | th 밖(직접 실행) |
 |---|---|---|---|---|---|---|---|---|---|
-| 기존 th | 변경 없음 | 변경 없음 | 변경 없음 | 변경 없음 | 변경 없음 | 공통 어댑터 분기 | PreToolUse 변환·PostToolUse 정리, 배포 시 신뢰 등록(`deployment.py`) | 변경 없음 | 셸에서 직접 실행한 codex 세션의 Bash 도구 → 이 Codex hook(전역 `~/.codex/hooks.json`) |
+| 기존 th | 변경 없음 | 변경 없음 | 변경 없음 | 변경 없음 | 변경 없음 | 공통 어댑터 분기 | PreToolUse 정책 적용, 원래 명령 유지, 배포 시 신뢰 등록(`deployment.py`) | 변경 없음 | 셸에서 직접 실행한 codex 세션의 Bash 도구 → 이 Codex hook(전역 `~/.codex/hooks.json`) |
 
 ## TH-D60. agy run_command hook을 공통 실행기에 연결한다
 
 agy `PreToolUse`에서 분류 대상 `run_command`의 `CommandLine`을 공통 파이프라인과 동기 th 실행기로 바꾸고 `PostToolUse`에서 실행 사건을 마무리한다. 배포기는 `~/.gemini/config/hooks.json`의 다른 이름의 hook을 보존하며 `team-harness-exec`을 등록한다. 워커와 th 하위 실행은 건너뛴다.
+
+Claude와 agy 변환 명령은 호출마다 고유한 환경 변수 할당으로 시작하며 작업 폴더는 승인 후 실행 시 만든다. 접두사 저장 방식이 이 값을 보존하면 영구 허용도 해당 호출에만 적용되어 반복 명령에서 재승인이 필요하다. 실제 승인 UI가 이 값을 유지하는지는 미검증이다.
 
 ### 적용 경로:
 
