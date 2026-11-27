@@ -925,3 +925,13 @@ PATH shim은 백그라운드 실행기 대신 같은 세션의 자식 프로세�
 | 구분 | th-launch | watchd | run/repl | protocol | SDK | PATH shim | Claude hook | Codex hook | git hook |
 |---|---|---|---|---|---|---|---|---|---|
 | th 밖(직접 실행) | 상위 실행 시 중첩 방지 | 등록 작업 감시 | 없음: 실행기 진입점 아님 | 없음: 직접 셸 실행 아님 | 없음: 직접 셸 실행 아님 | 비대화 실행 → 공통 실행기 | P1 공통 실행기 | 후속 P4 | 후속 P4 |
+
+## TH-D59. Codex Bash hook을 공통 실행기로 연결한다
+
+Codex의 PreToolUse는 분류 대상 Bash 명령을 공통 파이프라인과 동기 th 실행기로 바꾸고 PostToolUse는 실행 사건을 마무리한다. `permissionDecision: allow`와 `updatedInput`을 함께 반환하며 워커와 th 하위 실행은 건너뛴다. 배포기는 기존 Codex hook을 보존하고 같은 hook을 중복 등록하지 않는다. TH-D57은 기존 결과 코드 결정이므로 번호 충돌을 피했다.
+
+### 적용 경로:
+
+| th-launch | watchd | run/repl | protocol | SDK | PATH shim | Claude hook | Codex hook | git hook | th 밖(직접 실행) |
+|---|---|---|---|---|---|---|---|---|---|
+| 기존 th | 변경 없음 | 변경 없음 | 변경 없음 | 변경 없음 | 변경 없음 | 공통 어댑터 분기 | PreToolUse 변환·PostToolUse 정리 | 변경 없음 | 셸에서 직접 실행한 codex 세션의 Bash 도구 → 이 Codex hook(전역 `~/.codex/hooks.json`) |
