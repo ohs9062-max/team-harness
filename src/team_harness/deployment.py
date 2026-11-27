@@ -199,6 +199,8 @@ INSTALLER_ASSETS = (
     ".codex/hooks.json",
     ".codex/config.toml",
     ".codex/hooks/th-exec-pipeline.py",
+    ".gemini/config/hooks.json",
+    ".gemini/hooks/th-exec-pipeline.py",
     ".claude/hooks/image_guard.py",
     ".claude/hooks/coordinator_zone_guard.py",
     ".claude/hooks/th-exec-pipeline.py",
@@ -363,6 +365,27 @@ def install_hooks(root: Path, home: Path) -> dict[str, str]:
             trust_records[key] = _codex_trust_hash(label, "^Bash$", command)
         codex_settings.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
         _register_codex_trust(stage / ".codex/config.toml", trust_records)
+        agy_hook = stage / ".gemini/hooks/th-exec-pipeline.py"
+        agy_hook.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(root / "scripts/hooks/th-exec-pipeline.py", agy_hook)
+        agy_settings = stage / ".gemini/config/hooks.json"
+        agy_settings.parent.mkdir(parents=True, exist_ok=True)
+        agy_data = json.loads(agy_settings.read_text()) if agy_settings.exists() else {}
+        agy_command = f"TH_HARNESS_SRC={shlex.quote(str(root / 'src'))} python3 {shlex.quote(str(home / '.gemini/hooks/th-exec-pipeline.py'))} --agy"
+        agy_data["team-harness-exec"] = {
+            event: [
+                {
+                    "matcher": "run_command",
+                    "hooks": [
+                        {"type": "command", "command": agy_command, "timeout": 30}
+                    ],
+                }
+            ]
+            for event in ("PreToolUse", "PostToolUse")
+        }
+        agy_settings.write_text(
+            json.dumps(agy_data, ensure_ascii=False, indent=2) + "\n"
+        )
         for relative in INSTALLER_ASSETS:
             source = stage / relative
             if source.is_file():

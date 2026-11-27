@@ -1,0 +1,22 @@
+{
+  "artifactDirectoryPath": "<redacted>",
+  "conversationId": "<redacted>",
+  "cwd": "/tmp/p5b-agy-Kkn4Be/repo",
+  "hookEventName": "PreToolUse",
+  "lastUserInput": "Run exactly this shell command once: python3 train.py",
+  "modelName": "gemini-4-neon-high",
+  "stepIdx": 4,
+  "toolCall": {
+    "args": {
+      "CommandLine": "python3 train.py",
+      "WaitMsBeforeAsync": 5000,
+      "toolSummary": "Run train.py script"
+    },
+    "id": "<redacted>",
+    "name": "run_command"
+  },
+  "transcriptPath": "<redacted>",
+  "workspacePaths": [
+    "/tmp/p5b-agy-Kkn4Be/repo"
+  ]
+}

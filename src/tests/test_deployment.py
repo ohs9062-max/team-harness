@@ -581,3 +581,34 @@ def test_codex_trust_update_skips_header_inside_multiline_string(tmp_path: Path)
         "trusted_hash": "sha256:new",
     }
     assert "# preserve" in contents
+
+
+def test_agy_hook_preserves_other_hooks_and_is_idempotent(tmp_path: Path):
+    root = Path(__file__).resolve().parents[2]
+    home = tmp_path / "home"
+    (home / ".team-harness").mkdir(parents=True)
+    settings = home / ".gemini/config/hooks.json"
+    settings.parent.mkdir(parents=True)
+    existing = {"PreToolUse": [{"matcher": "other", "hooks": []}]}
+    original = json.dumps({"other": existing})
+    settings.write_text(original)
+    untouched = home / ".gemini/settings.json"
+    untouched.write_text('{"keep": true}\n')
+    dp.install_hooks(root, home)
+    first = settings.read_text()
+    data = json.loads(first)
+    assert data["other"] == existing
+    for event in ("PreToolUse", "PostToolUse"):
+        group = data["team-harness-exec"][event]
+        assert len(group) == 1 and group[0]["matcher"] == "run_command"
+        assert (
+            len(group[0]["hooks"]) == 1 and "--agy" in group[0]["hooks"][0]["command"]
+        )
+    assert any(
+        p.read_text() == original
+        for p in (home / ".team-harness/deployment-backups").iterdir()
+        if p.is_file()
+    )
+    dp.install_hooks(root, home)
+    assert settings.read_text() == first
+    assert untouched.read_text() == '{"keep": true}\n'

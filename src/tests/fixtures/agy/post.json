@@ -1,0 +1,24 @@
+{
+  "artifactDirectoryPath": "<redacted>",
+  "conversationId": "<redacted>",
+  "cwd": "/tmp/p5b-agy-Kkn4Be/repo",
+  "error": "",
+  "hookEventName": "PostToolUse",
+  "lastUserInput": "Run exactly this shell command once and show its output: python3 train.py",
+  "modelName": "gemini-4-neon-high",
+  "stepIdx": 2,
+  "toolCall": {
+    "args": {
+      "CommandLine": "echo HOOK_REWROTE",
+      "NotificationTimeoutSeconds": 60,
+      "WaitMsBeforeAsync": 10000,
+      "toolSummary": "Run train.py script"
+    },
+    "id": "<redacted>",
+    "name": "run_command"
+  },
+  "transcriptPath": "<redacted>",
+  "workspacePaths": [
+    "/tmp/p5b-agy-Kkn4Be/repo"
+  ]
+}

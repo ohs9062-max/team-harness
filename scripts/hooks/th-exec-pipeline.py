@@ -51,7 +51,18 @@ def state_path(payload):
     )
 
 
-def main(payload, codex=False):
+def main(payload, codex=False, agy=False):
+    if agy:
+        call = payload.get("toolCall", {})
+        payload = {
+            "hook_event_name": payload.get("hookEventName"),
+            "tool_name": "Bash" if call.get("name") == "run_command" else "",
+            "tool_input": {"command": call.get("args", {}).get("CommandLine", "")},
+            "tool_use_id": call.get("id"),
+            "session_id": payload.get("conversationId", ""),
+            "cwd": payload.get("cwd", os.getcwd()),
+            "tool_response": payload.get("error", ""),
+        }
     event_name = payload.get("hook_event_name")
     if (
         payload.get("tool_name") != "Bash"
@@ -65,16 +76,16 @@ def main(payload, codex=False):
         if not kind:
             return
         event = ExecEvent(
-            tool=shlex.split(command)[0],
+            tool="agy" if agy else shlex.split(command)[0],
             role=os.environ.get("TH_ROLE", ""),
             session=payload.get("session_id", ""),
             cwd=payload.get("cwd", os.getcwd()),
             argv=shlex.split(command),
-            route="claude_hook",
+            route="agy_hook" if agy else "claude_hook",
             context={"kind": kind},
         )
         if os.environ.get("TH_EXEC_WRAP") == "0":
-            event.route = "claude_hook_disabled"
+            event.route = "agy_hook_disabled" if agy else "claude_hook_disabled"
             run_pre(event)
             return
         state = state_path(payload)
@@ -82,6 +93,9 @@ def main(payload, codex=False):
         results = run_pre(event)
         blocked = next((r for r in results if r.block), None)
         if blocked:
+            if agy:
+                print(json.dumps({"decision": "deny", "reason": blocked.message}))
+                return
             print(
                 json.dumps(
                     {
@@ -108,6 +122,14 @@ def main(payload, codex=False):
         new_command = shlex.join(
             [sys.executable, str(runner), "--execute", str(task), command]
         )
+        if agy:
+            print(
+                json.dumps(
+                    {"decision": "allow", "overwrite": {"CommandLine": new_command}},
+                    ensure_ascii=False,
+                )
+            )
+            return
         output = {
             "hookEventName": event_name,
             "updatedInput": dict(payload["tool_input"], command=new_command),
@@ -121,6 +143,8 @@ def main(payload, codex=False):
     elif event_name == "PostToolUse":
         state = state_path(payload)
         if not state.exists():
+            if agy:
+                print("{}")
             return
         event = ExecEvent(**json.loads(state.read_text()))
         task = Path(event.task)
@@ -133,6 +157,8 @@ def main(payload, codex=False):
         event.output_paths = [str(task / "logs/job.log")]
         run_post(event)
         state.unlink()
+        if agy:
+            print("{}")
 
 
 def execute(task, command):
@@ -145,7 +171,11 @@ if __name__ == "__main__":
     if len(sys.argv) == 4 and sys.argv[1] == "--execute":
         sys.exit(execute(sys.argv[2], sys.argv[3]))
     try:
-        main(json.load(sys.stdin), codex="--codex" in sys.argv[1:])
+        main(
+            json.load(sys.stdin),
+            codex="--codex" in sys.argv[1:],
+            agy="--agy" in sys.argv[1:],
+        )
     except Exception as exc:
         print(
             json.dumps(

@@ -161,3 +161,47 @@ def test_custom_rule_on_compound_segment(tmp_path: Path) -> None:
     config = tmp_path / "map.toml"
     config.write_text('[[rules]]\nkind="experiment"\npattern="^custom "\n')
     assert classify("cd x && env A=1 custom run", config) == "experiment"
+
+
+def test_agy_hook_payload_rewrite_and_post(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import importlib.util
+    import json
+
+    root = Path(__file__).resolve().parents[2]
+    spec = importlib.util.spec_from_file_location(
+        "agy_exec_hook", root / "scripts/hooks/th-exec-pipeline.py"
+    )
+    assert spec and spec.loader
+    hook = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hook)
+    monkeypatch.setenv("TH_WATCH_DIR", str(tmp_path))
+    monkeypatch.delenv("TH_ROLE", raising=False)
+    monkeypatch.delenv("TH_EXEC_WRAP", raising=False)
+    monkeypatch.setattr(hook, "ancestor_is_th", lambda: False)
+    fixtures = root / "src/tests/fixtures/agy"
+    pre = json.loads((fixtures / "pre.json").read_text())
+    post = json.loads((fixtures / "post.json").read_text())
+    hook.main(pre, agy=True)
+    output = json.loads(capsys.readouterr().out)
+    assert output["decision"] == "allow"
+    assert "--execute" in output["overwrite"]["CommandLine"]
+    state = next((tmp_path / "claude-exec").glob("*.json"))
+    event = json.loads(state.read_text())
+    assert event["route"] == "agy_hook" and event["tool"] == "agy"
+    post["toolCall"]["args"]["CommandLine"] = output["overwrite"]["CommandLine"]
+    hook.main(post, agy=True)
+    assert json.loads(capsys.readouterr().out) == {}
+    assert not state.exists()
+    pre["toolCall"]["args"]["CommandLine"] = "ls"
+    hook.main(pre, agy=True)
+    assert capsys.readouterr().out == ""
+    pre["toolCall"]["args"]["CommandLine"] = "python3 train.py"
+    monkeypatch.setenv("TH_ROLE", "worker")
+    hook.main(pre, agy=True)
+    assert capsys.readouterr().out == ""
+    monkeypatch.delenv("TH_ROLE")
+    monkeypatch.setattr(hook, "ancestor_is_th", lambda: True)
+    hook.main(pre, agy=True)
+    assert capsys.readouterr().out == ""
