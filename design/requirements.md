@@ -111,5 +111,3 @@
 - (15:45 코디 확인) **가로채기는 이미 있다**: TH-D52/53(2026-11-16) 전역 PATH shim `~/.team-harness/shim/bin/{codex,agy}` → `shim/codex`·`launch_shim.py`. 단 동작은 "실행 전 관찰 기록만, 판정 강제 없음"(`launch_shim.py:1`)이고, 관찰 작업 검증은 `observed_verify.py`(K6 WARN→PASS 결함). 빠진 것: ① shim이 th 실행 기능(작업 폴더·정지·쿼터·결과 코드·자동 검증)을 적용하지 않음, ② claude·학습/평가 명령(python 등)은 shim 대상 아님, ③ Claude 코디의 Bash 직접 실행은 PreToolUse 가드가 차단·관찰만. → **새로 만들지 말고 기존 shim·관찰 경로를 확장**한다.
 - (15:40 사용자 지시, 최종 원칙) **기능별로 가로채기를 붙이지 않는다.** 가로채기 지점(PATH shim·Claude hook·git hook)은 하나의 공통 파이프라인 `실행 전 단계 → 실행 → 실행 후 단계`를 부르고, th 기능은 이 파이프라인에 **등록**된다(정지 확인·쿼터 잠금·지시서 점검·실행 정책·결과 코드·자동 검증·2회 상한·관찰 기록 …). th-launch/watchd도 같은 파이프라인을 부른다. 새 th 기능은 등록만 하면 누가·무엇으로·어떻게 실행하든 적용된다.
 - (P0) 공통 사건·단계 API와 PATH shim pre 및 관찰 종료 post를 연결했다. 직접 exec의 종료 코드는 미관찰이며, 다른 가로채기 지점은 후속 단위다.
-
-- 터미널에 연결된 CLI stdout/stderr는 job.log에 기록되지 않는다.
