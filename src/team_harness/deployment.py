@@ -197,11 +197,90 @@ INSTALLER_ASSETS = (
     ".config/agy/AGENTS.md",
     ".claude/settings.json",
     ".codex/hooks.json",
+    ".codex/config.toml",
     ".codex/hooks/th-exec-pipeline.py",
     ".claude/hooks/image_guard.py",
     ".claude/hooks/coordinator_zone_guard.py",
     ".claude/hooks/th-exec-pipeline.py",
 )
+
+
+def _codex_trust_hash(event: str, matcher: str, command: str) -> str:
+    identity = {
+        "event_name": event,
+        "matcher": matcher,
+        "hooks": [
+            {"type": "command", "command": command, "async": False, "timeout": 600}
+        ],
+    }
+    encoded = json.dumps(
+        identity, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    return "sha256:" + hashlib.sha256(encoded.encode()).hexdigest()
+
+
+def _register_codex_trust(config: Path, records: dict[str, str]) -> None:
+    text = config.read_text() if config.exists() else ""
+    parsed = tomllib.loads(text)
+    states = parsed.get("hooks", {}).get("state", {})
+    for key, fingerprint in records.items():
+        existing = states.get(key, {})
+        if (
+            existing.get("enabled") is True
+            and existing.get("trusted_hash") == fingerprint
+        ):
+            continue
+        header = f"[hooks.state.{json.dumps(key, ensure_ascii=False)}]"
+        boundaries = []
+        for candidate in re.finditer(r"(?m)^[ \t]*\[[^\n]*", text):
+            try:
+                tomllib.loads(text[: candidate.start()])
+            except tomllib.TOMLDecodeError:
+                continue
+            boundaries.append(candidate)
+        match = next(
+            (
+                candidate
+                for candidate in boundaries
+                if re.fullmatch(
+                    r"[ \t]*" + re.escape(header) + r"[ \t]*(?:\#.*)?",
+                    candidate.group(),
+                )
+            ),
+            None,
+        )
+        if match:
+            stop = next(
+                (item.start() for item in boundaries if item.start() > match.start()),
+                len(text),
+            )
+            body = text[match.end() : stop]
+            for name, value in (
+                ("enabled", "true"),
+                ("trusted_hash", json.dumps(fingerprint)),
+            ):
+                pattern = rf"(?m)^([ \t]*{name}[ \t]*=[ \t]*)[^\n#]*(.*)$"
+                if re.search(pattern, body):
+                    body = re.sub(
+                        pattern,
+                        lambda m, value=value: m.group(1) + value + m.group(2),
+                        body,
+                        count=1,
+                    )
+                else:
+                    body = "\n" + name + " = " + value + body
+            text = text[: match.end()] + body + text[stop:]
+        elif key in states:
+            raise ValueError(f"cannot safely edit Codex hook state: {key}")
+        else:
+            text += (
+                ("\n" if text and not text.endswith("\n") else "")
+                + f"\n{header}\nenabled = true\ntrusted_hash = {json.dumps(fingerprint)}\n"
+            )
+    tomllib.loads(text)
+    config.parent.mkdir(parents=True, exist_ok=True)
+    if not config.exists() or config.read_text() != text:
+        config.write_text(text)
 
 
 def install_hooks(root: Path, home: Path) -> dict[str, str]:
@@ -257,6 +336,7 @@ def install_hooks(root: Path, home: Path) -> dict[str, str]:
         hook_path = home / ".codex/hooks/th-exec-pipeline.py"
         command = f"TH_HARNESS_SRC={shlex.quote(str(root / 'src'))} python3 {shlex.quote(str(hook_path))} --codex"
         hooks = data.setdefault("hooks", {})
+        trust_records = {}
         for event in ("PreToolUse", "PostToolUse"):
             entries = hooks.setdefault(event, [])
             for entry in entries:
@@ -278,7 +358,11 @@ def install_hooks(root: Path, home: Path) -> dict[str, str]:
                 target = {"matcher": "^Bash$", "hooks": []}
                 entries.append(target)
             target["hooks"].append({"type": "command", "command": command})
+            label = "pre_tool_use" if event == "PreToolUse" else "post_tool_use"
+            key = f"{home / '.codex/hooks.json'}:{label}:{entries.index(target)}:{len(target['hooks']) - 1}"
+            trust_records[key] = _codex_trust_hash(label, "^Bash$", command)
         codex_settings.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+        _register_codex_trust(stage / ".codex/config.toml", trust_records)
         for relative in INSTALLER_ASSETS:
             source = stage / relative
             if source.is_file():

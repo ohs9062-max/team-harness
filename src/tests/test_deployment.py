@@ -490,22 +490,94 @@ def test_cause_check_does_not_create_missing_gemini(
 
 def test_codex_exec_hook_preserves_existing_and_is_idempotent(tmp_path: Path):
     import json
+    import tomllib
 
     root = Path(__file__).resolve().parents[2]
     home = tmp_path / "home"
     (home / ".team-harness").mkdir(parents=True)
     settings = home / ".codex/hooks.json"
     settings.parent.mkdir(parents=True)
+    config = home / ".codex/config.toml"
+    original = '# preserve this comment\nmodel = "example"\n\n[hooks.state."other"]\nenabled = false # keep\n'
+    config.write_text(original)
     existing = {"type": "command", "command": "echo orca"}
     settings.write_text(json.dumps({"hooks": {"PreToolUse": [{"hooks": [existing]}]}}))
     dp.install_hooks(root, home)
     first = json.loads(settings.read_text())
+    first_config = config.read_text()
     dp.install_hooks(root, home)
     second = json.loads(settings.read_text())
     assert first == second
+    assert config.read_text() == first_config
+    assert first_config.startswith(original)
+    state = tomllib.loads(first_config)["hooks"]["state"]
+    assert state["other"] == {"enabled": False}
+    assert len(state) == 3
     assert existing in second["hooks"]["PreToolUse"][0]["hooks"]
     for event in ("PreToolUse", "PostToolUse"):
         commands = [
             h["command"] for entry in second["hooks"][event] for h in entry["hooks"]
         ]
         assert sum("--codex" in command for command in commands) == 1
+        groups = second["hooks"][event]
+        i = next(
+            i for i, group in enumerate(groups) if group.get("matcher") == "^Bash$"
+        )
+        j = len(groups[i]["hooks"]) - 1
+        label = "pre_tool_use" if event == "PreToolUse" else "post_tool_use"
+        key = f"{settings}:{label}:{i}:{j}"
+        assert state[key] == {
+            "enabled": True,
+            "trusted_hash": dp._codex_trust_hash(
+                label, "^Bash$", groups[i]["hooks"][j]["command"]
+            ),
+        }
+
+    second["hooks"]["PreToolUse"].insert(
+        0, {"hooks": [{"type": "command", "command": "echo new"}]}
+    )
+    settings.write_text(json.dumps(second))
+    dp.install_hooks(root, home)
+    moved = json.loads(settings.read_text())["hooks"]["PreToolUse"]
+    i = next(i for i, group in enumerate(moved) if group.get("matcher") == "^Bash$")
+    state = tomllib.loads(config.read_text())["hooks"]["state"]
+    assert state[f"{settings}:pre_tool_use:{i}:0"]["enabled"] is True
+    assert f"{settings}:pre_tool_use:0:0" not in state
+
+
+def test_codex_hash_matches_existing_0172_identity():
+    import hashlib
+    import json
+
+    identity = {
+        "event_name": "pre_tool_use",
+        "matcher": "^Bash$",
+        "hooks": [
+            {"async": False, "command": "example", "timeout": 600, "type": "command"}
+        ],
+    }
+    expected = (
+        "sha256:"
+        + hashlib.sha256(
+            json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+    )
+    assert dp._codex_trust_hash("pre_tool_use", "^Bash$", "example") == expected
+
+
+def test_codex_trust_update_skips_header_inside_multiline_string(tmp_path: Path):
+    import tomllib
+
+    config = tmp_path / "config.toml"
+    config.write_text(
+        'note = """\n[hooks.state."key"]\nenabled = false\n"""\n\n[hooks.state."key"]\nenabled = false # preserve\ntrusted_hash = "old"\n'
+    )
+    dp._register_codex_trust(config, {"key": "sha256:new"})
+    contents = config.read_text()
+    parsed = tomllib.loads(contents)
+    assert '[hooks.state."key"]\nenabled = false' in parsed["note"]
+    assert parsed["hooks"]["state"]["key"] == {
+        "enabled": True,
+        "trusted_hash": "sha256:new",
+    }
+    assert "# preserve" in contents
