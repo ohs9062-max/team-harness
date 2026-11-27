@@ -930,8 +930,11 @@ PATH shim은 백그라운드 실행기 대신 같은 세션의 자식 프로세�
 
 Codex의 PreToolUse는 분류 대상 Bash 명령을 공통 파이프라인과 동기 th 실행기로 바꾸고 PostToolUse는 실행 사건을 마무리한다. `permissionDecision: allow`와 `updatedInput`을 함께 반환하며 워커와 th 하위 실행은 건너뛴다. 배포기는 기존 Codex hook을 보존하고 같은 hook을 중복 등록하지 않는다. TH-D57은 기존 결과 코드 결정이므로 번호 충돌을 피했다.
 
+배포 시 th가 설치한 Codex hook의 현재 위치와 정규화된 선언 해시를 `hooks.state`에 신뢰 등록한다.
+다른 hook의 신뢰 설정과 기존 TOML 내용은 보존하고 변경된 설정은 기존 배포 백업 규칙을 따른다.
+
 ### 적용 경로:
 
 | th-launch | watchd | run/repl | protocol | SDK | PATH shim | Claude hook | Codex hook | git hook | th 밖(직접 실행) |
 |---|---|---|---|---|---|---|---|---|---|
-| 기존 th | 변경 없음 | 변경 없음 | 변경 없음 | 변경 없음 | 변경 없음 | 공통 어댑터 분기 | PreToolUse 변환·PostToolUse 정리 | 변경 없음 | 셸에서 직접 실행한 codex 세션의 Bash 도구 → 이 Codex hook(전역 `~/.codex/hooks.json`) |
+| 기존 th | 변경 없음 | 변경 없음 | 변경 없음 | 변경 없음 | 변경 없음 | 공통 어댑터 분기 | PreToolUse 변환·PostToolUse 정리, 배포 시 신뢰 등록(`deployment.py`) | 변경 없음 | 셸에서 직접 실행한 codex 세션의 Bash 도구 → 이 Codex hook(전역 `~/.codex/hooks.json`) |
